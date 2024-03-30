@@ -1,0 +1,19 @@
+{
+ "workspace_type": "File System Workspace",
+ "name": "sabledb",
+ "configs": [{
+   "name": "Debug",
+   "targets": [["build", "cargo build --color always"], ["clean", "cargo clean --color always"], ["clippy", "cargo clippy --color always"], ["tests", "cargo test --no-run --color always"]],
+   "file_extensions": "*.cpp;*.c;*.txt;*.json;*.hpp;*.cc;*.cxx;*.xml;*.h;*.wxcp;*.py;*.php;*.rb;*.html;*.js;*.ts;*.rs;*.iss;*.md;*.bat;*.sh;*.cmake;*.rs;*.toml",
+   "excludeFilesPattern": "*.o;*.pyc;*.obj;*.workspace;*.o.d;*.exe;*.dll;*.project",
+   "excludePaths": "",
+   "debugger": "GNU gdb debugger"
+  }, {
+   "name": "Release",
+   "targets": [["build", "cargo build --release --color always"], ["clean", "cargo clean --color always"], ["clippy", "cargo clippy --color always"], ["tests", "cargo test --release --no-run --color always"]],
+   "file_extensions": "*.cpp;*.c;*.txt;*.json;*.hpp;*.cc;*.cxx;*.xml;*.h;*.wxcp;*.py;*.php;*.rb;*.html;*.js;*.ts;*.rs;*.iss;*.md;*.bat;*.sh;*.cmake;*.rs;*.toml",
+   "excludeFilesPattern": "*.o;*.pyc;*.obj;*.workspace;*.o.d;*.exe;*.dll;*.project",
+   "excludePaths": "",
+   "debugger": "GNU gdb debugger"
+  }]
+}

@@ -1,0 +1,7 @@
+.codelite/
+.ctagsd/
+Cargo.lock
+rocksdb.db/
+target/
+tests/
+sabledb.db/

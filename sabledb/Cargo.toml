@@ -1,0 +1,13 @@
+[package]
+name = "sabledb"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+libsabledb = { path = "../libsabledb" }
+clap = { version = "4", features = ["derive"] }
+tracing = { version = "0", features = ["log"] }
+tracing-subscriber = "0"
+ctrlc = "3.4.0"
