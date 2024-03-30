@@ -15,6 +15,8 @@ cargo test --release
 
 ### Windows
 
+On Windows, we require MSYS2 terminal for building `SableDb`.
+
 ```bash
 git clone https://github.com/eranif/sabledb.git
 cd sabledb
