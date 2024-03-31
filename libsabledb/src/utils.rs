@@ -305,6 +305,7 @@ impl<'a> U8ArrayReader<'a> {
     const U8_SIZE: usize = std::mem::size_of::<u8>();
     const USIZE_SIZE: usize = std::mem::size_of::<usize>();
     const U64_SIZE: usize = std::mem::size_of::<u64>();
+    const U16_SIZE: usize = std::mem::size_of::<u16>();
 
     pub fn with_buffer(buffer: &'a [u8]) -> Self {
         U8ArrayReader {
@@ -322,6 +323,17 @@ impl<'a> U8ArrayReader<'a> {
         arr.copy_from_slice(&self.buffer[self.consumed..self.consumed + U8ArrayReader::U8_SIZE]);
         self.consumed = self.consumed.saturating_add(U8ArrayReader::U8_SIZE);
         Some(u8::from_be_bytes(arr))
+    }
+
+    pub fn read_u16(&mut self) -> Option<u16> {
+        if self.buffer.len().saturating_sub(self.consumed) < U8ArrayReader::U16_SIZE {
+            return None;
+        }
+
+        let mut arr = [0u8; U8ArrayReader::U16_SIZE];
+        arr.copy_from_slice(&self.buffer[self.consumed..self.consumed + U8ArrayReader::U16_SIZE]);
+        self.consumed = self.consumed.saturating_add(U8ArrayReader::U16_SIZE);
+        Some(u16::from_be_bytes(arr))
     }
 
     pub fn read_usize(&mut self) -> Option<usize> {
@@ -371,6 +383,10 @@ impl<'a> U8ArrayBuilder<'a> {
 
     pub fn write_u8(&mut self, val: u8) {
         self.buffer.extend_from_slice(&u8::to_be_bytes(val));
+    }
+
+    pub fn write_u16(&mut self, val: u16) {
+        self.buffer.extend_from_slice(&u16::to_be_bytes(val));
     }
 
     pub fn write_u64(&mut self, val: u64) {

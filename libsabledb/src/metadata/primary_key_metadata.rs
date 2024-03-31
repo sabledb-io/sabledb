@@ -1,4 +1,4 @@
-use crate::BytesMutUtils;
+use crate::{U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 pub type PrimaryKeyMetadata = KeyMetadata;
@@ -27,22 +27,17 @@ impl KeyMetadata {
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self) -> BytesMut {
         let mut as_bytes = BytesMut::with_capacity(KeyMetadata::SIZE);
-
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u8(&self.key_type));
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u16(&self.key_slot));
+        let mut builder = U8ArrayBuilder::with_buffer(&mut as_bytes);
+        builder.write_u8(self.key_type);
+        builder.write_u16(self.key_slot);
         as_bytes
     }
 
-    #[allow(clippy::field_reassign_with_default)]
-    pub fn from_bytes(buf: &BytesMut) -> Self {
-        let mut de = Self::default();
-        let mut pos = 0usize;
-
-        de.key_type = BytesMutUtils::to_u8(&BytesMut::from(&buf[pos..]));
-        pos += std::mem::size_of::<u8>();
-
-        de.key_slot = BytesMutUtils::to_u16(&BytesMut::from(&buf[pos..]));
-        de
+    pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
+        let mut reader = U8ArrayReader::with_buffer(buf);
+        let key_type = reader.read_u8()?;
+        let key_slot = reader.read_u16()?;
+        Some(KeyMetadata { key_type, key_slot })
     }
 
     /// Set the key type
@@ -63,10 +58,10 @@ impl KeyMetadata {
     }
 
     /// Given an encoded key, return its metadata and the user content
-    pub fn from_raw(encoded_key: &BytesMut) -> (KeyMetadata, BytesMut) {
+    pub fn from_raw(encoded_key: &BytesMut) -> Option<(KeyMetadata, BytesMut)> {
         let (pk_bytes, user_bytes) = encoded_key.split_at(KeyMetadata::SIZE);
-        let pk = KeyMetadata::from_bytes(&BytesMut::from(pk_bytes));
-        (pk, BytesMut::from(user_bytes))
+        let pk = KeyMetadata::from_bytes(&BytesMut::from(pk_bytes))?;
+        Some((pk, BytesMut::from(user_bytes)))
     }
 
     pub fn is_primary_key(&self) -> bool {
@@ -98,7 +93,7 @@ mod tests {
         println!("user_key slot = {}", slot);
 
         let pk_as_bytes = PrimaryKeyMetadata::new_primary_key(&user_key);
-        let (pk, user_key) = PrimaryKeyMetadata::from_raw(&pk_as_bytes);
+        let (pk, user_key) = PrimaryKeyMetadata::from_raw(&pk_as_bytes).unwrap();
 
         // Check that the slot serialised + deserialised properly
         assert_eq!(pk.key_slot, slot);
