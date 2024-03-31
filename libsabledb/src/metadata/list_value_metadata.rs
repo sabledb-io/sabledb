@@ -1,8 +1,7 @@
 use crate::{
     metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
-    BytesMutUtils, U8ArrayBuilder, U8ArrayReader,
+    SableError, U8ArrayBuilder, U8ArrayReader,
 };
-use bytes::BytesMut;
 
 /// Contains information regarding the String type metadata
 #[derive(Clone, Debug)]
@@ -38,25 +37,28 @@ impl ListValueMetadata {
         builder.write_u64(self.list_id);
     }
 
-    #[allow(clippy::field_reassign_with_default)]
-    pub fn from_bytes(buf: &BytesMut) -> Self {
-        let mut pos = 0usize;
-        let mut de = Self::default();
-        de.common =
-            CommonValueMetadata::from_bytes(&BytesMut::from(&buf[pos..CommonValueMetadata::SIZE]));
-        pos += CommonValueMetadata::SIZE;
+    pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
+        let common = CommonValueMetadata::from_bytes(reader)?;
 
-        de.head_id = BytesMutUtils::to_u64(&BytesMut::from(&buf[pos..]));
-        pos += std::mem::size_of_val(&de.head_id);
-
-        de.tail_id = BytesMutUtils::to_u64(&BytesMut::from(&buf[pos..]));
-        pos += std::mem::size_of_val(&de.tail_id);
-
-        de.list_size = BytesMutUtils::to_u64(&BytesMut::from(&buf[pos..]));
-        pos += std::mem::size_of_val(&de.list_size);
-
-        de.list_id = BytesMutUtils::to_u64(&BytesMut::from(&buf[pos..]));
-        de
+        let Some(head_id) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        let Some(tail_id) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        let Some(list_size) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        let Some(list_id) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        Ok(ListValueMetadata {
+            common,
+            head_id,
+            tail_id,
+            list_size,
+            list_id,
+        })
     }
 
     pub fn expiration(&self) -> &Expiration {
@@ -137,7 +139,7 @@ mod test {
         md.set_tail(420);
         md.set_len(15);
 
-        let mut arr = BytesMut::with_capacity(ListValueMetadata::SIZE);
+        let mut arr = bytes::BytesMut::with_capacity(ListValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
         md.to_bytes(&mut builder);
         assert_eq!(arr.len(), ListValueMetadata::SIZE);
@@ -146,7 +148,8 @@ mod test {
         arr.extend_from_slice(&[5, 5]);
 
         // Check that we can de-serialize it
-        let deserialized_md = ListValueMetadata::from_bytes(&arr);
+        let mut reader = U8ArrayReader::with_buffer(&arr);
+        let deserialized_md = ListValueMetadata::from_bytes(&mut reader)?;
 
         // remove the deserialized part
         let _ = arr.split_to(ListValueMetadata::SIZE);

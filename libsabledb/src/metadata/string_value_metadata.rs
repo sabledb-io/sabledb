@@ -1,8 +1,7 @@
 use crate::{
     metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
-    U8ArrayBuilder, U8ArrayReader,
+    SableError, U8ArrayBuilder, U8ArrayReader,
 };
-use bytes::BytesMut;
 
 /// Contains information regarding the String type metadata
 #[derive(Clone, Debug)]
@@ -25,10 +24,10 @@ impl StringValueMetadata {
         self.common.to_bytes(builder)
     }
 
-    pub fn from_bytes(buf: &BytesMut) -> Self {
-        StringValueMetadata {
-            common: CommonValueMetadata::from_bytes(buf),
-        }
+    pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
+        Ok(StringValueMetadata {
+            common: CommonValueMetadata::from_bytes(reader)?,
+        })
     }
 
     pub fn expiration(&self) -> &Expiration {
@@ -69,7 +68,7 @@ mod test {
         let mut md = StringValueMetadata::new();
         md.expiration_mut().set_ttl_millis(30)?;
 
-        let mut arr = BytesMut::with_capacity(StringValueMetadata::SIZE);
+        let mut arr = bytes::BytesMut::with_capacity(StringValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
 
         md.to_bytes(&mut builder);
@@ -79,7 +78,8 @@ mod test {
         arr.extend_from_slice(&[5, 5]);
 
         // Check that we can de-serialize it
-        let deserialized_md = StringValueMetadata::from_bytes(&arr);
+        let mut reader = U8ArrayReader::with_buffer(&arr);
+        let deserialized_md = StringValueMetadata::from_bytes(&mut reader)?;
 
         // remove the deserialized part
         let _ = arr.split_to(StringValueMetadata::SIZE);

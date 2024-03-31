@@ -1,5 +1,4 @@
-use crate::{BytesMutUtils, Expiration, U8ArrayBuilder, U8ArrayReader};
-use bytes::BytesMut;
+use crate::{Expiration, SableError, U8ArrayBuilder, U8ArrayReader};
 
 /// Contains information regarding the String type metadata
 #[derive(Clone, Debug)]
@@ -30,17 +29,16 @@ impl CommonValueMetadata {
         self.expiration.to_bytes(builder);
     }
 
-    pub fn from_bytes(buf: &BytesMut) -> Self {
-        let mut pos = 0usize;
-        let mut de = Self::default();
+    pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
+        let Some(value_type) = reader.read_u8() else {
+            return Err(SableError::SerialisationError);
+        };
 
-        de.value_type = BytesMutUtils::to_u8(&BytesMut::from(
-            &buf[pos..std::mem::size_of_val(&de.value_type)],
-        ));
-        pos += std::mem::size_of_val(&de.value_type);
-
-        de.expiration = Expiration::from_bytes(&BytesMut::from(&buf[pos..]));
-        de
+        let expiration = Expiration::from_bytes(reader)?;
+        Ok(CommonValueMetadata {
+            value_type,
+            expiration,
+        })
     }
 
     pub fn expiration(&self) -> &Expiration {
@@ -94,7 +92,7 @@ mod test {
     #[test]
     fn test_packing() -> Result<(), SableError> {
         let mut md = CommonValueMetadata::default();
-        let mut arr = BytesMut::with_capacity(CommonValueMetadata::SIZE);
+        let mut arr = bytes::BytesMut::with_capacity(CommonValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
         md.expiration_mut().set_ttl_millis(30)?;
 
@@ -105,7 +103,8 @@ mod test {
         arr.extend_from_slice(&[5, 5]);
 
         // Check that we can de-serialize it
-        let deserialized_md = CommonValueMetadata::from_bytes(&arr);
+        let mut reader = U8ArrayReader::with_buffer(&arr);
+        let deserialized_md = CommonValueMetadata::from_bytes(&mut reader)?;
 
         // remove the deserialized part
         let _ = arr.split_to(CommonValueMetadata::SIZE);

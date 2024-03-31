@@ -1,5 +1,4 @@
-use crate::{BytesMutUtils, SableError, TimeUtils, U8ArrayBuilder, U8ArrayReader};
-use bytes::BytesMut;
+use crate::{SableError, TimeUtils, U8ArrayBuilder, U8ArrayReader};
 
 #[derive(Clone, Debug)]
 pub struct Expiration {
@@ -30,13 +29,17 @@ impl Expiration {
         builder.write_u64(self.ttl_ms);
     }
 
-    pub fn from_bytes(bytearr: &BytesMut) -> Self {
-        let mut de_expiration = Expiration::default();
-        let u64_len = std::mem::size_of::<u64>();
-
-        de_expiration.last_updated = BytesMutUtils::to_u64(&BytesMut::from(&bytearr[..u64_len]));
-        de_expiration.ttl_ms = BytesMutUtils::to_u64(&BytesMut::from(&bytearr[u64_len..]));
-        de_expiration
+    pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
+        let Some(last_updated) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        let Some(ttl_ms) = reader.read_u64() else {
+            return Err(SableError::SerialisationError);
+        };
+        Ok(Expiration {
+            last_updated,
+            ttl_ms,
+        })
     }
 
     /// return true if this record expired

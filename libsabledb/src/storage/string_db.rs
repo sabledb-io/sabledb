@@ -103,16 +103,16 @@ impl<'a> StringsDb<'a> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
 
         let raw_value = self.store.get(&internal_key)?;
-        if let Some(value) = raw_value {
-            let mut arr = BytesMut::from(&value[..]);
-            let md = StringValueMetadata::from_bytes(&arr);
+        if let Some(mut value) = raw_value {
+            let mut reader = U8ArrayReader::with_buffer(&value);
+            let md = StringValueMetadata::from_bytes(&mut reader)?;
 
             if md.expiration().is_expired()? {
                 self.store.delete(&internal_key)?;
                 Ok(None)
             } else {
-                let _ = arr.split_to(StringValueMetadata::SIZE);
-                Ok(Some((arr, md)))
+                let _ = value.split_to(StringValueMetadata::SIZE);
+                Ok(Some((value, md)))
             }
         } else {
             Ok(None)

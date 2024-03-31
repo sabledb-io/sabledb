@@ -1174,20 +1174,21 @@ impl<'a> List<'a> {
         list_name: &BytesMut,
     ) -> Result<GetListMetadataResult, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name);
-        if let Some(value) = self.store.get(&internal_key)? {
-            let mut arr = BytesMut::from(&value[..]);
-            let common_md = CommonValueMetadata::from_bytes(&arr);
+        if let Some(mut value) = self.store.get(&internal_key)? {
+            let mut reader = U8ArrayReader::with_buffer(&value);
+            let common_md = CommonValueMetadata::from_bytes(&mut reader)?;
 
             if !common_md.is_list() {
                 return Ok(GetListMetadataResult::WrongType);
             }
 
-            let md = ListValueMetadata::from_bytes(&arr);
+            let mut reader = U8ArrayReader::with_buffer(&value);
+            let md = ListValueMetadata::from_bytes(&mut reader)?;
             if md.expiration().is_expired()? {
                 self.store.delete(&internal_key)?;
                 Ok(GetListMetadataResult::None)
             } else {
-                let _ = arr.split_to(ListValueMetadata::SIZE);
+                let _ = value.split_to(ListValueMetadata::SIZE);
                 Ok(GetListMetadataResult::Some(md))
             }
         } else {
