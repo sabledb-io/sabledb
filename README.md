@@ -7,7 +7,7 @@ A modern design to persistent `Redis`, written in `Rust`
 ### Linux /macOS
 
 ```bash
-git clone https://github.com/eranif/sabledb.git
+git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
 cargo build --release
 cargo test --release
@@ -18,7 +18,7 @@ cargo test --release
 On Windows, we require MSYS2 terminal for building `SableDb`.
 
 ```bash
-git clone https://github.com/eranif/sabledb.git
+git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
 CFLAGS="-D_ISOC11_SOURCE" cargo build --release
 cargo test --release
@@ -163,4 +163,4 @@ The increment command is unique because it uses a "read-modify-update" in order 
 Command executions can be seen [here][2]
 
 [1]: https://github.com/redis/redis
-[2]: https://github.com/eranif/sabledb/blob/main/BENCHMARK.md
+[2]: https://github.com/sabledb-io/sabledb/blob/main/BENCHMARK.md
