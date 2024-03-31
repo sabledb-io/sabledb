@@ -15,7 +15,7 @@ cargo test --release
 
 ### Windows
 
-On Windows, we require MSYS2 terminal for building `SableDb`.
+On Windows, we require `MSYS2` terminal for building `SableDb`.
 
 ```bash
 git clone https://github.com/sabledb-io/sabledb.git
@@ -42,6 +42,7 @@ $target/release/sabledb [sabledb.ini]
 - TLS connections
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
+- Use the `sb` command line utility (`target/release/sb`) for performance testing
 
 ## Supported commands
 
