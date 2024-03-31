@@ -53,13 +53,13 @@ impl ReplicationClient {
                         // Check whether we should attempt to reconnect
                         match Self::check_command_channel(&mut rx) {
                             CheckShutdownResult::Terminate => {
-                                tracing::info!("Requested to terminte replication client thread. Closing connection with primary");
+                                tracing::info!("Requested to terminate replication client thread. Closing connection with primary");
                                 break; // leave the thread
                             }
                             CheckShutdownResult::Timeout => {}
                             CheckShutdownResult::Err(e) => {
                                 tracing::error!(
-                                    "Error occured while reading from channel. {:?}",
+                                    "Error occurred while reading from channel. {:?}",
                                     e
                                 );
                                 break; // leave the thread
@@ -132,7 +132,7 @@ impl ReplicationClient {
             }
             Err(TryRecvError::Empty) => CheckShutdownResult::Timeout,
             Err(e) => CheckShutdownResult::Err(format!(
-                "Error occured while reading from channel. {:?}",
+                "Error occurred while reading from channel. {:?}",
                 e
             )),
         }
@@ -160,7 +160,7 @@ impl ReplicationClient {
             }
             CheckShutdownResult::Timeout => {}
             CheckShutdownResult::Err(e) => {
-                tracing::error!("Error occured while reading from channel. {:?}", e);
+                tracing::error!("Error occurred while reading from channel. {:?}", e);
                 return RequestChangesResult::ExitThread;
             }
         }
@@ -179,7 +179,7 @@ impl ReplicationClient {
         let buffer = loop {
             match reader.read_message() {
                 Ok(None) => {
-                    // Timeout occured, this is another good time to check the channel for commands
+                    // Timeout occurred, this is another good time to check the channel for commands
                     match Self::check_command_channel(rx) {
                         CheckShutdownResult::Terminate => {
                             return RequestChangesResult::ExitThread;
@@ -188,7 +188,7 @@ impl ReplicationClient {
                             continue;
                         }
                         CheckShutdownResult::Err(e) => {
-                            tracing::error!("Error occured while reading from channel. {:?}", e);
+                            tracing::error!("Error occurred while reading from channel. {:?}", e);
                             return RequestChangesResult::ExitThread;
                         }
                     }
