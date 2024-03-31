@@ -40,8 +40,8 @@ $target/release/sabledb [sabledb.ini]
 
 - Persistent data using RocksDb - use `SableDb` as a persistent storage using `Redis`'s API
 - TLS connections
-- Replication using
-- Highly configurable, but comes with sensible defaults
+- Replication using tailing of the transaction log
+- Highly configurable, but comes with sensible default values
 
 ## Supported commands
 
