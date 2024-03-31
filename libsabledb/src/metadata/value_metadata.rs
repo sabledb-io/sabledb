@@ -1,4 +1,4 @@
-use crate::{BytesMutUtils, Expiration};
+use crate::{BytesMutUtils, Expiration, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 /// Contains information regarding the String type metadata
@@ -25,11 +25,9 @@ impl CommonValueMetadata {
     pub const VALUE_LIST: u8 = 1;
 
     /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::with_capacity(CommonValueMetadata::SIZE);
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u8(&self.value_type));
-        as_bytes.extend_from_slice(&self.expiration.to_bytes());
-        as_bytes
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+        builder.write_u8(self.value_type);
+        self.expiration.to_bytes(builder);
     }
 
     pub fn from_bytes(buf: &BytesMut) -> Self {
@@ -96,9 +94,11 @@ mod test {
     #[test]
     fn test_packing() -> Result<(), SableError> {
         let mut md = CommonValueMetadata::default();
+        let mut arr = BytesMut::with_capacity(CommonValueMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
         md.expiration_mut().set_ttl_millis(30)?;
 
-        let mut arr = md.to_bytes();
+        md.to_bytes(&mut builder);
         assert_eq!(arr.len(), CommonValueMetadata::SIZE);
 
         // the buffer can be larger than `Metadata`

@@ -1,4 +1,7 @@
-use crate::metadata::{CommonValueMetadata, Expiration, ValueTypeIs};
+use crate::{
+    metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
+    U8ArrayBuilder, U8ArrayReader,
+};
 use bytes::BytesMut;
 
 /// Contains information regarding the String type metadata
@@ -18,8 +21,8 @@ impl StringValueMetadata {
     }
 
     /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        self.common.to_bytes()
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+        self.common.to_bytes(builder)
     }
 
     pub fn from_bytes(buf: &BytesMut) -> Self {
@@ -66,7 +69,10 @@ mod test {
         let mut md = StringValueMetadata::new();
         md.expiration_mut().set_ttl_millis(30)?;
 
-        let mut arr = md.to_bytes();
+        let mut arr = BytesMut::with_capacity(StringValueMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
+
+        md.to_bytes(&mut builder);
         assert_eq!(arr.len(), StringValueMetadata::SIZE);
 
         // the buffer can be larger than `Metadata`

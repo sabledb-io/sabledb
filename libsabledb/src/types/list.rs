@@ -5,6 +5,7 @@ use crate::{
     metadata::{CommonValueMetadata, ListValueMetadata},
     storage::PutFlags,
     BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, Storable, StorageAdapter, StorageCache,
+    U8ArrayBuilder, U8ArrayReader,
 };
 
 use bytes::BytesMut;
@@ -1213,7 +1214,10 @@ impl<'a> List<'a> {
         updates: &mut BatchUpdate,
     ) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name);
-        updates.put(internal_key, metadata.to_bytes());
+        let mut buf = BytesMut::with_capacity(ListValueMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buf);
+        metadata.to_bytes(&mut builder);
+        updates.put(internal_key, buf);
         Ok(())
     }
 

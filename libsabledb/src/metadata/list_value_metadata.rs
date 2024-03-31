@@ -1,6 +1,6 @@
 use crate::{
     metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
-    BytesMutUtils,
+    BytesMutUtils, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -30,14 +30,12 @@ impl ListValueMetadata {
     }
 
     /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::with_capacity(ListValueMetadata::SIZE);
-        as_bytes.extend_from_slice(&self.common.to_bytes());
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.head_id));
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.tail_id));
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.list_size));
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.list_id));
-        as_bytes
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+        self.common.to_bytes(builder);
+        builder.write_u64(self.head_id);
+        builder.write_u64(self.tail_id);
+        builder.write_u64(self.list_size);
+        builder.write_u64(self.list_id);
     }
 
     #[allow(clippy::field_reassign_with_default)]
@@ -139,7 +137,9 @@ mod test {
         md.set_tail(420);
         md.set_len(15);
 
-        let mut arr = md.to_bytes();
+        let mut arr = BytesMut::with_capacity(ListValueMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
+        md.to_bytes(&mut builder);
         assert_eq!(arr.len(), ListValueMetadata::SIZE);
 
         // the buffer can be larger than `Metadata`

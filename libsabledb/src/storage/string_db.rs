@@ -1,6 +1,6 @@
 use crate::{
     storage::{BatchUpdate, PutFlags, StorageAdapter},
-    PrimaryKeyMetadata, SableError, StringValueMetadata,
+    PrimaryKeyMetadata, SableError, StringValueMetadata, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -67,9 +67,10 @@ impl<'a> StringsDb<'a> {
             }
 
             let mut joined_value = BytesMut::with_capacity(StringValueMetadata::SIZE + value.len());
-            joined_value.extend_from_slice(&metadata.to_bytes());
-            joined_value.extend_from_slice(value);
-            updates.put(internal_key, joined_value)
+            let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
+            metadata.to_bytes(&mut builder);
+            builder.write_bytes(value);
+            updates.put(internal_key, joined_value);
         }
 
         self.store.apply_batch(&updates)?;
@@ -86,12 +87,12 @@ impl<'a> StringsDb<'a> {
         metadata: &StringValueMetadata,
         put_flags: PutFlags,
     ) -> Result<(), SableError> {
-        let mut joind_value = BytesMut::with_capacity(value.len() + StringValueMetadata::SIZE);
+        let mut joined_value = BytesMut::with_capacity(value.len() + StringValueMetadata::SIZE);
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
-        joind_value.extend_from_slice(&metadata.to_bytes());
-        joind_value.extend_from_slice(value);
-
-        self.store.put(&internal_key, &joind_value, put_flags)
+        let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
+        metadata.to_bytes(&mut builder);
+        builder.write_bytes(value);
+        self.store.put(&internal_key, &joined_value, put_flags)
     }
 
     /// Get a string key from the underlying storage

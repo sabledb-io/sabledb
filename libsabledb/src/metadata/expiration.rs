@@ -1,4 +1,4 @@
-use crate::{BytesMutUtils, SableError, TimeUtils};
+use crate::{BytesMutUtils, SableError, TimeUtils, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 #[derive(Clone, Debug)]
@@ -25,11 +25,9 @@ impl Default for Expiration {
 
 impl Expiration {
     pub const SIZE: usize = std::mem::size_of::<u64>() + std::mem::size_of::<u64>();
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::with_capacity(std::mem::size_of::<Expiration>());
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.last_updated));
-        as_bytes.extend_from_slice(&BytesMutUtils::from_u64(&self.ttl_ms));
-        as_bytes
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+        builder.write_u64(self.last_updated);
+        builder.write_u64(self.ttl_ms);
     }
 
     pub fn from_bytes(bytearr: &BytesMut) -> Self {
