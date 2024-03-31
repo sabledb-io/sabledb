@@ -36,6 +36,8 @@ pub enum SableError {
     ConfigError(#[from] ini::Error),
     #[error("Failed parsing address. {0}")]
     AddressParseError(#[from] std::net::AddrParseError),
+    #[error("Serialisation error")]
+    SerialisationError,
 }
 
 #[allow(dead_code)]

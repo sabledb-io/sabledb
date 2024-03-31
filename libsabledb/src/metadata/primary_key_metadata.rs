@@ -1,4 +1,4 @@
-use crate::{U8ArrayBuilder, U8ArrayReader};
+use crate::{SableError, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 pub type PrimaryKeyMetadata = KeyMetadata;
@@ -25,19 +25,20 @@ impl KeyMetadata {
     pub const KEY_PRIMARY: u8 = 0u8;
 
     /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::with_capacity(KeyMetadata::SIZE);
-        let mut builder = U8ArrayBuilder::with_buffer(&mut as_bytes);
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         builder.write_u8(self.key_type);
         builder.write_u16(self.key_slot);
-        as_bytes
     }
 
-    pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
+    pub fn from_bytes(buf: &BytesMut) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
-        let key_type = reader.read_u8()?;
-        let key_slot = reader.read_u16()?;
-        Some(KeyMetadata { key_type, key_slot })
+        let Some(key_type) = reader.read_u8() else {
+            return Err(SableError::SerialisationError);
+        };
+        let Some(key_slot) = reader.read_u16() else {
+            return Err(SableError::SerialisationError);
+        };
+        Ok(KeyMetadata { key_type, key_slot })
     }
 
     /// Set the key type
@@ -52,16 +53,17 @@ impl KeyMetadata {
         key_metadata.key_slot = crate::utils::calculate_slot(user_key);
 
         let mut encoded_key = BytesMut::with_capacity(KeyMetadata::SIZE + user_key.len());
-        encoded_key.extend_from_slice(&key_metadata.to_bytes());
-        encoded_key.extend_from_slice(user_key);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut encoded_key);
+        key_metadata.to_bytes(&mut builder);
+        builder.write_bytes(user_key);
         encoded_key
     }
 
     /// Given an encoded key, return its metadata and the user content
-    pub fn from_raw(encoded_key: &BytesMut) -> Option<(KeyMetadata, BytesMut)> {
+    pub fn from_raw(encoded_key: &BytesMut) -> Result<(KeyMetadata, BytesMut), SableError> {
         let (pk_bytes, user_bytes) = encoded_key.split_at(KeyMetadata::SIZE);
         let pk = KeyMetadata::from_bytes(&BytesMut::from(pk_bytes))?;
-        Some((pk, BytesMut::from(user_bytes)))
+        Ok((pk, BytesMut::from(user_bytes)))
     }
 
     pub fn is_primary_key(&self) -> bool {
