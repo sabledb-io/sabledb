@@ -215,7 +215,7 @@ impl RedisClient {
             return Err(SableError::OtherError("expected Status object".to_string()));
         };
 
-        if pong.eq("PONG") {
+        if !pong.eq("PONG") {
             return Err(SableError::OtherError("expected 'PONG'".to_string()));
         }
         Ok(())

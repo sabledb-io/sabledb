@@ -44,6 +44,23 @@ $target/release/sabledb [sabledb.ini]
 - Highly configurable, but comes with sensible default values
 - Use the `sb` command line utility (`target/release/sb`) for performance testing
 
+## Benchmark tool - `sb`
+
+`SableDb` uses its own benchmarking tool named `sb` ("SableDb Benchmark"). `sb` supports the following commands:
+
+- `set`
+- `get`
+- `lpush` 
+- `lpop`
+- `rpush` 
+- `rpop`
+- `incr`
+- `ping`
+
+Run `sb --help` to get the full help message.
+
+![sb progress demo](/docs/images/sb-demo.gif)
+
 ## Supported commands
 
 ---
