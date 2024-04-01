@@ -55,16 +55,17 @@ impl GenericCommands {
         let mut deleted_items = 0usize;
         for user_key in iter {
             // obtain the lock per key
-            let _unused = LockManager::lock_user_key_exclusive(user_key);
+            let _unused = LockManager::lock_user_key_exclusive(user_key, client_state.db_id);
             let key_type = Self::query_key_type(client_state, command, user_key).await?;
             match key_type {
                 Some(CommonValueMetadata::VALUE_STR) => {
-                    let strings_db = StringsDb::with_storage(&client_state.store);
+                    let strings_db =
+                        StringsDb::with_storage(&client_state.store, client_state.db_id);
                     strings_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
                 Some(CommonValueMetadata::VALUE_LIST) => {
-                    let list = List::with_storage(&client_state.store);
+                    let list = List::with_storage(&client_state.store, client_state.db_id);
                     list.remove(
                         user_key,
                         None, // remove all items
@@ -79,7 +80,8 @@ impl GenericCommands {
                         user_key,
                         unknown_type
                     );
-                    let strings_db = StringsDb::with_storage(&client_state.store);
+                    let strings_db =
+                        StringsDb::with_storage(&client_state.store, client_state.db_id);
                     strings_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
@@ -104,8 +106,8 @@ impl GenericCommands {
         let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_shared(key);
-        let strings_db = StringsDb::with_storage(&client_state.store);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
+        let strings_db = StringsDb::with_storage(&client_state.store, client_state.db_id);
         if let Some((_, value_metadata)) = strings_db.get(key)? {
             if !value_metadata.expiration().has_ttl() {
                 // No timeout
@@ -129,7 +131,7 @@ impl GenericCommands {
         _command: &RedisCommand,
         user_key: &BytesMut,
     ) -> Result<Option<u8>, SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, client_state.db_id);
         let raw_value = client_state.store.get(&internal_key)?;
 
         if let Some(raw_value) = raw_value {

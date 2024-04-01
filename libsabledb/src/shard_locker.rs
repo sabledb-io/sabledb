@@ -68,23 +68,23 @@ impl LockManager {
     }
 
     // obtain execlusive lock on a user key
-    pub fn lock_user_key_exclusive<'a>(user_key: &BytesMut) -> ShardLockGuard<'a> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+    pub fn lock_user_key_exclusive<'a>(user_key: &BytesMut, db_id: u16) -> ShardLockGuard<'a> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_exclusive(&internal_key)
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_key_shared<'a>(user_key: &BytesMut) -> ShardLockGuard<'a> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+    pub fn lock_user_key_shared<'a>(user_key: &BytesMut, db_id: u16) -> ShardLockGuard<'a> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_shared(&internal_key)
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_shared<'a>(user_keys: &[&BytesMut]) -> ShardLockGuard<'a> {
+    pub fn lock_user_keys_shared<'a>(user_keys: &[&BytesMut], db_id: u16) -> ShardLockGuard<'a> {
         let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         for user_key in user_keys.iter() {
-            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key));
+            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id));
             primary_keys.push(internal_key.clone());
             primary_keys_refs.push(internal_key);
         }
@@ -92,11 +92,11 @@ impl LockManager {
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_exclusive<'a>(user_keys: &[&BytesMut]) -> ShardLockGuard<'a> {
+    pub fn lock_user_keys_exclusive<'a>(user_keys: &[&BytesMut], db_id: u16) -> ShardLockGuard<'a> {
         let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         for user_key in user_keys.iter() {
-            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key));
+            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id));
             primary_keys.push(internal_key.clone());
             primary_keys_refs.push(internal_key);
         }

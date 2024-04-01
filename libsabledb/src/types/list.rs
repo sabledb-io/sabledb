@@ -14,6 +14,7 @@ use std::rc::Rc;
 
 pub struct List<'a> {
     store: &'a StorageAdapter,
+    db_id: u16,
 }
 
 enum GetListMetadataResult {
@@ -44,25 +45,9 @@ enum IterResult {
     None,
 }
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum InsertResult {
     NotFound,
     Some(ListItem),
-}
-
-#[allow(dead_code)]
-impl IterResult {
-    pub fn is_none(&self) -> bool {
-        self == &IterResult::None
-    }
-
-    pub fn is_some(&self) -> bool {
-        match *self {
-            IterResult::WrongType => false,
-            IterResult::None => false,
-            IterResult::Some(_) => true,
-        }
-    }
 }
 
 enum PosResult {
@@ -108,10 +93,9 @@ pub struct ListFlags: u32  {
 
 type ListItemCache = StorageCache<ListItem>;
 
-#[allow(dead_code)]
 impl<'a> List<'a> {
-    pub fn with_storage(store: &'a StorageAdapter) -> Self {
-        List { store }
+    pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
+        List { store, db_id }
     }
 
     /// Return the list size
@@ -1173,7 +1157,7 @@ impl<'a> List<'a> {
         &self,
         list_name: &BytesMut,
     ) -> Result<GetListMetadataResult, SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         if let Some(mut value) = self.store.get(&internal_key)? {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let common_md = CommonValueMetadata::from_bytes(&mut reader)?;
@@ -1202,7 +1186,7 @@ impl<'a> List<'a> {
         list_name: &BytesMut,
         updates: &mut BatchUpdate,
     ) -> Result<(), SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         updates.delete(internal_key);
         Ok(())
     }
@@ -1214,7 +1198,7 @@ impl<'a> List<'a> {
         list_name: &BytesMut,
         updates: &mut BatchUpdate,
     ) -> Result<(), SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         let mut buf = BytesMut::with_capacity(ListValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut buf);
         metadata.to_bytes(&mut builder);
@@ -1228,22 +1212,6 @@ impl<'a> List<'a> {
         let list_id = self.store.generate_id();
         md.set_id(list_id);
         md
-    }
-
-    /// ---
-    /// List Item database API
-    /// ---
-
-    /// Put new list item into the store
-    fn new_list_item(
-        &self,
-        _list_id: u64,
-        _item_id: u64,
-        _left: Option<u64>,
-        _right: Option<u64>,
-        _user_value: &BytesMut,
-    ) -> Result<(), SableError> {
-        Ok(())
     }
 }
 
@@ -1596,7 +1564,7 @@ mod tests {
     fn test_push_pop() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_push_pop.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store);
+        let list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1649,7 +1617,7 @@ mod tests {
     fn test_list_iterate_forward() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_iterate_list_forward.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store);
+        let list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1688,7 +1656,7 @@ mod tests {
     fn test_list_iterate_backward() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_iterate_list_backward.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store);
+        let list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1736,7 +1704,7 @@ mod tests {
     fn test_list_index(index: i32, element: Option<&'static str>) -> Result<(), SableError> {
         let store = prepare_db!(&format!("tests/test_list_index{}.db", index));
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store);
+        let list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1777,7 +1745,7 @@ mod tests {
     ) -> Result<(), SableError> {
         let store = prepare_db!(&format!("tests/test_list_trim_{}_{}.db", start, end));
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store);
+        let list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),

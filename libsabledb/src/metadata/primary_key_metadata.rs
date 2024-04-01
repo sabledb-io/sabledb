@@ -14,6 +14,8 @@ pub struct KeyMetadata {
     /// The key type. For primary key, this will always be `0`
     /// This field must come first
     key_type: u8,
+    /// Database ID
+    db_id: u16,
     /// Keep the slot number as part of the key encoding
     /// with `<key-type><key_slot>` we can discover all keys belonged
     /// to a given slot by using a prefix iterator
@@ -21,12 +23,14 @@ pub struct KeyMetadata {
 }
 
 impl KeyMetadata {
-    pub const SIZE: usize = std::mem::size_of::<u8>() + std::mem::size_of::<u16>();
+    pub const SIZE: usize =
+        std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
     pub const KEY_PRIMARY: u8 = 0u8;
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         builder.write_u8(self.key_type);
+        builder.write_u16(self.db_id);
         builder.write_u16(self.key_slot);
     }
 
@@ -35,10 +39,17 @@ impl KeyMetadata {
         let Some(key_type) = reader.read_u8() else {
             return Err(SableError::SerialisationError);
         };
+        let Some(db_id) = reader.read_u16() else {
+            return Err(SableError::SerialisationError);
+        };
         let Some(key_slot) = reader.read_u16() else {
             return Err(SableError::SerialisationError);
         };
-        Ok(KeyMetadata { key_type, key_slot })
+        Ok(KeyMetadata {
+            key_type,
+            db_id,
+            key_slot,
+        })
     }
 
     /// Set the key type
@@ -47,9 +58,17 @@ impl KeyMetadata {
         self
     }
 
+    /// Set the database ID
+    fn with_db_id(mut self, db_id: u16) -> Self {
+        self.db_id = db_id;
+        self
+    }
+
     /// Create a string key that can place into the storage which includes a metadata regarding the key's encoding
-    pub fn new_primary_key(user_key: &BytesMut) -> BytesMut {
-        let mut key_metadata = KeyMetadata::default().with_type(KeyMetadata::KEY_PRIMARY);
+    pub fn new_primary_key(user_key: &BytesMut, db_id: u16) -> BytesMut {
+        let mut key_metadata = KeyMetadata::default()
+            .with_type(KeyMetadata::KEY_PRIMARY)
+            .with_db_id(db_id);
         key_metadata.key_slot = crate::utils::calculate_slot(user_key);
 
         let mut encoded_key = BytesMut::with_capacity(KeyMetadata::SIZE + user_key.len());
@@ -94,12 +113,37 @@ mod tests {
         let slot = crate::utils::calculate_slot(&user_key);
         println!("user_key slot = {}", slot);
 
-        let pk_as_bytes = PrimaryKeyMetadata::new_primary_key(&user_key);
+        let pk_as_bytes = PrimaryKeyMetadata::new_primary_key(&user_key, 5);
         let (pk, user_key) = PrimaryKeyMetadata::from_raw(&pk_as_bytes).unwrap();
 
         // Check that the slot serialised + deserialised properly
         assert_eq!(pk.key_slot, slot);
         assert!(pk.is_primary_key());
+        assert_eq!(pk.db_id, 5);
         assert_eq!(BytesMutUtils::to_string(&user_key), "My Key");
+    }
+
+    #[test]
+    pub fn test_diff_db_id_with_same_keys_serialization() {
+        let user_key = BytesMut::from("My Key");
+        let slot = crate::utils::calculate_slot(&user_key);
+        println!("user_key slot = {}", slot);
+
+        let pk1_as_bytes = PrimaryKeyMetadata::new_primary_key(&user_key, 1);
+        let pk2_as_bytes = PrimaryKeyMetadata::new_primary_key(&user_key, 2);
+        assert_ne!(pk1_as_bytes, pk2_as_bytes);
+
+        let (pk1, user_key1) = PrimaryKeyMetadata::from_raw(&pk1_as_bytes).unwrap();
+        let (pk2, user_key2) = PrimaryKeyMetadata::from_raw(&pk2_as_bytes).unwrap();
+
+        // Check that the slot serialised + deserialised properly
+        assert_eq!(pk1.key_slot, slot);
+        assert_eq!(pk2.key_slot, slot);
+        assert!(pk1.is_primary_key());
+        assert!(pk2.is_primary_key());
+        assert_eq!(pk1.db_id, 1);
+        assert_eq!(pk2.db_id, 2);
+        assert_eq!(BytesMutUtils::to_string(&user_key1), "My Key");
+        assert_eq!(BytesMutUtils::to_string(&user_key2), "My Key");
     }
 }

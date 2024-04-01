@@ -34,6 +34,7 @@ pub struct ClientState {
     pub store: StorageAdapter,
     pub client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
+    pub db_id: u16,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -94,6 +95,7 @@ impl Client {
                 store,
                 client_id: new_client_id(),
                 tls_acceptor,
+                db_id: 0,
             },
         }
     }

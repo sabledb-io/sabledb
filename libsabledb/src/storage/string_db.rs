@@ -9,12 +9,13 @@ use bytes::BytesMut;
 /// This class handles String command database access
 pub struct StringsDb<'a> {
     store: &'a StorageAdapter,
+    db_id: u16,
 }
 
 #[allow(dead_code)]
 impl<'a> StringsDb<'a> {
-    pub fn with_storage(store: &'a StorageAdapter) -> Self {
-        StringsDb { store }
+    pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
+        StringsDb { store, db_id }
     }
 
     /// Put or Replace key
@@ -39,7 +40,7 @@ impl<'a> StringsDb<'a> {
 
     /// Delete key. The key is assumed to be a user key (i.e. not encoded)
     pub fn delete(&self, user_key: &BytesMut) -> Result<(), SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.store.delete(&internal_key)
     }
 
@@ -54,7 +55,7 @@ impl<'a> StringsDb<'a> {
 
         // Check for the flags first
         for (key, value) in user_keys_and_values.iter() {
-            let internal_key = PrimaryKeyMetadata::new_primary_key(key);
+            let internal_key = PrimaryKeyMetadata::new_primary_key(key, self.db_id);
             let can_continue = match put_flags {
                 PutFlags::Override => true,
                 PutFlags::PutIfNotExists => self.store.get(&internal_key)?.is_none(),
@@ -88,7 +89,7 @@ impl<'a> StringsDb<'a> {
         put_flags: PutFlags,
     ) -> Result<(), SableError> {
         let mut joined_value = BytesMut::with_capacity(value.len() + StringValueMetadata::SIZE);
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
         metadata.to_bytes(&mut builder);
         builder.write_bytes(value);
@@ -100,7 +101,7 @@ impl<'a> StringsDb<'a> {
         &self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key);
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
 
         let raw_value = self.store.get(&internal_key)?;
         if let Some(mut value) = raw_value {
