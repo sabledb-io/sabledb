@@ -6,6 +6,7 @@ mod tests;
 
 use clap::Parser;
 
+use num_format::{Locale, ToFormattedString};
 use sb_options::Options;
 
 /// Thread main function
@@ -125,8 +126,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut requests_per_ms = count / millis;
     requests_per_ms *= 1000.0;
-
-    println!("    RPS: {}", requests_per_ms as usize);
+    let requests_per_ms: usize = requests_per_ms as usize;
+    println!(
+        "    RPS: {}",
+        requests_per_ms.to_formatted_string(&Locale::en)
+    );
     println!("    Hit rate: {}%", hits / count * 100.0);
     stats::print_latency();
     Ok(())
