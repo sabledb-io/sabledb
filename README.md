@@ -62,6 +62,8 @@ $target/release/sabledb [sabledb.ini]
 
 Run `sb --help` to get the full help message.
 
+Below is a simple test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDb` and `sb`...):
+
 ![sb progress demo](/docs/images/sb-demo.gif)
 
 ## Supported commands
