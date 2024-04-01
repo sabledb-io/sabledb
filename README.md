@@ -1,9 +1,11 @@
 # SableDb
 
 A modern design to persistent `Redis`, written in `Rust`.
-Under the hood `SableDb` uses a shared nothing architecture (well, almost nothing) using `Rust`'s [tokio][4]'s runtime and threads (ecah thread is running its own Runtime that does not share anything with other threads). All tasks spawned in a thread, are "local threads" which require no locking in order to exchange data via channels.
+Under the hood `SableDb` uses a shared nothing architecture (well, almost nothing) using `Rust`'s [tokio][4]'s runtime and threads 
+(each thread is running its own Runtime that does not share anything with other threads). All tasks spawned in a thread, are "local threads" which require no locking in order to exchange data via channels.
 
-For the underlying storage, `SableDb` uses [`RocksDb`][3] binding for `Rust`. `RocksDb` is a good compromise between persistency and performance.
+For the underlying storage, `SableDb` uses [`RocksDb`][3] binding for `Rust`. `RocksDb` is a good compromise between durability 
+and performance.
 
 ## Building
 
@@ -62,9 +64,13 @@ $target/release/sabledb [sabledb.ini]
 
 Run `sb --help` to get the full help message.
 
-Below is a simple test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDb` and `sb`...):
+Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDb` and `sb`...):
 
 ![sb progress demo](/docs/images/sb-demo.gif)
+
+`set` test, on the same setup (local machine, WSL2 on Windows 10):
+
+![sb set progress demo](/docs/images/sb-demo-set.gif)
 
 ## Supported commands
 
@@ -165,7 +171,8 @@ Note: Each `mset` command is equivalent of `10` `set` commands
 
 ### Command `incr`
 
-The increment command is unique because it uses a "read-modify-update" in order to ensure the atomicity of the action which in a multithreaded environment causes a challenge
+The increment command is unique because it uses a "read-modify-update" in order to ensure the atomicity of the action which in a 
+multi-threaded environment causes a challenge
 
 | Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
 |---|---|---|---|---|
