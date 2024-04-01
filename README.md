@@ -1,6 +1,9 @@
 # SableDb
 
-A modern design to persistent `Redis`, written in `Rust`
+A modern design to persistent `Redis`, written in `Rust`.
+Under the hood `SableDb` uses a shared nothing architecture (well, almost nothing) using `Rust`'s [tokio][4]'s runtime and threads (ecah thread is running its own Runtime that does not share anything with other threads). All tasks spawned in a thread, are "local threads" which require no locking in order to exchange data via channels.
+
+For the underlying storage, `SableDb` uses [`RocksDb`][3] binding for `Rust`. `RocksDb` is a good compromise between persistency and performance.
 
 ## Building
 
@@ -182,3 +185,5 @@ Command executions can be seen [here][2]
 
 [1]: https://github.com/redis/redis
 [2]: https://github.com/sabledb-io/sabledb/blob/main/BENCHMARK.md
+[3]: https://rocksdb.org/
+[4]: https://tokio.rs/
