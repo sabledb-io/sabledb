@@ -1,13 +1,14 @@
-# SableDb
+# What is `SableDb`?
 
-A modern design to persistent `Redis`, written in `Rust`.
-Under the hood `SableDb` uses a shared nothing architecture (well, almost nothing) using `Rust`'s [tokio][4]'s runtime and threads 
-(each thread is running its own Runtime that does not share anything with other threads). All tasks spawned in a thread, are "local threads" which require no locking in order to exchange data via channels.
+`SableDb` is a key-value NoSQL database that utilizes [`RocksDb`][3] as its storage engine and is compatible with the Redis protocol.
+It aims to reduce memory costs and increase capacity compared to Redis. `SableDb` features include Redis-compatible access via 
+any Redis client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.
 
-For the underlying storage, `SableDb` uses [`RocksDb`][3] binding for `Rust`. `RocksDb` is a good compromise between durability 
-and performance.
+Oh, and it's written in `Rust` :) 
 
 ## Building
+
+`SableDb` is supported on all major OS: `Linux`, `macOS` and `Windows`
 
 ### Linux /macOS
 
