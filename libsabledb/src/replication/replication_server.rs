@@ -1,6 +1,6 @@
 use crate::replication::prepare_std_socket;
 use crate::server_options::ServerOptions;
-use crate::telemetry::ReplicationTelemetry;
+use crate::telemetry::{ReplicaTelemetry, ReplicationTelemetry};
 
 #[allow(unused_imports)]
 use crate::{
@@ -40,13 +40,11 @@ pub async fn replication_thread_stop_all() {
 /// Increment the number of running replication threads by 1
 fn replication_thread_incr() {
     let _ = REPLICATION_THREADS.fetch_add(1, Ordering::Relaxed);
-    ReplicationTelemetry::incr_connected_replicas();
 }
 
 /// Decrement the number of running replication threads by 1
 fn replication_thread_decr() {
     let _ = REPLICATION_THREADS.fetch_sub(1, Ordering::Relaxed);
-    ReplicationTelemetry::decr_connected_replicas();
 }
 
 /// Is the shutdown flag set?
@@ -57,18 +55,22 @@ fn replication_thread_is_going_down() -> bool {
 /// Helper struct for marking a replication thread
 /// as running and mark it as "off" when this helper
 /// goes out of scope
-struct ReplicationThreadMarker {}
+struct ReplicationThreadMarker {
+    address: String,
+}
 
 impl ReplicationThreadMarker {
-    pub fn new() -> Self {
+    pub fn new(address: String) -> Self {
+        ReplicationTelemetry::update_replica_info(address.clone(), ReplicaTelemetry::default());
         replication_thread_incr();
-        ReplicationThreadMarker {}
+        ReplicationThreadMarker { address }
     }
 }
 
 impl Drop for ReplicationThreadMarker {
     fn drop(&mut self) {
         replication_thread_decr();
+        ReplicationTelemetry::remove_replica(&self.address);
     }
 }
 
@@ -197,7 +199,7 @@ impl ReplicationServer {
             // without building buffers in the memory
             let _handle = std::thread::spawn(move || {
                 tracing::info!("Replication thread started for connection {:?}", addr);
-                let _guard = ReplicationThreadMarker::new();
+                let _guard = ReplicationThreadMarker::new(addr.to_string());
 
                 // we now work in a simple request/reply mode:
                 // the replica sends a request requesting changes since

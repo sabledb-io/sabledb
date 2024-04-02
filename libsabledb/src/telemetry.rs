@@ -1,5 +1,6 @@
 use crate::replication::ServerRole;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 thread_local! {
@@ -14,15 +15,20 @@ lazy_static::lazy_static! {
 #[derive(Clone, Default, Debug)]
 pub struct ReplicationTelemetry {
     pub role: ServerRole,
-    pub connected_replicas: u32,
     pub last_change_sequence_number: u64,
-    pub replicas: Vec<ReplicaTelemetry>,
+    pub replica_telemetry: ReplicaTelemetry,
+    pub primary_telemetry: PrimaryTelemetry,
 }
 
 #[derive(Clone, Default, Debug)]
 pub struct ReplicaTelemetry {
     pub lag_from_primary: u64,
     pub last_change_sequence_number: u64,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct PrimaryTelemetry {
+    pub replicas: HashMap<String, ReplicaTelemetry>,
 }
 
 impl ReplicationTelemetry {
@@ -39,14 +45,28 @@ impl ReplicationTelemetry {
             .last_change_sequence_number = seq_num;
     }
 
-    pub fn incr_connected_replicas() {
-        let mut value = REPLICATION_INFO.lock().expect("poisoned mutex");
-        value.connected_replicas = value.connected_replicas.saturating_add(1);
+    pub fn update_replica_info(replica_id: String, info: ReplicaTelemetry) {
+        let mut replication_telemetry = REPLICATION_INFO.lock().expect("poisoned mutex");
+        if let Some(replica_data) = replication_telemetry
+            .primary_telemetry
+            .replicas
+            .get_mut(&replica_id)
+        {
+            *replica_data = info.clone();
+        } else {
+            replication_telemetry
+                .primary_telemetry
+                .replicas
+                .insert(replica_id, info);
+        }
     }
 
-    pub fn decr_connected_replicas() {
-        let mut value = REPLICATION_INFO.lock().expect("poisoned mutex");
-        value.connected_replicas = value.connected_replicas.saturating_sub(1);
+    pub fn remove_replica(replica_id: &String) {
+        let mut replication_telemetry = REPLICATION_INFO.lock().expect("poisoned mutex");
+        replication_telemetry
+            .primary_telemetry
+            .replicas
+            .remove(replica_id);
     }
 }
 
@@ -61,7 +81,20 @@ impl std::fmt::Display for ReplicationTelemetry {
             "last_db_update_sequence_number: {}",
             self.last_change_sequence_number
         ));
-        lines.push(format!("connected_replicas: {}", self.connected_replicas));
+        match self.role {
+            ServerRole::Primary => {
+                lines.push(format!(
+                    "connected_replicas: {}",
+                    self.primary_telemetry.replicas.len()
+                ));
+
+                for (replica_id, info) in &self.primary_telemetry.replicas {
+                    lines.push(format!("replica: {}, {:?}", replica_id, info));
+                }
+            }
+            ServerRole::Replica => {}
+        }
+
         lines.push("\n".to_string());
         let as_str = lines.join("\n");
         write!(f, "{}", as_str)
