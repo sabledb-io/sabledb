@@ -1,4 +1,6 @@
 use crate::replication::ReplicationServer;
+use crate::telemetry::ReplicationTelemetry;
+
 #[allow(unused_imports)]
 use crate::{
     replication::{replication_thread_stop_all, ReplClientCommand, ReplicationClient, ServerRole},
@@ -144,6 +146,7 @@ impl Replicator {
         let tx = replication_client
             .run(self.server_options.clone(), self.store.clone())
             .await?;
+        ReplicationTelemetry::set_role(ServerRole::Replica);
         loop {
             match self.rx_channel.recv().await {
                 Some(ReplicationWorkerMessage::ConnectToPrimary) => {
@@ -178,7 +181,7 @@ impl Replicator {
             replication_config
         );
         let server = ReplicationServer::default();
-
+        ReplicationTelemetry::set_role(ServerRole::Primary);
         loop {
             tokio::select! {
                 cmd = self.rx_channel.recv() => {

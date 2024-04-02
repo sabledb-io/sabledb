@@ -1,7 +1,71 @@
+use crate::replication::ServerRole;
 use std::cell::RefCell;
+use std::sync::Mutex;
 
 thread_local! {
     pub static WORKER_TELEMETRY: RefCell<Telemetry> = RefCell::new(Telemetry::default());
+}
+
+lazy_static::lazy_static! {
+    /// Replication info goes into a separate data structure
+    static ref REPLICATION_INFO: Mutex<ReplicationTelemetry> = Mutex::new(ReplicationTelemetry::default());
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct ReplicationTelemetry {
+    pub role: ServerRole,
+    pub connected_replicas: u32,
+    pub last_change_sequence_number: u64,
+    pub replicas: Vec<ReplicaTelemetry>,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct ReplicaTelemetry {
+    pub lag_from_primary: u64,
+    pub last_change_sequence_number: u64,
+}
+
+impl ReplicationTelemetry {
+    /// Replication: set this instance role
+    pub fn set_role(role: ServerRole) {
+        REPLICATION_INFO.lock().expect("poisoned mutex").role = role;
+    }
+
+    /// Replication: update the last change in the database
+    pub fn set_last_change(seq_num: u64) {
+        REPLICATION_INFO
+            .lock()
+            .expect("poisoned mutex")
+            .last_change_sequence_number = seq_num;
+    }
+
+    pub fn incr_connected_replicas() {
+        let mut value = REPLICATION_INFO.lock().expect("poisoned mutex");
+        value.connected_replicas = value.connected_replicas.saturating_add(1);
+    }
+
+    pub fn decr_connected_replicas() {
+        let mut value = REPLICATION_INFO.lock().expect("poisoned mutex");
+        value.connected_replicas = value.connected_replicas.saturating_sub(1);
+    }
+}
+
+impl std::fmt::Display for ReplicationTelemetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut lines = Vec::<String>::new();
+
+        lines.push("# Replication".to_string());
+        lines.push(format!("role: {:?}", self.role));
+
+        lines.push(format!(
+            "last_db_update_sequence_number: {}",
+            self.last_change_sequence_number
+        ));
+        lines.push(format!("connected_replicas: {}", self.connected_replicas));
+        lines.push("\n".to_string());
+        let as_str = lines.join("\n");
+        write!(f, "{}", as_str)
+    }
 }
 
 /// Telemetry collected
@@ -30,14 +94,15 @@ pub struct Telemetry {
     pub total_io_write_calls: u128,
     /// Total number of IO read calls
     pub total_io_read_calls: u128,
-    /// Avg time sepnt, per call, doing IO
+    /// Avg time spent, per call, doing IO
     pub avg_io_duration: u128,
+    /// Contains information about replication (role, data sent etc)
+    pub replication_info: ReplicationTelemetry,
 }
 
-#[allow(dead_code)]
 impl Telemetry {
     /// Create a copy of the telemetry
-    pub fn take() -> Telemetry {
+    pub fn clone() -> Telemetry {
         WORKER_TELEMETRY.with(|telemetry| telemetry.borrow().clone())
     }
 
@@ -210,6 +275,12 @@ impl std::fmt::Display for Telemetry {
         lines.push("\n".to_string());
 
         let as_str = lines.join("\n");
-        write!(f, "{}", as_str)
+
+        write!(
+            f,
+            "{}\n{}",
+            as_str,
+            REPLICATION_INFO.lock().expect("poisoned mutex")
+        )
     }
 }

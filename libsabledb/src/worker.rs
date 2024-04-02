@@ -183,7 +183,7 @@ impl Worker {
                             .shared_telemetry()
                             .lock()
                             .expect("mutex")
-                            .merge_worker_telemetry(Telemetry::take());
+                            .merge_worker_telemetry(Telemetry::clone());
                         Telemetry::clear();
                 }
                 _ = tokio::time::sleep(
@@ -194,7 +194,7 @@ impl Worker {
                         )
                     ) => {
                     if let Err(e) = self.store.flush_wal() {
-                        // log this error every 5 miniutes
+                        // log this error every 5 minutes
                         crate::error_with_throttling!(300, "Failed to flush WAL. {:?}", e);
                     }
                 }

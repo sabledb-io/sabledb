@@ -1,5 +1,7 @@
 use crate::replication::prepare_std_socket;
 use crate::server_options::ServerOptions;
+use crate::telemetry::ReplicationTelemetry;
+
 #[allow(unused_imports)]
 use crate::{
     replication::{
@@ -38,11 +40,13 @@ pub async fn replication_thread_stop_all() {
 /// Increment the number of running replication threads by 1
 fn replication_thread_incr() {
     let _ = REPLICATION_THREADS.fetch_add(1, Ordering::Relaxed);
+    ReplicationTelemetry::incr_connected_replicas();
 }
 
 /// Decrement the number of running replication threads by 1
 fn replication_thread_decr() {
     let _ = REPLICATION_THREADS.fetch_sub(1, Ordering::Relaxed);
+    ReplicationTelemetry::decr_connected_replicas();
 }
 
 /// Is the shutdown flag set?
