@@ -12,11 +12,7 @@ pub trait Storable {
 
     /// Deserialise the value from bytes (key and value)
     /// this function consumes the `key` and `value` in the process
-    fn construct_from(
-        &mut self,
-        key: &mut BytesMut,
-        value: &mut BytesMut,
-    ) -> Result<(), SableError>;
+    fn construct_from(&mut self, key: &BytesMut, value: BytesMut) -> Result<(), SableError>;
 }
 
 /// Transaction cache. Useful for manipulating
@@ -47,12 +43,11 @@ impl<T: Storable + Clone + Default> StorageCache<T> {
                 Some(cached_item_value) => Ok(Some(cached_item_value.clone())),
                 None => Ok(None),
             }
-        } else if let Some(mut value) = store.get(key)? {
+        } else if let Some(value) = store.get(key)? {
             // construct the value from the record found in the storage
-            // update the cache and reutrn the match to the caller
+            // update the cache and return the match to the caller
             let mut new_item = T::default();
-            let mut from_key = key.clone();
-            new_item.construct_from(&mut from_key, &mut value)?;
+            new_item.construct_from(key, value)?;
             self.cache.insert(key.clone(), Some(new_item.clone()));
             Ok(Some(new_item))
         } else {

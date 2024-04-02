@@ -307,6 +307,11 @@ impl<'a> U8ArrayReader<'a> {
     const U64_SIZE: usize = std::mem::size_of::<u64>();
     const U16_SIZE: usize = std::mem::size_of::<u16>();
 
+    /// Return the number of bytes consumed so far
+    pub fn consumed(&self) -> usize {
+        self.consumed
+    }
+
     pub fn with_buffer(buffer: &'a [u8]) -> Self {
         U8ArrayReader {
             buffer,
@@ -370,12 +375,10 @@ impl<'a> U8ArrayReader<'a> {
     }
 }
 
-#[allow(dead_code)]
 pub struct U8ArrayBuilder<'a> {
     buffer: &'a mut BytesMut,
 }
 
-#[allow(dead_code)]
 impl<'a> U8ArrayBuilder<'a> {
     pub fn with_buffer(buffer: &'a mut BytesMut) -> Self {
         U8ArrayBuilder { buffer }

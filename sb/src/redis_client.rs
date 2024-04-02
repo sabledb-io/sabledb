@@ -237,12 +237,13 @@ impl RedisClient {
         self.write_buffer(stream, &buffer).await?;
 
         // read response
-        let RedisObject::Integer(val) = self.read_response(stream).await? else {
-            return Err(SableError::OtherError(
-                "expected Integer object".to_string(),
-            ));
-        };
-        Ok(val)
+        match self.read_response(stream).await? {
+            RedisObject::Integer(val) => Ok(val),
+            other => Err(SableError::OtherError(format!(
+                "Expected Integer object. Received {:?}",
+                other
+            ))),
+        }
     }
 
     pub async fn push(
@@ -265,12 +266,13 @@ impl RedisClient {
         self.write_buffer(stream, &buffer).await?;
 
         // read response
-        let RedisObject::Integer(list_length) = self.read_response(stream).await? else {
-            return Err(SableError::OtherError(
-                "expected Integer object".to_string(),
-            ));
-        };
-        Ok(list_length)
+        match self.read_response(stream).await? {
+            RedisObject::Integer(list_length) => Ok(list_length),
+            other => Err(SableError::OtherError(format!(
+                "Expected Integer object. Received {:?}",
+                other
+            ))),
+        }
     }
 
     pub async fn pop(
@@ -294,9 +296,9 @@ impl RedisClient {
         match self.read_response(stream).await? {
             RedisObject::NullString => Ok(RedisObject::NullString),
             RedisObject::Str(s) => Ok(RedisObject::Str(s)),
-            _ => Err(SableError::OtherError(format!(
-                "Unexpected response from `{:?}`",
-                cmd
+            other => Err(SableError::OtherError(format!(
+                "Unexpected response. `{:?}`",
+                other
             ))),
         }
     }

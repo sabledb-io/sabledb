@@ -33,7 +33,8 @@ async fn thread_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Client main function
-async fn client_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
+async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>> {
+    const LIST_KEY_RANGE: usize = 1000;
     let stream =
         crate::redis_client::RedisClient::connect(opts.host.clone(), opts.port as u16, opts.tls)
             .await?;
@@ -42,10 +43,22 @@ async fn client_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         "get" => tests::run_get(stream, opts).await?,
         "ping" => tests::run_ping(stream, opts).await?,
         "incr" => tests::run_incr(stream, opts).await?,
-        "rpush" => tests::run_push(stream, true, opts).await?,
-        "rpop" => tests::run_pop(stream, true, opts).await?,
-        "lpush" => tests::run_push(stream, false, opts).await?,
-        "lpop" => tests::run_pop(stream, false, opts).await?,
+        "rpush" => {
+            opts.key_range = LIST_KEY_RANGE;
+            tests::run_push(stream, true, opts).await?;
+        }
+        "rpop" => {
+            opts.key_range = LIST_KEY_RANGE;
+            tests::run_pop(stream, true, opts).await?;
+        }
+        "lpush" => {
+            opts.key_range = LIST_KEY_RANGE;
+            tests::run_push(stream, false, opts).await?;
+        }
+        "lpop" => {
+            opts.key_range = LIST_KEY_RANGE;
+            tests::run_pop(stream, false, opts).await?;
+        }
         _ => {
             panic!("don't know how to run test: `{}`", opts.test);
         }

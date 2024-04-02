@@ -1278,16 +1278,17 @@ impl ListItem {
                 + std::mem::size_of_val(&self.item_id),
         );
 
-        key.extend_from_slice(&BytesMutUtils::from_u8(&self.key_type));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&self.list_id));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&self.item_id));
+        let mut builder = U8ArrayBuilder::with_buffer(&mut key);
+        builder.write_u8(self.key_type);
+        builder.write_u64(self.list_id);
+        builder.write_u64(self.item_id);
 
-        let Some(mut value) = store.get(&key)? else {
+        let Some(value) = store.get(&key)? else {
             return Ok(false); // not found
         };
 
         // decode the value
-        self.construct_from(&mut key, &mut value)?;
+        self.construct_from(&key, value)?;
         Ok(true)
     }
 
@@ -1303,9 +1304,10 @@ impl ListItem {
                 + std::mem::size_of_val(&self.item_id),
         );
 
-        key.extend_from_slice(&BytesMutUtils::from_u8(&self.key_type));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&self.list_id));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&self.item_id));
+        let mut builder = U8ArrayBuilder::with_buffer(&mut key);
+        builder.write_u8(self.key_type);
+        builder.write_u64(self.list_id);
+        builder.write_u64(self.item_id);
         store.delete(&key)
     }
 
@@ -1465,29 +1467,18 @@ impl Storable for ListItem {
     }
 
     /// Given a serialised value, unpack it into the proper properties
-    fn construct_from(
-        &mut self,
-        key: &mut BytesMut,
-        value: &mut BytesMut,
-    ) -> Result<(), SableError> {
+    fn construct_from(&mut self, key: &BytesMut, mut value: BytesMut) -> Result<(), SableError> {
         // decode the key
-        self.key_type = BytesMutUtils::to_u8(key);
-        let _ = key.split_to(std::mem::size_of_val(&self.key_type));
+        let mut reader = U8ArrayReader::with_buffer(key);
+        self.key_type = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        self.list_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        self.item_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
 
-        self.list_id = BytesMutUtils::to_u64(key);
-        let _ = key.split_to(std::mem::size_of_val(&self.list_id));
-
-        self.item_id = BytesMutUtils::to_u64(key);
-        let _ = key.split_to(std::mem::size_of_val(&self.item_id));
-
-        // decode the value
-        self.prev = BytesMutUtils::to_u64(value);
-        let _ = value.split_to(std::mem::size_of_val(&self.prev));
-
-        self.next = BytesMutUtils::to_u64(value);
-        let _ = value.split_to(std::mem::size_of_val(&self.prev));
-
-        self.user_data = value.clone();
+        // these 2 are coming from the value
+        let mut reader = U8ArrayReader::with_buffer(&value);
+        self.prev = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        self.next = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        self.user_data = value.split_off(reader.consumed());
         Ok(())
     }
 }
