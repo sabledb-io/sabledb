@@ -38,15 +38,24 @@ impl ClientCommands {
 
     /// Execute the `client` command
     fn client(
-        _client_state: &ClientState,
+        client_state: &ClientState,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
         let sub_command = command_arg_at_as_str!(command, 1);
-        if sub_command.as_str() == "setinfo" {
-            let builder = RespBuilderV2::default();
-            builder.ok(response_buffer);
+        let builder = RespBuilderV2::default();
+        match sub_command.as_str() {
+            "setinfo" => {
+                builder.ok(response_buffer);
+            }
+            "id" => {
+                builder.number::<u128>(response_buffer, client_state.client_id, false);
+            }
+            _ => {
+                let msg = format!("command `client {}` is not supported", sub_command.as_str());
+                builder.error_string(response_buffer, msg.as_str());
+            }
         }
         Ok(())
     }
