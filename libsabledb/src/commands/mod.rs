@@ -150,6 +150,7 @@ pub enum HandleCommandResult {
 pub enum ClientNextAction {
     SendResponse(bytes::BytesMut),
     Wait((Receiver<u8>, Duration)),
+    TerminateConnection(bytes::BytesMut),
 }
 
 mod base_commands;

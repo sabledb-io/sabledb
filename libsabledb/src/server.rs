@@ -1,12 +1,14 @@
+use crate::worker::{BroadcastMessageType, WorkerMessage, WorkerSender};
 use crate::{
     replication::{
         ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
     },
-    SableError, ServerOptions, StorageAdapter, Telemetry, WorkerContext, WorkerManager,
+    Client, SableError, ServerOptions, StorageAdapter, Telemetry, WorkerContext, WorkerManager,
 };
 use bytes::BytesMut;
 use crossbeam::queue::SegQueue;
-use dashmap::DashMap;
+#[allow(unused_imports)]
+use dashmap::{DashMap, DashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -26,6 +28,7 @@ pub struct ServerState {
     opts: ServerOptions,
     role_primary: AtomicBool,
     replicator_context: Option<Arc<ReplicatorContext>>,
+    worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
 }
 
 #[allow(dead_code)]
@@ -48,7 +51,22 @@ impl ServerState {
             opts: ServerOptions::default(),
             role_primary: AtomicBool::new(true),
             replicator_context: None,
+            worker_tx_channels: DashMap::<std::thread::ThreadId, WorkerSender>::new(),
         }
+    }
+
+    pub fn add_worker_tx_channel(&self, worker_id: std::thread::ThreadId, tx: WorkerSender) {
+        self.worker_tx_channels.insert(worker_id, tx);
+    }
+
+    /// Broadcast a message to all the workers
+    pub async fn broadcast_msg(&self, message: BroadcastMessageType) -> Result<(), SableError> {
+        for item in &self.worker_tx_channels {
+            item.value()
+                .send(WorkerMessage::BroadcastMessage(message))
+                .await?;
+        }
+        Ok(())
     }
 
     pub fn set_server_options(mut self, opts: ServerOptions) -> Self {
@@ -63,6 +81,16 @@ impl ServerState {
     pub fn set_replication_context(mut self, replication_context: ReplicatorContext) -> Self {
         self.replicator_context = Some(Arc::new(replication_context));
         self
+    }
+
+    /// Mark client as "terminated"
+    pub async fn terminate_client(&self, client_id: u128) -> Result<(), SableError> {
+        // first, try to local thread, if this fails, broadcast the message to other threads
+        if !Client::terminate_client(client_id) {
+            self.broadcast_msg(BroadcastMessageType::KillClient(client_id))
+                .await?;
+        }
+        Ok(())
     }
 
     pub fn shared_telemetry(&self) -> Arc<Mutex<Telemetry>> {

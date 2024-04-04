@@ -8,6 +8,7 @@ use crate::{
     metadata::CommonValueMetadata,
     parse_string_to_number,
     storage::StringsDb,
+    worker::BroadcastMessageType,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
@@ -18,17 +19,17 @@ use std::rc::Rc;
 pub struct ClientCommands {}
 
 impl ClientCommands {
-    pub fn handle_command(
+    pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         match command.metadata().name() {
             RedisCommandName::Client => {
-                Self::client(client_state, command, response_buffer)?;
+                Self::client(client_state, command, response_buffer).await?;
             }
             RedisCommandName::Select => {
-                Self::select(client_state, command, response_buffer)?;
+                Self::select(client_state, command, response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -41,7 +42,7 @@ impl ClientCommands {
     }
 
     /// Execute the `client` command
-    fn client(
+    async fn client(
         client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
@@ -72,6 +73,32 @@ impl ClientCommands {
             "id" => {
                 builder.number::<u128>(response_buffer, client_state.client_id, false);
             }
+            "kill" => {
+                check_args_count!(command, 4, response_buffer);
+                let filter = command_arg_at_as_str!(command, 2);
+                match filter.as_str() {
+                    "id" => {
+                        // CLIENT KILL ID client-id
+                        let Ok(client_id) = command_arg_at_as_str!(command, 3).parse::<u128>()
+                        else {
+                            builder.error_string(
+                                response_buffer,
+                                "ERR client-id should be greater than 0",
+                            );
+                            return Ok(());
+                        };
+                        client_state
+                            .server_inner_state()
+                            .terminate_client(client_id)
+                            .await?;
+                        builder.ok(response_buffer);
+                    }
+                    other => {
+                        let msg = format!("command `client kill {}` is not supported", other);
+                        builder.error_string(response_buffer, msg.as_str());
+                    }
+                }
+            }
             _ => {
                 let msg = format!("command `client {}` is not supported", sub_command.as_str());
                 builder.error_string(response_buffer, msg.as_str());
@@ -82,7 +109,7 @@ impl ClientCommands {
 
     /// Select the Redis logical database having the specified zero-based numeric index.
     /// New connections always use the database 0.
-    fn select(
+    async fn select(
         client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
@@ -197,6 +224,61 @@ mod tests {
                         );
                     }
                     _ => {}
+                }
+            }
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_kill() -> Result<(), SableError> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            println!("opening db");
+            let store = open_database("test_client_kill").await;
+
+            let client1 = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let client2 = Client::new(Arc::<ServerState>::default(), store, None);
+
+            let client1_id = format!("{}", client1.inner().client_id);
+            let kill_command = RedisCommand::new(vec![
+                BytesMut::from("client"),
+                BytesMut::from("kill"),
+                BytesMut::from("id"),
+                BytesMutUtils::from_string(client1_id.as_str()),
+            ])
+            .unwrap();
+
+            // Kill client 1
+            match Client::handle_command(client2.inner(), kill_command)
+                .await
+                .unwrap()
+            {
+                ClientNextAction::SendResponse(response_buffer) => {
+                    assert_eq!(
+                        BytesMutUtils::to_string(&response_buffer).as_str(),
+                        "+OK\r\n"
+                    );
+                }
+                other => {
+                    panic!("Did not expect this result! {:?}", other)
+                }
+            }
+
+            // Try to use client 1
+            let some_command = RedisCommand::for_test(vec!["set", "some", "value"]);
+            match Client::handle_command(client1.inner(), some_command)
+                .await
+                .unwrap()
+            {
+                ClientNextAction::TerminateConnection(response_buffer) => {
+                    assert_eq!(
+                        BytesMutUtils::to_string(&response_buffer).as_str(),
+                        "-ERR: server closed the connection\r\n"
+                    );
+                }
+                other => {
+                    panic!("Did not expect this result! {:?}", other)
                 }
             }
         });

@@ -9,10 +9,19 @@ use tracing::log::{log_enabled, Level};
 use tracing::{debug, error, info, trace};
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum WorkerMessage {
     NewConnection(TcpStream),
     Shutdown,
+    BroadcastMessage(BroadcastMessageType),
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Define the message types that can be broadcast between the different workers
+/// using the `ServerState::broadcast_msg()` method
+pub enum BroadcastMessageType {
+    /// Notify all workers that a client was killed.
+    /// The owner worker should terminate that client
+    KillClient(u128),
 }
 
 pub type WorkerSender = tokio::sync::mpsc::Sender<WorkerMessage>;
@@ -35,6 +44,7 @@ pub struct Worker {
 pub struct WorkerContext {
     pub runtime_handle: WorkerHandle,
     pub worker_send_channel: WorkerSender,
+    pub thread_id: std::thread::ThreadId,
 }
 
 impl WorkerContext {
@@ -66,6 +76,7 @@ impl Worker {
     ) -> Result<WorkerContext, SableError> {
         let (tx, rx) = tokio::sync::mpsc::channel::<WorkerMessage>(1000); // channel with back-pressure of 1000
         let (handle_sender, handle_receiver) = std::sync::mpsc::channel();
+        let tx_clone = tx.clone();
         let _ = std::thread::Builder::new()
             .name("Worker".to_string())
             .spawn(move || {
@@ -77,15 +88,20 @@ impl Worker {
                         panic!("failed to create tokio runtime. {:?}", e);
                     });
 
+                // Register this worker thread with the server
+                let thread_id = std::thread::current().id();
+                server_state.add_worker_tx_channel(thread_id, tx_clone);
+
                 // send the current runtime handle to the calling thread
                 // this error is non-recoverable, so call `panic!` here
-                handle_sender.send(rt.handle().clone()).unwrap_or_else(|e| {
-                    panic!(
-                        "failed to send tokio runtime handle to caller thread!. {:?}",
-                        e
-                    );
-                });
-
+                handle_sender
+                    .send((thread_id, rt.handle().clone()))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "failed to send tokio runtime handle to caller thread!. {:?}",
+                            e
+                        );
+                    });
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, async move {
                     let mut worker = Worker::new(rx, server_state.clone(), store.clone());
@@ -93,12 +109,14 @@ impl Worker {
                 });
             });
 
-        let thread_runtime_handle = handle_receiver.recv().unwrap_or_else(|e| {
+        let (thread_id, thread_runtime_handle) = handle_receiver.recv().unwrap_or_else(|e| {
             panic!("failed to recv tokio runtime handle from thread. {:?}", e);
         });
+
         Ok(WorkerContext {
             runtime_handle: thread_runtime_handle.clone(),
             worker_send_channel: tx,
+            thread_id,
         })
     }
 
@@ -174,17 +192,27 @@ impl Worker {
                             info!("Shutting down");
                             break;
                         }
-                        _ => {}
+                        Some(WorkerMessage::BroadcastMessage(BroadcastMessageType::KillClient(
+                            client_id,
+                        ))) => {
+                            // Terminate client. If `client_id` is owned by this worker
+                            // it will be marked as "terminated", otherwise this function
+                            // does nothing
+                            Client::terminate_client(client_id);
+                        }
+                        None => {}
                     }
                 }
 
                 _ = tokio::time::sleep(tokio::time::Duration::new(secs, nanos)) => {
-                        self.server_state
-                            .shared_telemetry()
-                            .lock()
-                            .expect("mutex")
-                            .merge_worker_telemetry(Telemetry::clone());
-                        Telemetry::clear();
+                    // update this worker telemetry
+                    self.server_state
+                        .shared_telemetry()
+                        .lock()
+                        .expect("mutex")
+                        .merge_worker_telemetry(Telemetry::clone());
+                    Telemetry::clear();
+
                 }
                 _ = tokio::time::sleep(
                         tokio::time::Duration::from_millis(

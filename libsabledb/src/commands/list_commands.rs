@@ -1139,6 +1139,7 @@ mod tests {
                     .await
                     .unwrap()
                 {
+                    ClientNextAction::TerminateConnection(_) => {}
                     ClientNextAction::SendResponse(response_buffer) => {
                         assert_eq!(
                             BytesMutUtils::to_string(&response_buffer).as_str(),
@@ -1178,6 +1179,7 @@ mod tests {
         let next_action = Client::handle_command(client_state, cmd).await.unwrap();
         match next_action {
             ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
+            ClientNextAction::TerminateConnection(_) => panic!("expected to be blocked"),
             ClientNextAction::Wait((rx, duration)) => (rx, duration),
         }
     }
@@ -1189,6 +1191,9 @@ mod tests {
             .unwrap();
         match next_action {
             ClientNextAction::SendResponse(buffer) => buffer,
+            ClientNextAction::TerminateConnection(_) => {
+                panic!("Command {:?} is not expected to be blocked", cmd)
+            }
             ClientNextAction::Wait(_) => panic!("Command {:?} is not expected to be blocked", cmd),
         }
     }

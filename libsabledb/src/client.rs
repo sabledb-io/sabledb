@@ -6,6 +6,7 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{
@@ -26,6 +27,13 @@ lazy_static::lazy_static! {
     static ref CLIENT_ID_GENERATOR: Mutex<u128> = Mutex::new(0);
 }
 
+thread_local! {
+    /// Keep track on clients assigned to this worker
+    pub static WORKER_CLIENTS: RefCell<HashMap<u128, Rc<ClientState>>>
+        = RefCell::new(HashMap::<u128, Rc<ClientState>>::new());
+}
+
+/// Generate a new client ID
 fn new_client_id() -> u128 {
     let mut value = CLIENT_ID_GENERATOR.lock().expect("poisoned mutex");
     *value += 1;
@@ -46,6 +54,8 @@ pub struct ClientState {
 enum CanHandleCommandResult {
     Ok,
     WriteInReadOnlyReplica,
+    // Client was killed
+    ClientKilled,
 }
 
 /// Used by the `block_until` return code
@@ -126,6 +136,20 @@ pub struct Client {
 }
 
 impl Client {
+    /// Terminate a client by its ID (`client_id`). Return `true` if the client was successfully marked
+    /// as terminated
+    pub fn terminate_client(client_id: u128) -> bool {
+        WORKER_CLIENTS.with(|clients| {
+            if let Some(client_state) = clients.borrow().get(&client_id) {
+                tracing::info!("Client {} terminated", client_id);
+                client_state.kill();
+                true
+            } else {
+                false
+            }
+        })
+    }
+
     pub fn inner(&self) -> Rc<ClientState> {
         self.state.clone()
     }
@@ -136,17 +160,25 @@ impl Client {
         tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     ) -> Self {
         Telemetry::inc_connections_opened();
-        Client {
-            state: Rc::new(ClientState {
-                server_state,
-                store,
-                client_id: new_client_id(),
-                tls_acceptor,
-                db_id: AtomicU16::new(0),
-                attributes: RwLock::new(HashMap::<String, String>::new()),
-                is_active: AtomicBool::new(true),
-            }),
-        }
+        let state = Rc::new(ClientState {
+            server_state,
+            store,
+            client_id: new_client_id(),
+            tls_acceptor,
+            db_id: AtomicU16::new(0),
+            attributes: RwLock::new(HashMap::<String, String>::new()),
+            is_active: AtomicBool::new(true),
+        });
+
+        let state_clone = state.clone();
+
+        // register this client
+        WORKER_CLIENTS.with(|clients| {
+            clients
+                .borrow_mut()
+                .insert(state_clone.client_id, state_clone);
+        });
+        Client { state }
     }
 
     /// Execute the client's main loop
@@ -298,7 +330,7 @@ impl Client {
                             match Self::wait_for(rx, duration).await {
                                 WaitResult::Timeout => {
                                     if log_enabled!(Level::Debug) {
-                                        client_state.debug("timeout occured");
+                                        client_state.debug("timeout occurred");
                                     }
                                     // time-out occurred, build a proper response message and break out the inner loop
                                     let response_buffer = Self::handle_timeout(
@@ -317,6 +349,10 @@ impl Client {
                                     continue;
                                 }
                             }
+                        }
+                        ClientNextAction::TerminateConnection(response) => {
+                            Self::send_response(&mut tx, &response, client_state.client_id).await?;
+                            return Err(SableError::ConnectionClosed);
                         }
                     },
                     Err(e) => {
@@ -360,7 +396,9 @@ impl Client {
     /// We use this function as a sanity check for various checks, for example:
     /// A write command being called on a replica server
     fn can_handle(client_state: Rc<ClientState>, command: &RedisCommand) -> CanHandleCommandResult {
-        if client_state.server_state.is_replica() && command.metadata().is_write_command() {
+        if !client_state.active() {
+            CanHandleCommandResult::ClientKilled
+        } else if client_state.server_state.is_replica() && command.metadata().is_write_command() {
             CanHandleCommandResult::WriteInReadOnlyReplica
         } else {
             CanHandleCommandResult::Ok
@@ -376,11 +414,16 @@ impl Client {
         let mut buffer = BytesMut::with_capacity(1024);
 
         // Can we handle this command?
-        if Self::can_handle(client_state.clone(), &command)
-            == CanHandleCommandResult::WriteInReadOnlyReplica
-        {
-            builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);
-            return Ok(ClientNextAction::SendResponse(buffer));
+        match Self::can_handle(client_state.clone(), &command) {
+            CanHandleCommandResult::WriteInReadOnlyReplica => {
+                builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);
+                return Ok(ClientNextAction::SendResponse(buffer));
+            }
+            CanHandleCommandResult::ClientKilled => {
+                builder.error_string(&mut buffer, "ERR: server closed the connection");
+                return Ok(ClientNextAction::TerminateConnection(buffer));
+            }
+            _ => {}
         }
 
         let kind = command.metadata().name();
@@ -469,7 +512,7 @@ impl Client {
             }
             // Client commands
             RedisCommandName::Client | RedisCommandName::Select => {
-                ClientCommands::handle_command(client_state, &command, &mut buffer)?;
+                ClientCommands::handle_command(client_state, &command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
@@ -507,5 +550,9 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         Telemetry::inc_connections_closed();
+        // remove this client from this worker's list
+        WORKER_CLIENTS.with(|clients| {
+            let _ = clients.borrow_mut().remove(&self.state.client_id);
+        });
     }
 }
