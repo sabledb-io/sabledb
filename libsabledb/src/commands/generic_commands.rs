@@ -13,12 +13,13 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::rc::Rc;
 
 pub struct GenericCommands {}
 
 impl GenericCommands {
     pub async fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -43,7 +44,7 @@ impl GenericCommands {
     /// the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted
     /// set or hash. Removing a single key that holds a string value is O(1).
     async fn del(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -53,20 +54,19 @@ impl GenericCommands {
         let _ = iter.next(); // skip the first param which is the command name
 
         let mut deleted_items = 0usize;
+        let db_id = client_state.database_id();
         for user_key in iter {
             // obtain the lock per key
-            let _unused =
-                LockManager::lock_user_key_exclusive(user_key, client_state.database_id());
-            let key_type = Self::query_key_type(client_state, command, user_key).await?;
+            let _unused = LockManager::lock_user_key_exclusive(user_key, db_id);
+            let key_type = Self::query_key_type(client_state.clone(), command, user_key).await?;
             match key_type {
                 Some(CommonValueMetadata::VALUE_STR) => {
-                    let strings_db =
-                        StringsDb::with_storage(&client_state.store, client_state.database_id());
+                    let strings_db = StringsDb::with_storage(&client_state.store, db_id);
                     strings_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
                 Some(CommonValueMetadata::VALUE_LIST) => {
-                    let list = List::with_storage(&client_state.store, client_state.database_id());
+                    let list = List::with_storage(&client_state.store, db_id);
                     list.remove(
                         user_key,
                         None, // remove all items
@@ -81,8 +81,7 @@ impl GenericCommands {
                         user_key,
                         unknown_type
                     );
-                    let strings_db =
-                        StringsDb::with_storage(&client_state.store, client_state.database_id());
+                    let strings_db = StringsDb::with_storage(&client_state.store, db_id);
                     strings_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
@@ -99,7 +98,7 @@ impl GenericCommands {
     /// This introspection capability allows a Redis client to check how
     /// many seconds a given key will continue to be part of the dataset.
     async fn ttl(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -128,7 +127,7 @@ impl GenericCommands {
 
     /// Load entry from the database, don't care about the value type
     async fn query_key_type(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         _command: &RedisCommand,
         user_key: &BytesMut,
     ) -> Result<Option<u8>, SableError> {
@@ -183,8 +182,8 @@ mod test {
 
     async fn initialise_test() {
         INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/string_commands");
-            let _ = std::fs::create_dir_all("tests/string_commands");
+            let _ = std::fs::remove_dir_all("tests/generic_commands");
+            let _ = std::fs::create_dir_all("tests/generic_commands");
         });
     }
 
@@ -194,8 +193,8 @@ mod test {
         initialise_test().await;
 
         // create random file name
-        let db_file = format!("tests/string_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/string_commands");
+        let db_file = format!("tests/generic_commands/{}.db", command_name,);
+        let _ = std::fs::create_dir_all("tests/generic_commands");
         let db_path = PathBuf::from(&db_file);
         let _ = std::fs::remove_dir_all(&db_file);
         let open_params = StorageOpenParams::default()

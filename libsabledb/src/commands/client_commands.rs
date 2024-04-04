@@ -13,12 +13,13 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::rc::Rc;
 
 pub struct ClientCommands {}
 
 impl ClientCommands {
     pub fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -41,7 +42,7 @@ impl ClientCommands {
 
     /// Execute the `client` command
     fn client(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -82,7 +83,7 @@ impl ClientCommands {
     /// Select the Redis logical database having the specified zero-based numeric index.
     /// New connections always use the database 0.
     fn select(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {

@@ -13,12 +13,13 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::rc::Rc;
 
 pub struct ServerCommands {}
 
 impl ServerCommands {
     pub async fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -39,7 +40,7 @@ impl ServerCommands {
     /// REPLICAOF <IP PORT | NO ONE>
     /// SLAVEOF <IP PORT | NO ONE>
     async fn replica_of(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -63,7 +64,10 @@ impl ServerCommands {
         let builder = RespBuilderV2::default();
         match (first_arg.as_str(), second_arg.as_str()) {
             ("no", "one") => {
-                client_state.server_state.switch_role_to_primary().await?;
+                client_state
+                    .server_inner_state()
+                    .switch_role_to_primary()
+                    .await?;
             }
             (_, _) => {
                 let Ok(port) = second_arg.parse::<u16>() else {
@@ -72,7 +76,7 @@ impl ServerCommands {
                 };
                 tracing::info!("Connecting to primary at: {}:{}", first_arg, port);
                 client_state
-                    .server_state
+                    .server_inner_state()
                     .connect_to_primary(first_arg, port)
                     .await?;
             }

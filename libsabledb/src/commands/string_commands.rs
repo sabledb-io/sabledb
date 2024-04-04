@@ -15,6 +15,7 @@ use bytes::BytesMut;
 use num_traits::{Num, NumAssignOps};
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::rc::Rc;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -31,7 +32,7 @@ pub struct StringCommands {}
 impl StringCommands {
     /// Main entry point for all string commands
     pub async fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -116,7 +117,7 @@ impl StringCommands {
     /// it is overwritten, regardless of its type. Any previous time to
     /// live associated with the key is discarded on successful SET operation.
     async fn set(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -162,7 +163,7 @@ impl StringCommands {
     /// the end of the string. If key does not exist it is created and set as an
     /// empty string, so APPEND will be similar to SET in this special case.
     async fn append(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -197,7 +198,7 @@ impl StringCommands {
     /// is returned if the value stored at key is not a string, because GET only handles string
     /// values
     async fn get(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -226,7 +227,7 @@ impl StringCommands {
     /// Get the value of key and delete the key. This command is similar to GET,
     /// except for the fact that it also deletes the key on success (if and only if the key's value type is a string)
     async fn getdel(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -253,7 +254,7 @@ impl StringCommands {
     /// Returns an error when key exists but does not hold a string value. Any
     /// previous time to live associated with the key is discarded on successful SET operation
     async fn getset(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -284,7 +285,7 @@ impl StringCommands {
     /// Get the value of key and optionally set its expiration. GETEX is similar to GET,
     /// but is a write command with additional options.
     async fn getex(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -355,7 +356,7 @@ impl StringCommands {
     /// order to provide an offset starting from the end of the string. So -1 means
     /// the last character, -2 the penultimate and so forth.
     async fn getrange(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -399,7 +400,7 @@ impl StringCommands {
     /// if the key contains a value of the wrong type or contains a string that can not be represented as integer.
     /// This operation is limited to 64 bit signed integers.
     async fn decr(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -444,7 +445,7 @@ impl StringCommands {
     /// if the key contains a value of the wrong type or contains a string
     /// that can not be represented as integer. This operation is limited to 64 bit signed integers.
     async fn incr(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -489,7 +490,7 @@ impl StringCommands {
     /// key contains a value of the wrong type or contains a string that can not be
     /// represented as integer. This operation is limited to 64 bit signed integers.
     async fn decrby(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -536,7 +537,7 @@ impl StringCommands {
     /// key contains a value of the wrong type or contains a string that can not be
     /// represented as integer. This operation is limited to 64 bit signed integers.
     async fn incrby(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -583,7 +584,7 @@ impl StringCommands {
     /// (by the obvious properties of addition). If the key does not exist, it is set to 0 before performing
     /// the operation. An error is returned if one of the following conditions occur:
     async fn incrbyfloat(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -635,7 +636,7 @@ impl StringCommands {
     /// Note that this is different than the longest common string algorithm, since matching characters
     /// in the string does not need to be contiguous.
     async fn lcs(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -716,7 +717,7 @@ impl StringCommands {
     /// a string value or does not exist, the special value nil is returned.
     /// Because of this, the operation never fails.
     async fn mget(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -762,7 +763,7 @@ impl StringCommands {
     /// `MSET` is atomic, so all given keys are set at once. It is not possible for clients to see that
     /// some of the keys were updated while others are unchanged
     async fn mset(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -804,7 +805,7 @@ impl StringCommands {
     /// representing different fields of a unique logic object in a way that ensures that
     /// either all the fields or none at all are set.
     async fn msetnx(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -847,7 +848,7 @@ impl StringCommands {
     /// Set key to hold the string value and set key to timeout after a given number of seconds
     /// SETEX key seconds value
     async fn setex(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -874,7 +875,7 @@ impl StringCommands {
     /// Set key to hold the string value and set key to timeout after a given number of milliseconds
     /// PSETEX key milliseconds value
     async fn psetex(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -901,7 +902,7 @@ impl StringCommands {
     /// Set key to hold string value if key does not exist. In that case, it is equal to SET.
     /// When key already holds a value, no operation is performed. SETNX is short for "SET if Not eXists".
     async fn setnx(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -928,7 +929,7 @@ impl StringCommands {
     /// keys are considered as empty strings, so this command will make sure it holds a
     /// string large enough to be able to set value at offset.
     async fn setrange(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -961,7 +962,7 @@ impl StringCommands {
     /// Returns the length of the string value stored at key.
     /// An error is returned when key holds a non-string value
     async fn strlen(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -983,7 +984,7 @@ impl StringCommands {
 
     /// An alias to `GETRANGE KEY START END`
     async fn substr(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
@@ -1004,7 +1005,7 @@ impl StringCommands {
     ///         , in milliseconds.
     /// `flags` possible bitwise combination of `SetFlags` bits
     pub async fn set_internal_with_locks(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         user_key: &BytesMut,
         value: &BytesMut,
         expiry: (Option<String>, Option<String>),
@@ -1462,7 +1463,7 @@ mod test {
         rt.block_on(async move {
             let store = open_database("test_write_on_replica").await;
             let client = Client::new(Arc::<ServerState>::default(), store, None);
-            client.inner().server_state.set_replica();
+            client.inner().server_inner_state().set_replica();
             let cmd = RedisCommand::for_test(vec!["set", "test_write_on_replica", "1"]);
             match Client::handle_command(client.inner(), cmd).await.unwrap() {
                 ClientNextAction::SendResponse(response_buffer) => {

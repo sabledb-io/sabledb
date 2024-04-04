@@ -32,15 +32,14 @@ fn new_client_id() -> u128 {
     *value
 }
 
-#[derive(Clone)]
 pub struct ClientState {
-    pub server_state: Arc<ServerState>,
+    server_state: Arc<ServerState>,
     pub store: StorageAdapter,
     pub client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
-    db_id: Rc<AtomicU16>,
-    attributes: Rc<RwLock<HashMap<String, String>>>,
-    is_active: Rc<AtomicBool>,
+    db_id: AtomicU16,
+    attributes: RwLock<HashMap<String, String>>,
+    is_active: AtomicBool,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -57,6 +56,10 @@ pub enum WaitResult {
 }
 
 impl ClientState {
+    pub fn server_inner_state(&self) -> Arc<ServerState> {
+        self.server_state.clone()
+    }
+
     /// Return the client's database ID
     pub fn database_id(&self) -> u16 {
         self.db_id.load(std::sync::atomic::Ordering::Relaxed)
@@ -119,12 +122,12 @@ impl ClientState {
 }
 
 pub struct Client {
-    state: ClientState,
+    state: Rc<ClientState>,
 }
 
 impl Client {
-    pub fn inner(&self) -> &ClientState {
-        &self.state
+    pub fn inner(&self) -> Rc<ClientState> {
+        self.state.clone()
     }
 
     pub fn new(
@@ -134,15 +137,15 @@ impl Client {
     ) -> Self {
         Telemetry::inc_connections_opened();
         Client {
-            state: ClientState {
+            state: Rc::new(ClientState {
                 server_state,
                 store,
                 client_id: new_client_id(),
                 tls_acceptor,
-                db_id: Rc::new(AtomicU16::new(0)),
-                attributes: Rc::new(RwLock::new(HashMap::<String, String>::new())),
-                is_active: Rc::new(AtomicBool::new(true)),
-            },
+                db_id: AtomicU16::new(0),
+                attributes: RwLock::new(HashMap::<String, String>::new()),
+                is_active: AtomicBool::new(true),
+            }),
         }
     }
 
@@ -211,7 +214,7 @@ impl Client {
     async fn reader_loop(
         mut rx: impl AsyncReadExt + std::marker::Unpin,
         channel_tx: tokio::sync::mpsc::Sender<RedisCommand>,
-        client_state: ClientState,
+        client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         let mut buffer = BytesMut::new();
         loop {
@@ -274,7 +277,7 @@ impl Client {
     async fn writer_loop(
         mut tx: impl AsyncWriteExt + std::marker::Unpin,
         mut channel_rx: TokioReceiver<RedisCommand>,
-        client_state: ClientState,
+        client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         while let Some(command) = channel_rx.recv().await {
             // update telemetry and process the command
@@ -282,7 +285,7 @@ impl Client {
 
             // Use a loop here to handle timeouts & retries
             loop {
-                let response = Self::handle_command(&client_state, command.clone()).await;
+                let response = Self::handle_command(client_state.clone(), command.clone()).await;
                 match response {
                     Ok(next_action) => match next_action {
                         ClientNextAction::SendResponse(response) => {
@@ -298,8 +301,10 @@ impl Client {
                                         client_state.debug("timeout occured");
                                     }
                                     // time-out occurred, build a proper response message and break out the inner loop
-                                    let response_buffer =
-                                        Self::handle_timeout(&client_state, command.clone())?;
+                                    let response_buffer = Self::handle_timeout(
+                                        client_state.clone(),
+                                        command.clone(),
+                                    )?;
                                     Self::send_response(
                                         &mut tx,
                                         &response_buffer,
@@ -341,7 +346,7 @@ impl Client {
 
     /// Handle time-out for command
     fn handle_timeout(
-        _client_state: &ClientState,
+        _client_state: Rc<ClientState>,
         _command: RedisCommand,
     ) -> Result<BytesMut, SableError> {
         let builder = RespBuilderV2::default();
@@ -354,7 +359,7 @@ impl Client {
     /// Can this client handle the command?
     /// We use this function as a sanity check for various checks, for example:
     /// A write command being called on a replica server
-    fn can_handle(client_state: &ClientState, command: &RedisCommand) -> CanHandleCommandResult {
+    fn can_handle(client_state: Rc<ClientState>, command: &RedisCommand) -> CanHandleCommandResult {
         if client_state.server_state.is_replica() && command.metadata().is_write_command() {
             CanHandleCommandResult::WriteInReadOnlyReplica
         } else {
@@ -364,14 +369,14 @@ impl Client {
 
     /// Accepts the parsed requests, execute the command and send back the response
     pub async fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: RedisCommand,
     ) -> Result<ClientNextAction, SableError> {
         let builder = RespBuilderV2::default();
         let mut buffer = BytesMut::with_capacity(1024);
 
         // Can we handle this command?
-        if Self::can_handle(client_state, &command)
+        if Self::can_handle(client_state.clone(), &command)
             == CanHandleCommandResult::WriteInReadOnlyReplica
         {
             builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);

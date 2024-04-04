@@ -5,9 +5,9 @@ use crate::{
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2, SableError,
 };
-use tokio::time::Duration;
-
 use bytes::BytesMut;
+use std::rc::Rc;
+use tokio::time::Duration;
 
 #[allow(dead_code)]
 pub struct ListCommands {}
@@ -16,7 +16,7 @@ pub struct ListCommands {}
 impl ListCommands {
     /// Main entry point for all list commands
     pub async fn handle_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -96,7 +96,7 @@ impl ListCommands {
     /// If key does not exist, it is created as empty list before performing the
     /// push operations. When key holds a value that is not a list, an error is returned
     pub async fn push(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
@@ -121,7 +121,7 @@ impl ListCommands {
         list.push(key, &values, response_buffer, flags)?;
 
         client_state
-            .server_state
+            .server_inner_state()
             .wakeup_clients(key, values.len())
             .await;
         Ok(HandleCommandResult::Completed)
@@ -130,7 +130,7 @@ impl ListCommands {
     /// Atomically returns and removes the last element (tail) of the list stored at source, and
     /// pushes the element at the first element (head) of the list stored at destination
     pub async fn rpoplpush(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -156,7 +156,7 @@ impl ListCommands {
     /// pushes the element at the first element (head) of the list stored at destination
     /// Blocking version
     pub async fn blocking_rpoplpush(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -194,7 +194,7 @@ impl ListCommands {
     /// of the list stored at source, and pushes the element at the first/last element
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn lmove(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -221,7 +221,7 @@ impl ListCommands {
     /// of the list stored at source, and pushes the element at the first/last element
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn blocking_move(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -256,7 +256,7 @@ impl ListCommands {
     }
 
     async fn lmove_internal(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         src_list_name: &BytesMut,
         target_list_name: &BytesMut,
         src_left_or_right: &str,
@@ -293,7 +293,7 @@ impl ListCommands {
             }
             MoveResult::Some(popped_item) => {
                 client_state
-                    .server_state
+                    .server_inner_state()
                     .wakeup_clients(target_list_name, 1)
                     .await;
                 builder.bulk_string(response_buffer, &popped_item.user_data);
@@ -304,7 +304,7 @@ impl ListCommands {
                     let interersting_keys: Vec<BytesMut> =
                         keys.iter().map(|e| (*e).clone()).collect();
                     let rx = client_state
-                        .server_state
+                        .server_inner_state()
                         .block_client(&interersting_keys)
                         .await;
                     Ok(HandleCommandResult::Blocked((rx, blocking_duration)))
@@ -319,7 +319,7 @@ impl ListCommands {
     /// `LMPOP numkeys key [key ...] <LEFT | RIGHT> [COUNT count]`
     /// Pops one or more elements from the first non-empty list key from the list of provided key names
     pub async fn lmpop(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         allow_blocking: bool,
         response_buffer: &mut BytesMut,
@@ -460,7 +460,7 @@ impl ListCommands {
                 // block the client here
                 if allow_blocking {
                     let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
-                    let rx = client_state.server_state.block_client(&keys).await;
+                    let rx = client_state.server_inner_state().block_client(&keys).await;
                     Ok(HandleCommandResult::Blocked((
                         rx,
                         Duration::from_millis(timeout_ms as u64),
@@ -478,7 +478,7 @@ impl ListCommands {
     /// or the end of the list. When provided with the optional count argument, the
     /// reply will consist of up to count elements, depending on the list's length.
     pub async fn pop(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
@@ -505,7 +505,7 @@ impl ListCommands {
     }
 
     pub async fn blocking_pop(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
@@ -559,7 +559,7 @@ impl ListCommands {
         } else {
             // Block the client
             let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
-            let rx = client_state.server_state.block_client(&keys).await;
+            let rx = client_state.server_inner_state().block_client(&keys).await;
 
             // Notify the caller
             let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
@@ -582,7 +582,7 @@ impl ListCommands {
     /// Both start and stop are zero-based indexes, where 0 is the first element of the list (the head),
     /// 1 the next element and so on
     pub async fn ltrim(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -613,7 +613,7 @@ impl ListCommands {
     /// These offsets can also be negative numbers indicating offsets starting at the end of the list. For example,
     /// -1 is the last element of the list, -2 the penultimate, and so on.
     pub async fn lrange(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -643,7 +643,7 @@ impl ListCommands {
     /// as an empty list and 0 is returned. An error is returned when the value stored at key
     /// is not a list.
     pub async fn llen(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -662,7 +662,7 @@ impl ListCommands {
     /// An error is returned when key exists but does not hold a list value
     /// `LINSERT key <BEFORE | AFTER> pivot element`
     pub async fn linsert(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -693,7 +693,7 @@ impl ListCommands {
     /// Here, -1 means the last element, -2 means the penultimate and so forth.
     /// When the value at key is not a list, an error is returned.
     pub async fn lindex(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -721,7 +721,7 @@ impl ListCommands {
     /// found, its index (the zero-based position in the list) is returned.
     /// Otherwise, if no match is found, nil is returned.
     pub async fn lpos(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -804,7 +804,7 @@ impl ListCommands {
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
     /// An error is returned for out of range indexes.
     pub async fn lset(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -831,7 +831,7 @@ impl ListCommands {
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
     /// An error is returned for out of range indexes.
     pub async fn lrem(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         command: &RedisCommand,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -1172,7 +1172,7 @@ mod tests {
 
     /// Run a command that should be deferred by the server
     async fn deferred_command(
-        client_state: &ClientState,
+        client_state: Rc<ClientState>,
         cmd: RedisCommand,
     ) -> (Receiver<u8>, Duration) {
         let next_action = Client::handle_command(client_state, cmd).await.unwrap();
@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     /// Execute a command
-    async fn execute_command(client_state: &ClientState, cmd: RedisCommand) -> BytesMut {
+    async fn execute_command(client_state: Rc<ClientState>, cmd: RedisCommand) -> BytesMut {
         let next_action = Client::handle_command(client_state, cmd.clone())
             .await
             .unwrap();
