@@ -8,7 +8,10 @@ use crate::{
 use bytes::BytesMut;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{atomic::AtomicU16, Arc, Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU16},
+    Arc, Mutex, RwLock,
+};
 
 #[allow(unused_imports)]
 use tokio::{
@@ -37,6 +40,7 @@ pub struct ClientState {
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     db_id: Rc<AtomicU16>,
     attributes: Rc<RwLock<HashMap<String, String>>>,
+    is_active: Rc<AtomicBool>,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -53,12 +57,26 @@ pub enum WaitResult {
 }
 
 impl ClientState {
+    /// Return the client's database ID
     pub fn database_id(&self) -> u16 {
         self.db_id.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Set the active database ID for this client
     pub fn set_database_id(&self, id: u16) {
         self.db_id.store(id, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Return the client's database ID
+    pub fn active(&self) -> bool {
+        self.is_active.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Kill the current client by marking it as non active. The connection will be closed
+    /// next time the client will attempt to use it or when a timeout occurs
+    pub fn kill(&self) {
+        self.is_active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Set a client attribute
@@ -123,6 +141,7 @@ impl Client {
                 tls_acceptor,
                 db_id: Rc::new(AtomicU16::new(0)),
                 attributes: Rc::new(RwLock::new(HashMap::<String, String>::new())),
+                is_active: Rc::new(AtomicBool::new(true)),
             },
         }
     }
