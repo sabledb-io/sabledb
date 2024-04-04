@@ -115,9 +115,9 @@ impl ListCommands {
             values.push(value);
         }
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.push(key, &values, response_buffer, flags)?;
 
         client_state
@@ -278,9 +278,9 @@ impl ListCommands {
 
         // lock both keys
         let keys = vec![src_list_name, target_list_name];
-        let _unused = LockManager::lock_user_keys_exclusive(&keys, client_state.db_id);
+        let _unused = LockManager::lock_user_keys_exclusive(&keys, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         let res = list
             .move_item(src_list_name, target_list_name, src_flags, target_flags)
             .await?;
@@ -440,8 +440,8 @@ impl ListCommands {
             return Ok(HandleCommandResult::Completed);
         };
 
-        let _unused = LockManager::lock_user_keys_exclusive(&keys, client_state.db_id);
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let _unused = LockManager::lock_user_keys_exclusive(&keys, client_state.database_id());
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         match list.multi_pop(&keys, count, list_flags)? {
             MultiPopResult::WrongType => {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
@@ -497,9 +497,9 @@ impl ListCommands {
             1usize
         };
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.pop(key, count, response_buffer, flags)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -552,8 +552,8 @@ impl ListCommands {
 
         // Try to pop an element from one of the lists
         // if all the lists are empty, block the client
-        let _unused = LockManager::lock_user_keys_exclusive(&lists, client_state.db_id);
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let _unused = LockManager::lock_user_keys_exclusive(&lists, client_state.database_id());
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         if let BlockingCommandResult::Ok = list.blocking_pop(&lists, 1, response_buffer, flags)? {
             Ok(HandleCommandResult::Completed)
         } else {
@@ -601,9 +601,9 @@ impl ListCommands {
             response_buffer,
             Ok(HandleCommandResult::Completed)
         );
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.ltrim(key, start, end, response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -632,9 +632,9 @@ impl ListCommands {
             response_buffer,
             Ok(HandleCommandResult::Completed)
         );
-        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.lrange(key, start, end, response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -650,9 +650,9 @@ impl ListCommands {
         expect_args_count!(command, 2, response_buffer, HandleCommandResult::Completed);
 
         let key = command_arg_at!(command, 1);
-        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.len(key, response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -681,8 +681,8 @@ impl ListCommands {
                 return Ok(HandleCommandResult::Completed);
             }
         };
-        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.linsert(key, element, pivot, response_buffer, flags)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -702,7 +702,7 @@ impl ListCommands {
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         let index = to_number!(
             index,
             i32,
@@ -710,7 +710,7 @@ impl ListCommands {
             Ok(HandleCommandResult::Completed)
         );
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
         list.index(key, index, response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -794,8 +794,8 @@ impl ListCommands {
             }
         }
 
-        let list = List::with_storage(&client_state.store, client_state.db_id);
-        let _unused = LockManager::lock_user_key_shared(key, client_state.db_id);
+        let list = List::with_storage(&client_state.store, client_state.database_id());
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
         list.lpos(key, value, rank, count, maxlen, response_buffer)?;
         Ok(HandleCommandResult::Completed)
@@ -822,8 +822,8 @@ impl ListCommands {
         );
 
         // Lock and set
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.db_id);
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.set(key, index, value.clone(), response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }
@@ -847,8 +847,8 @@ impl ListCommands {
         let element = command_arg_at!(command, 3);
 
         // Lock and set
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.db_id);
-        let list = List::with_storage(&client_state.store, client_state.db_id);
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let list = List::with_storage(&client_state.store, client_state.database_id());
         list.remove(key, Some(element), count, response_buffer)?;
         Ok(HandleCommandResult::Completed)
     }

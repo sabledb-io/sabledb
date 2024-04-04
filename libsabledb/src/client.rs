@@ -7,7 +7,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicU16, Arc, Mutex};
 
 #[allow(unused_imports)]
 use tokio::{
@@ -34,7 +34,7 @@ pub struct ClientState {
     pub store: StorageAdapter,
     pub client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
-    pub db_id: u16,
+    pub db_id: Rc<AtomicU16>,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -51,6 +51,14 @@ pub enum WaitResult {
 }
 
 impl ClientState {
+    pub fn database_id(&self) -> u16 {
+        self.db_id.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_database_id(&self, id: u16) {
+        self.db_id.store(id, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn error(&self, msg: &str) {
         tracing::error!("CLNT {}: {}", self.client_id, msg);
     }
@@ -78,7 +86,6 @@ pub struct Client {
 }
 
 impl Client {
-    #[allow(dead_code)]
     pub fn inner(&self) -> &ClientState {
         &self.state
     }
@@ -95,7 +102,7 @@ impl Client {
                 store,
                 client_id: new_client_id(),
                 tls_acceptor,
-                db_id: 0,
+                db_id: Rc::new(AtomicU16::new(0)),
             },
         }
     }
@@ -417,7 +424,7 @@ impl Client {
                 }
             }
             // Client commands
-            RedisCommandName::Client => {
+            RedisCommandName::Client | RedisCommandName::Select => {
                 ClientCommands::handle_command(client_state, &command, &mut buffer)?;
                 ClientNextAction::SendResponse(buffer)
             }

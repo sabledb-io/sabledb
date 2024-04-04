@@ -57,6 +57,7 @@ pub enum RedisCommandName {
     Blmove,
     // Client commands
     Client,
+    Select,
     // Server commands
     ReplicaOf,
     SlaveOf,
@@ -76,6 +77,8 @@ pub struct RedisCommandFlags: u32  {
     const Write = 1 << 1;
     /// Administration command
     const Admin = 1 << 2;
+    /// @connection command
+    const Connection = 1 << 3;
 }
 }
 
@@ -162,7 +165,8 @@ lazy_static::lazy_static! {
         ("blmpop", CommandMetadata::new(RedisCommandName::Blmpop, RedisCommandFlags::Write)),
         ("brpop", CommandMetadata::new(RedisCommandName::Brpop, RedisCommandFlags::Write)),
         // Client commands
-        ("client", CommandMetadata::new(RedisCommandName::Client, RedisCommandFlags::Read)),
+        ("client", CommandMetadata::new(RedisCommandName::Client, RedisCommandFlags::Connection)),
+        ("select", CommandMetadata::new(RedisCommandName::Select, RedisCommandFlags::Connection)),
         // Server commands
         ("replicaof", CommandMetadata::new(RedisCommandName::ReplicaOf, RedisCommandFlags::Admin)),
         ("slaveof", CommandMetadata::new(RedisCommandName::SlaveOf, RedisCommandFlags::Admin)),

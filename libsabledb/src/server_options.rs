@@ -143,7 +143,7 @@ impl ServerOptions {
                         options.general_settings.config_dir = Some(PathBuf::from(value))
                     }
                     "port" => options.general_settings.port = ini_usize!(value),
-                    "address" => options.general_settings.listen_ip = value.to_string(),
+                    "listen_ip" => options.general_settings.listen_ip = value.to_string(),
                     "workers" => options.general_settings.workers = ini_usize!(value),
                     "log_level" => {
                         options.general_settings.log_level = match value.to_lowercase().as_str() {

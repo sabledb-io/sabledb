@@ -26,6 +26,9 @@ impl ClientCommands {
             RedisCommandName::Client => {
                 Self::client(client_state, command, response_buffer)?;
             }
+            RedisCommandName::Select => {
+                Self::select(client_state, command, response_buffer)?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non client command {}",
@@ -57,6 +60,124 @@ impl ClientCommands {
                 builder.error_string(response_buffer, msg.as_str());
             }
         }
+        Ok(())
+    }
+
+    /// Select the Redis logical database having the specified zero-based numeric index.
+    /// New connections always use the database 0.
+    fn select(
+        client_state: &ClientState,
+        command: &RedisCommand,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        let db_index = command_arg_at_as_str!(command, 1);
+        let builder = RespBuilderV2::default();
+        let Ok(db_index) = db_index.parse::<u16>() else {
+            // parsing failed
+            builder.error_string(
+                response_buffer,
+                "ERR value is not an integer or out of range",
+            );
+            return Ok(());
+        };
+        client_state.set_database_id(db_index);
+        builder.ok(response_buffer);
+        Ok(())
+    }
+}
+
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[allow(unused_imports)]
+    use crate::{
+        commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
+        StorageOpenParams, Telemetry,
+    };
+    use std::path::PathBuf;
+    use std::sync::{Arc, Once};
+    use test_case::test_case;
+
+    lazy_static::lazy_static! {
+        static ref INIT: Once = Once::new();
+    }
+
+    async fn initialise_test() {
+        INIT.call_once(|| {
+            let _ = std::fs::remove_dir_all("tests/list_commands");
+            let _ = std::fs::create_dir_all("tests/list_commands");
+        });
+    }
+
+    /// Initialise the database
+    async fn open_database(command_name: &str) -> StorageAdapter {
+        // Cleanup the previous test folder
+        initialise_test().await;
+
+        // create random file name
+        let db_file = format!("tests/client_commands/{}.db", command_name,);
+        let _ = std::fs::create_dir_all("tests/client_commands");
+        let db_path = PathBuf::from(&db_file);
+        let _ = std::fs::remove_dir_all(&db_file);
+        let open_params = StorageOpenParams::default()
+            .set_compression(false)
+            .set_cache_size(64)
+            .set_path(&db_path)
+            .set_wal_disabled(true);
+        let mut store = StorageAdapter::default();
+        let _ = store.open(open_params);
+        store
+    }
+
+    #[test_case(vec![
+        (vec!["select", "abc"], "-ERR value is not an integer or out of range\r\n"),
+        (vec!["select", "-1"], "-ERR value is not an integer or out of range\r\n"),
+        (vec!["select", "67000"], "-ERR value is not an integer or out of range\r\n"),
+        (vec!["select", "1"], "+OK\r\n"),
+        (vec!["set", "key", "value_1"], "+OK\r\n"),
+        (vec!["select", "2"], "+OK\r\n"),
+        (vec!["set", "key", "value_2"], "+OK\r\n"),
+        (vec!["select", "0"], "+OK\r\n"),
+        (vec!["get", "key"], "$-1\r\n"),
+        (vec!["select", "3"], "+OK\r\n"),
+        (vec!["get", "key"], "$-1\r\n"),
+        (vec!["select", "1"], "+OK\r\n"),
+        (vec!["get", "key"], "$7\r\nvalue_1\r\n"),
+        (vec!["select", "2"], "+OK\r\n"),
+        (vec!["get", "key"], "$7\r\nvalue_2\r\n"),
+        ], "select"; "select")]
+    fn test_client_commands(
+        args_vec: Vec<(Vec<&'static str>, &'static str)>,
+        test_name: &str,
+    ) -> Result<(), SableError> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            println!("opening db");
+            let store = open_database(test_name).await;
+
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            for (args, expected_value) in args_vec {
+                let cmd = RedisCommand::for_test(args);
+                match Client::handle_command(client.inner(), cmd).await.unwrap() {
+                    ClientNextAction::SendResponse(response_buffer) => {
+                        assert_eq!(
+                            BytesMutUtils::to_string(&response_buffer).as_str(),
+                            expected_value
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        });
         Ok(())
     }
 }
