@@ -6,8 +6,9 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{atomic::AtomicU16, Arc, Mutex};
+use std::sync::{atomic::AtomicU16, Arc, Mutex, RwLock};
 
 #[allow(unused_imports)]
 use tokio::{
@@ -34,7 +35,8 @@ pub struct ClientState {
     pub store: StorageAdapter,
     pub client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
-    pub db_id: Rc<AtomicU16>,
+    db_id: Rc<AtomicU16>,
+    attributes: Rc<RwLock<HashMap<String, String>>>,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -57,6 +59,23 @@ impl ClientState {
 
     pub fn set_database_id(&self, id: u16) {
         self.db_id.store(id, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set a client attribute
+    pub fn set_attribute(&self, name: &str, value: &str) {
+        self.attributes
+            .write()
+            .expect("poisoned mutex")
+            .insert(name.to_owned(), value.to_owned());
+    }
+
+    /// Get a client attribute
+    pub fn attribute(&self, name: &String) -> Option<String> {
+        self.attributes
+            .read()
+            .expect("poisoned mutex")
+            .get(name)
+            .cloned()
     }
 
     pub fn error(&self, msg: &str) {
@@ -103,6 +122,7 @@ impl Client {
                 client_id: new_client_id(),
                 tls_acceptor,
                 db_id: Rc::new(AtomicU16::new(0)),
+                attributes: Rc::new(RwLock::new(HashMap::<String, String>::new())),
             },
         }
     }

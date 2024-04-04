@@ -50,6 +50,22 @@ impl ClientCommands {
         let builder = RespBuilderV2::default();
         match sub_command.as_str() {
             "setinfo" => {
+                // we now expect 4 arguments command
+                check_args_count!(command, 4, response_buffer);
+                let attribute_name = command_arg_at_as_str!(command, 2);
+                let attribute_val = command_arg_at_as_str!(command, 3);
+                match attribute_name.as_str() {
+                    "lib-name" | "lib-ver" => {}
+                    other => {
+                        builder.error_string(
+                            response_buffer,
+                            &format!("ERR Unrecognized option '{}'", other),
+                        );
+                        return Ok(());
+                    }
+                }
+
+                client_state.set_attribute(&attribute_name, &attribute_val);
                 builder.ok(response_buffer);
             }
             "id" => {
@@ -154,6 +170,11 @@ mod tests {
         (vec!["select", "2"], "+OK\r\n"),
         (vec!["get", "key"], "$7\r\nvalue_2\r\n"),
         ], "select"; "select")]
+    #[test_case(vec![
+        (vec!["client", "setinfo", "key", "value"], "-ERR Unrecognized option 'key'\r\n"),
+        (vec!["client", "setinfo", "lib-ver", "v0.0.1"], "+OK\r\n"),
+        (vec!["client", "setinfo", "lib-name", "sabledb-lib"], "+OK\r\n"),
+        ], "client_setinfo"; "client_setinfo")]
     fn test_client_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
