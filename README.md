@@ -133,10 +133,20 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | rpushx   | ✓   | ✓   |   |
 
 ### Generic commands
+
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
 | del | ✓ |✓ |   |
 | ttl | ✓ |✓ |   |
+
+### Other commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| info | ✓ |✓ |   |
+| client id | ✓ |✓ |   |
+| select | ✓ |✓ |   |
+| ping | ✓ |✓ |   |
 
 ## Benchmarks
 
