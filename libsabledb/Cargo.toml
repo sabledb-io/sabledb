@@ -32,6 +32,7 @@ pki-types = { package = "rustls-pki-types", version = "1" }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rust-ini = "0.20.0"
 serde = { version = "1", features = ["derive"] }
+rclite = "0.2.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 affinity = "0"

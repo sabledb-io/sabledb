@@ -21,7 +21,7 @@ pub struct ClientCommands {}
 impl ClientCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         match command.metadata().name() {
@@ -44,7 +44,7 @@ impl ClientCommands {
     /// Execute the `client` command
     async fn client(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -111,7 +111,7 @@ impl ClientCommands {
     /// New connections always use the database 0.
     async fn select(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -146,8 +146,9 @@ mod tests {
         commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
         StorageOpenParams, Telemetry,
     };
+    use std::sync::Arc;
     use std::path::PathBuf;
-    use std::sync::{Arc, Once};
+    use std::sync::Once;
     use test_case::test_case;
 
     lazy_static::lazy_static! {
@@ -215,7 +216,7 @@ mod tests {
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
-                let cmd = RedisCommand::for_test(args);
+                let cmd = Rc::new(RedisCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd).await.unwrap() {
                     ClientNextAction::SendResponse(response_buffer) => {
                         assert_eq!(
@@ -241,13 +242,15 @@ mod tests {
             let client2 = Client::new(Arc::<ServerState>::default(), store, None);
 
             let client1_id = format!("{}", client1.inner().client_id);
-            let kill_command = RedisCommand::new(vec![
-                BytesMut::from("client"),
-                BytesMut::from("kill"),
-                BytesMut::from("id"),
-                BytesMutUtils::from_string(client1_id.as_str()),
-            ])
-            .unwrap();
+            let kill_command = Rc::new(
+                RedisCommand::new(vec![
+                    BytesMut::from("client"),
+                    BytesMut::from("kill"),
+                    BytesMut::from("id"),
+                    BytesMutUtils::from_string(client1_id.as_str()),
+                ])
+                .unwrap(),
+            );
 
             // Kill client 1
             match Client::handle_command(client2.inner(), kill_command)
@@ -266,7 +269,7 @@ mod tests {
             }
 
             // Try to use client 1
-            let some_command = RedisCommand::for_test(vec!["set", "some", "value"]);
+            let some_command = Rc::new(RedisCommand::for_test(vec!["set", "some", "value"]));
             match Client::handle_command(client1.inner(), some_command)
                 .await
                 .unwrap()

@@ -2,7 +2,6 @@ use bytes::BytesMut;
 use libsabledb::{BytesMutUtils, RespBuilderV2, SableError, StringUtils};
 use pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddrV4;
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
@@ -125,9 +124,11 @@ impl RedisClient {
             root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let config = tokio_rustls::rustls::ClientConfig::builder()
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(crate::redis_client::NoVerifier {}))
+                .with_custom_certificate_verifier(std::sync::Arc::new(
+                    crate::redis_client::NoVerifier {},
+                ))
                 .with_no_client_auth(); // i guess this was previously the default?
-            let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+            let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
             let dns: ServerName = host.try_into().expect("invalid DNS name");
             let stream = connector.connect(dns, stream).await?;
 

@@ -20,7 +20,7 @@ pub struct ServerCommands {}
 impl ServerCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         match command.metadata().name() {
@@ -41,7 +41,7 @@ impl ServerCommands {
     /// SLAVEOF <IP PORT | NO ONE>
     async fn replica_of(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);

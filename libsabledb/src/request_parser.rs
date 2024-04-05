@@ -1,5 +1,6 @@
 use crate::{ParserError, RedisCommand, SableError, StringUtils};
 use bytes::BytesMut;
+use std::rc::Rc;
 
 #[derive(Default)]
 pub struct RequestParser {
@@ -18,7 +19,7 @@ pub struct RequestParser {
 
 #[derive(Default, Debug)]
 pub struct ParseResult {
-    pub command: RedisCommand,
+    pub command: Rc<RedisCommand>,
     pub bytes_consumed: usize,
 }
 
@@ -138,7 +139,7 @@ impl RequestParser {
         self.reset();
 
         Ok(ParseResult {
-            command: RedisCommand::new(StringUtils::split(&mut command_string)?)?,
+            command: Rc::new(RedisCommand::new(StringUtils::split(&mut command_string)?)?),
             // its OK to add `+2` here, since we managed to find `\r\n` above
             bytes_consumed,
         })
@@ -192,7 +193,7 @@ impl RequestParser {
         self.reset();
 
         Ok(ParseResult {
-            command: RedisCommand::new(args)?,
+            command: Rc::new(RedisCommand::new(args)?),
             bytes_consumed,
         })
     }

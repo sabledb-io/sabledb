@@ -17,7 +17,7 @@ impl ListCommands {
     /// Main entry point for all list commands
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         match command.metadata().name() {
@@ -97,7 +97,7 @@ impl ListCommands {
     /// push operations. When key holds a value that is not a list, an error is returned
     pub async fn push(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
@@ -131,7 +131,7 @@ impl ListCommands {
     /// pushes the element at the first element (head) of the list stored at destination
     pub async fn rpoplpush(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
@@ -157,7 +157,7 @@ impl ListCommands {
     /// Blocking version
     pub async fn blocking_rpoplpush(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
@@ -195,7 +195,7 @@ impl ListCommands {
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn lmove(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 5, response_buffer, HandleCommandResult::Completed);
@@ -222,7 +222,7 @@ impl ListCommands {
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn blocking_move(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 6, response_buffer, HandleCommandResult::Completed);
@@ -320,7 +320,7 @@ impl ListCommands {
     /// Pops one or more elements from the first non-empty list key from the list of provided key names
     pub async fn lmpop(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         allow_blocking: bool,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -479,7 +479,7 @@ impl ListCommands {
     /// reply will consist of up to count elements, depending on the list's length.
     pub async fn pop(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
@@ -506,7 +506,7 @@ impl ListCommands {
 
     pub async fn blocking_pop(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
@@ -583,7 +583,7 @@ impl ListCommands {
     /// 1 the next element and so on
     pub async fn ltrim(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
@@ -614,7 +614,7 @@ impl ListCommands {
     /// -1 is the last element of the list, -2 the penultimate, and so on.
     pub async fn lrange(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
@@ -644,7 +644,7 @@ impl ListCommands {
     /// is not a list.
     pub async fn llen(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 2, response_buffer, HandleCommandResult::Completed);
@@ -663,7 +663,7 @@ impl ListCommands {
     /// `LINSERT key <BEFORE | AFTER> pivot element`
     pub async fn linsert(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 5, response_buffer, HandleCommandResult::Completed);
@@ -694,7 +694,7 @@ impl ListCommands {
     /// When the value at key is not a list, an error is returned.
     pub async fn lindex(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
@@ -722,7 +722,7 @@ impl ListCommands {
     /// Otherwise, if no match is found, nil is returned.
     pub async fn lpos(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
@@ -805,7 +805,7 @@ impl ListCommands {
     /// An error is returned for out of range indexes.
     pub async fn lset(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
@@ -832,7 +832,7 @@ impl ListCommands {
     /// An error is returned for out of range indexes.
     pub async fn lrem(
         client_state: Rc<ClientState>,
-        command: &RedisCommand,
+        command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
@@ -869,8 +869,10 @@ mod tests {
         commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
         StorageOpenParams, Telemetry,
     };
+    use std::sync::Arc;
+    use std::rc::Rc;
     use std::path::PathBuf;
-    use std::sync::{Arc, Once};
+    use std::sync::Once;
     use test_case::test_case;
     use tokio::sync::mpsc::Receiver;
     use tokio::time::Duration;
@@ -1134,7 +1136,7 @@ mod tests {
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
-                let cmd = RedisCommand::for_test(args);
+                let cmd = Rc::new(RedisCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd.clone())
                     .await
                     .unwrap()
@@ -1155,7 +1157,7 @@ mod tests {
                                     "--> got TryAgain after {}ms",
                                     sw.elapsed_micros().unwrap() / 1000
                                 );
-                                execute_command(client.inner(), cmd).await
+                                execute_command(client.inner(), cmd.clone()).await
                             }
                             crate::client::WaitResult::Timeout => {
                                 let builder = RespBuilderV2::default();
@@ -1174,7 +1176,7 @@ mod tests {
     /// Run a command that should be deferred by the server
     async fn deferred_command(
         client_state: Rc<ClientState>,
-        cmd: RedisCommand,
+        cmd: Rc<RedisCommand>,
     ) -> (Receiver<u8>, Duration) {
         let next_action = Client::handle_command(client_state, cmd).await.unwrap();
         match next_action {
@@ -1185,7 +1187,7 @@ mod tests {
     }
 
     /// Execute a command
-    async fn execute_command(client_state: Rc<ClientState>, cmd: RedisCommand) -> BytesMut {
+    async fn execute_command(client_state: Rc<ClientState>, cmd: Rc<RedisCommand>) -> BytesMut {
         let next_action = Client::handle_command(client_state, cmd.clone())
             .await
             .unwrap();
@@ -1209,19 +1211,23 @@ mod tests {
             let writer = Client::new(server, store, None);
 
             const EXPECTED_RESULT: &str = "*2\r\n$23\r\ntest_blocking_pop_list1\r\n$5\r\nvalue\r\n";
-            let read_cmd = RedisCommand::for_test(vec![
+            let read_cmd = Rc::new(RedisCommand::for_test(vec![
                 "blpop",
                 "test_blocking_pop_list1",
                 "test_blocking_pop_list2",
                 "5",
-            ]);
+            ]));
 
             // we expect to get a rx + duration, if we dont "deferred_command" will panic!
             let (rx, duration) = deferred_command(reader.inner(), read_cmd.clone()).await;
 
             // second connection: push data to the list
-            let pus_cmd = RedisCommand::for_test(vec!["lpush", "test_blocking_pop_list1", "value"]);
-            let response = execute_command(writer.inner(), pus_cmd).await;
+            let pus_cmd = Rc::new(RedisCommand::for_test(vec![
+                "lpush",
+                "test_blocking_pop_list1",
+                "value",
+            ]));
+            let response = execute_command(writer.inner(), pus_cmd.clone()).await;
             assert_eq!(":1\r\n", BytesMutUtils::to_string(&response).as_str());
 
             // Try reading again now

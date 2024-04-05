@@ -6,12 +6,13 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use std::sync::Arc;
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, AtomicU16},
-    Arc, Mutex, RwLock,
+    Mutex, RwLock,
 };
 
 #[allow(unused_imports)]
@@ -245,7 +246,7 @@ impl Client {
     /// Read data from the network, parse it and send it "writer" task for processing
     async fn reader_loop(
         mut rx: impl AsyncReadExt + std::marker::Unpin,
-        channel_tx: tokio::sync::mpsc::Sender<RedisCommand>,
+        channel_tx: tokio::sync::mpsc::Sender<Rc<RedisCommand>>,
         client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         let mut buffer = BytesMut::new();
@@ -308,7 +309,7 @@ impl Client {
     /// Accepts the parsed requests, execute the command and send back the response
     async fn writer_loop(
         mut tx: impl AsyncWriteExt + std::marker::Unpin,
-        mut channel_rx: TokioReceiver<RedisCommand>,
+        mut channel_rx: TokioReceiver<Rc<RedisCommand>>,
         client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         while let Some(command) = channel_rx.recv().await {
@@ -383,7 +384,7 @@ impl Client {
     /// Handle time-out for command
     fn handle_timeout(
         _client_state: Rc<ClientState>,
-        _command: RedisCommand,
+        _command: Rc<RedisCommand>,
     ) -> Result<BytesMut, SableError> {
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::new();
@@ -395,7 +396,10 @@ impl Client {
     /// Can this client handle the command?
     /// We use this function as a sanity check for various checks, for example:
     /// A write command being called on a replica server
-    fn can_handle(client_state: Rc<ClientState>, command: &RedisCommand) -> CanHandleCommandResult {
+    fn can_handle(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+    ) -> CanHandleCommandResult {
         if !client_state.active() {
             CanHandleCommandResult::ClientKilled
         } else if client_state.server_state.is_replica() && command.metadata().is_write_command() {
@@ -408,13 +412,13 @@ impl Client {
     /// Accepts the parsed requests, execute the command and send back the response
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: RedisCommand,
+        command: Rc<RedisCommand>,
     ) -> Result<ClientNextAction, SableError> {
         let builder = RespBuilderV2::default();
-        let mut buffer = BytesMut::with_capacity(1024);
+        let mut buffer = BytesMut::with_capacity(256);
 
         // Can we handle this command?
-        match Self::can_handle(client_state.clone(), &command) {
+        match Self::can_handle(client_state.clone(), command.clone()) {
             CanHandleCommandResult::WriteInReadOnlyReplica => {
                 builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);
                 return Ok(ClientNextAction::SendResponse(buffer));
@@ -458,11 +462,11 @@ impl Client {
             | RedisCommandName::SetRange
             | RedisCommandName::Strlen
             | RedisCommandName::Substr => {
-                StringCommands::handle_command(client_state, &command, &mut buffer).await?;
+                StringCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             RedisCommandName::Ttl | RedisCommandName::Del => {
-                GenericCommands::handle_command(client_state, &command, &mut buffer).await?;
+                GenericCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             RedisCommandName::Config => {
@@ -503,7 +507,7 @@ impl Client {
             | RedisCommandName::Blpop
             | RedisCommandName::Brpop
             | RedisCommandName::Blmpop => {
-                match ListCommands::handle_command(client_state, &command, &mut buffer).await? {
+                match ListCommands::handle_command(client_state, command, &mut buffer).await? {
                     HandleCommandResult::Completed => ClientNextAction::SendResponse(buffer),
                     HandleCommandResult::Blocked((rx, duration)) => {
                         ClientNextAction::Wait((rx, duration))
@@ -512,11 +516,11 @@ impl Client {
             }
             // Client commands
             RedisCommandName::Client | RedisCommandName::Select => {
-                ClientCommands::handle_command(client_state, &command, &mut buffer).await?;
+                ClientCommands::handle_command(client_state, command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
-                ServerCommands::handle_command(client_state, &command, &mut buffer).await?;
+                ServerCommands::handle_command(client_state, command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             // Misc

@@ -9,9 +9,10 @@ use bytes::BytesMut;
 use crossbeam::queue::SegQueue;
 #[allow(unused_imports)]
 use dashmap::{DashMap, DashSet};
+use std::sync::Arc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Mutex,
 };
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;

@@ -22,3 +22,4 @@ webpki-roots = "0"
 pki-types = { package = "rustls-pki-types", version = "1" }
 test-case = "3"
 num-format = "0"
+rclite = "0.2.4"

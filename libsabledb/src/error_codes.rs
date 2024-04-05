@@ -1,4 +1,5 @@
 use thiserror::Error;
+use std::rc::Rc;
 
 #[derive(Error, Debug)]
 pub enum SableError {
@@ -10,6 +11,9 @@ pub enum SableError {
     /// From tokio channel error
     #[error("Tokio channel error. {0}")]
     WorkerChannel(#[from] tokio::sync::mpsc::error::SendError<crate::RedisCommand>),
+    /// From tokio channel error
+    #[error("Tokio channel error. {0}")]
+    SendCommanError(#[from] tokio::sync::mpsc::error::SendError<Rc<crate::RedisCommand>>),
     #[error("Failed to broadcast worker message. {0}")]
     BroadcastWorkerMessage(
         #[from] tokio::sync::mpsc::error::SendError<crate::worker::WorkerMessage>,

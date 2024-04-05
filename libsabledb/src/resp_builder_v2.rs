@@ -2,6 +2,9 @@ use bytes::BytesMut;
 
 const CRLF: &str = "\r\n";
 const DOLLAR: &str = "$";
+const CRLF_LEN: usize = 2;
+const DOLLAR_LEN: usize = 1;
+
 //const PLUS: &str = "+";
 const ERR: &str = "-";
 const OK: &str = "+OK\r\n";
@@ -15,11 +18,6 @@ pub struct RespBuilderV2 {}
 
 #[allow(dead_code)]
 impl RespBuilderV2 {
-    fn append_length(&self, buffer: &mut BytesMut, len: usize) {
-        let str_len = format!("{}", len);
-        buffer.extend_from_slice(str_len.as_bytes());
-    }
-
     fn append_str(&self, buffer: &mut BytesMut, s: &str) {
         buffer.extend_from_slice(s.as_bytes());
     }
@@ -29,8 +27,11 @@ impl RespBuilderV2 {
     }
 
     fn add_bulk_string_internal(&self, buffer: &mut BytesMut, content: &BytesMut) {
+        let str_len = format!("{}", content.len());
+        // extend the buffer as needed
+        buffer.reserve(DOLLAR_LEN + str_len.len() + content.len() + (2 * CRLF_LEN));
         self.append_str(buffer, DOLLAR);
-        self.append_length(buffer, content.len());
+        buffer.extend_from_slice(str_len.as_bytes());
         self.append_str(buffer, CRLF);
         self.append_bytes(buffer, content);
         self.append_str(buffer, CRLF);
