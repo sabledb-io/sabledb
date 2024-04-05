@@ -520,7 +520,7 @@ pub fn calculate_slot(key: &BytesMut) -> u16 {
 
 pub enum CurrentTimeResolution {
     Nanoseconds,
-    Microsecons,
+    Microseconds,
     Milliseconds,
     Seconds,
 }
@@ -532,7 +532,7 @@ pub fn current_time(res: CurrentTimeResolution) -> u64 {
         .expect("SystemTime::now");
     match res {
         CurrentTimeResolution::Nanoseconds => now.as_nanos().try_into().unwrap_or(u64::MAX),
-        CurrentTimeResolution::Microsecons => now.as_micros().try_into().unwrap_or(u64::MAX),
+        CurrentTimeResolution::Microseconds => now.as_micros().try_into().unwrap_or(u64::MAX),
         CurrentTimeResolution::Milliseconds => now.as_millis().try_into().unwrap_or(u64::MAX),
         CurrentTimeResolution::Seconds => now.as_secs(),
     }

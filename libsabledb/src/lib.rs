@@ -17,6 +17,7 @@ pub mod types;
 pub mod utils;
 pub mod worker;
 pub mod worker_manager;
+pub mod io;
 
 pub use client::Client;
 pub use commands::{

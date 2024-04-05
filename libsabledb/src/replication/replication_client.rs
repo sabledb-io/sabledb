@@ -4,9 +4,13 @@ use crate::replication::{
 };
 use crate::server_options::ServerOptions;
 use crate::{
+    io::Archive,
     replication::{StorageUpdates, StorageUpdatesIterItem},
     BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
 };
+
+use num_format::{Locale, ToFormattedString};
+use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
@@ -27,6 +31,7 @@ enum RequestChangesResult {
     Reconnect,
     // Exit the replication thread, do not attempt to reconnect to the primary
     ExitThread,
+    // Command completed successfully
     Success,
 }
 
@@ -46,14 +51,16 @@ impl ReplicationClient {
         // Spawn a thread to handle the replication
         let _ = std::thread::spawn(move || {
             loop {
-                let stream = match Self::connect_to_primary(&options) {
+                let mut stream = match Self::connect_to_primary(&options) {
                     Err(e) => {
                         crate::error_with_throttling!(300, "Failed to connect to primary. {:?}", e);
 
                         // Check whether we should attempt to reconnect
                         match Self::check_command_channel(&mut rx) {
                             CheckShutdownResult::Terminate => {
-                                tracing::info!("Requested to terminate replication client thread. Closing connection with primary");
+                                tracing::info!(
+                                    "Requested to terminate replication client thread. Closing connection with primary"
+                                );
                                 break; // leave the thread
                             }
                             CheckShutdownResult::Timeout => {}
@@ -71,6 +78,19 @@ impl ReplicationClient {
                     Ok(stream) => stream,
                 };
 
+                // Now that we are connected, we start by requesting a full sync from the primary
+                if let Err(e) = Self::fullsync(&store, &options, &mut stream) {
+                    tracing::error!("Fullsync error. {:?}", e);
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    break;
+                }
+
+                // hereon: use socket with timeout
+                if let Err(e) = prepare_std_socket(&stream) {
+                    tracing::error!("Failed to prepare socket. {:?}", e);
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    break;
+                }
                 let mut reader = TcpStreamBytesReader::new(&stream);
                 let mut writer = TcpStreamBytesWriter::new(&stream);
 
@@ -112,12 +132,6 @@ impl ReplicationClient {
         let addr = address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect(addr)?;
         tracing::info!("Successfully connected to primary at: {}", address);
-
-        if let Err(e) = prepare_std_socket(&stream) {
-            tracing::error!("Failed to prepare socket. {:?}", e);
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            return Err(e);
-        }
         Ok(stream)
     }
 
@@ -136,6 +150,61 @@ impl ReplicationClient {
                 e
             )),
         }
+    }
+
+    /// Perform a fullsync with the primary
+    fn fullsync(
+        store: &StorageAdapter,
+        options: &ServerOptions,
+        stream: &mut std::net::TcpStream,
+    ) -> Result<(), SableError> {
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(None);
+
+        // Send a "FULL_SYNC" message
+        tracing::info!("Sending FULL SYNC message to primary");
+        let request = ReplRequest::new_fullsync();
+        let mut buffer = request.to_bytes();
+        let mut writer = TcpStreamBytesWriter::new(stream);
+        writer.write_message(&mut buffer)?;
+
+        // Read the response
+        let mut file_len = vec![0u8; std::mem::size_of::<usize>()];
+        stream.read_exact(&mut file_len)?;
+
+        // split the buffer into chunks and read
+        const CHUNK_SIZE: usize = 10 << 20; // 10MB
+        let count = crate::BytesMutUtils::to_usize(&bytes::BytesMut::from(file_len.as_slice()));
+
+        tracing::info!(
+            "Reading file of size: {} bytes",
+            count.to_formatted_string(&Locale::en)
+        );
+        let output_file_name = format!("{}.checkpoint.tar", options.open_params.db_path.display());
+        let target_folder_path = format!("{}.checkpoint", options.open_params.db_path.display());
+        let mut file = std::fs::File::create(&output_file_name)?;
+        crate::io::read_exact(stream, &mut file, count)?;
+        tracing::info!(
+            "File {} successfully received from primary",
+            output_file_name
+        );
+
+        // Now that we have the file, extract the tar
+        let output_file_name = PathBuf::from(&output_file_name);
+        let target_folder_path = PathBuf::from(&target_folder_path);
+        let archiver = Archive::default();
+        archiver.extract(&output_file_name, &target_folder_path)?;
+        tracing::info!(
+            "Backup database extracted to: {}",
+            target_folder_path.display()
+        );
+
+        store.restore_from_checkpoint(&target_folder_path, true)?;
+        tracing::info!("Database successfully restored from backup");
+
+        let _ = std::fs::remove_file(&output_file_name);
+        let _ = std::fs::remove_dir_all(&target_folder_path);
+        Ok(())
     }
 
     /// Request a single "change request"
@@ -169,7 +238,10 @@ impl ReplicationClient {
         let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
-        tracing::info!("Requesting changes from sequence: {}", sequence_number);
+        tracing::info!(
+            "Next sequence: {}",
+            sequence_number.to_formatted_string(&Locale::en)
+        );
         let request = ReplRequest::new_get_updates_since(sequence_number);
         let mut buffer = request.to_bytes();
         if let Err(e) = writer.write_message(&mut buffer) {
@@ -235,6 +307,7 @@ impl ReplicationClient {
                 batch_update.clear();
             }
         }
+
         // make sure all items are applied
         if !batch_update.is_empty() {
             if let Err(e) = store.apply_batch(&batch_update) {
@@ -245,9 +318,9 @@ impl ReplicationClient {
         }
 
         tracing::info!(
-            "Applied {} changes to store. Next sequence number is: {}",
-            changes_count,
-            sequence_number
+            "Applied {} changes to store, next sequence is: {}",
+            changes_count.to_formatted_string(&Locale::en),
+            sequence_number.to_formatted_string(&Locale::en)
         );
         Self::write_next_sequence(sequence_file, sequence_number)
     }

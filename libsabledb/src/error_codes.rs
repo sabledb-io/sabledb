@@ -1,5 +1,5 @@
-use thiserror::Error;
 use std::rc::Rc;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SableError {

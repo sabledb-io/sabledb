@@ -64,17 +64,20 @@ impl ReplicationConfig {
         let conf = if replication_conf.exists() {
             let path_buf = replication_conf.to_path_buf();
             match std::fs::read_to_string(path_buf.clone()) {
-                Ok(content) => match serde_json::from_str(&content) {
-                    Ok(conf) => conf,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to de-serialize replication config from file {}. {:?}",
-                            replication_conf.display(),
-                            e
-                        );
-                        ReplicationConfig::primary_config(default_listen_ip, default_port)
+                Ok(content) => {
+                    tracing::info!("Parsing replication config: {}", content);
+                    match serde_json::from_str(&content) {
+                        Ok(conf) => conf,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to de-serialize replication config from file {}. {:?}",
+                                replication_conf.display(),
+                                e
+                            );
+                            ReplicationConfig::primary_config(default_listen_ip, default_port)
+                        }
                     }
-                },
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     ReplicationConfig::primary_config(default_listen_ip, default_port)
                 }

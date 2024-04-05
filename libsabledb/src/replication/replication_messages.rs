@@ -15,11 +15,19 @@ pub struct ReplRequest {
 impl ReplRequest {
     pub const SIZE: usize = std::mem::size_of::<u64>() + std::mem::size_of::<u8>();
     pub const GET_UPDATES_SINCE: u8 = 0;
+    pub const FULL_SYNC: u8 = 1;
 
     pub fn new_get_updates_since(seq_num: u64) -> Self {
         ReplRequest {
             req_type: ReplRequest::GET_UPDATES_SINCE,
             payload: seq_num,
+        }
+    }
+
+    pub fn new_fullsync() -> Self {
+        ReplRequest {
+            req_type: ReplRequest::FULL_SYNC,
+            payload: 0,
         }
     }
 

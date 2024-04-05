@@ -2,15 +2,17 @@ use crate::replication::prepare_std_socket;
 use crate::server_options::ServerOptions;
 use crate::telemetry::{ReplicaTelemetry, ReplicationTelemetry};
 
+use crate::utils;
 #[allow(unused_imports)]
 use crate::{
+    io::Archive,
     replication::{
         BytesReader, BytesWriter, ReplRequest, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     SableError, StorageAdapter,
 };
-#[allow(unused_imports)]
-use bytes::BytesMut;
+
+use num_format::{Locale, ToFormattedString};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 
@@ -84,18 +86,71 @@ impl ReplicationServer {
         }
     }
 
+    /// A checkpoint is a database snapshot in this given point in time
+    /// a replication starts by sending a checkpoint to the replica
+    /// after the replica accepts the checkpoints, it start replicate the
+    /// changes
+    fn send_checkpoint(
+        store: &StorageAdapter,
+        _options: &ServerOptions,
+        replica_addr: &String,
+        stream: &mut std::net::TcpStream,
+    ) -> Result<(), SableError> {
+        // async sockets are non-blocking. Make it blocking for sending the file
+        stream.set_nonblocking(false)?;
+        stream.set_write_timeout(None)?;
+        stream.set_read_timeout(None)?;
+
+        let ts = utils::current_time(utils::CurrentTimeResolution::Microseconds).to_string();
+        tracing::info!("Preparing checkpoint for replica {}", replica_addr);
+        let backup_db_path = std::path::PathBuf::from(format!(
+            "{}.checkpoint.{}",
+            store.open_params().db_path.display(),
+            ts
+        ));
+        store.create_checkpoint(&backup_db_path)?;
+        tracing::info!(
+            "Checkpoint {} created successfully",
+            backup_db_path.display()
+        );
+
+        let archiver = Archive::default();
+        let tar_file = archiver.create(&backup_db_path)?;
+
+        // Send the file size first
+        let mut file = std::fs::File::open(&tar_file)?;
+        let file_len = file.metadata()?.len() as usize;
+        tracing::info!(
+            "Sending tar file: {}, Len: {} bytes",
+            tar_file.display(),
+            file_len.to_formatted_string(&Locale::en)
+        );
+
+        let mut file_len = crate::BytesMutUtils::from_usize(&file_len);
+        crate::io::write_bytes(stream, &mut file_len)?;
+
+        // Now send the content
+        std::io::copy(&mut file, stream)?;
+        tracing::info!("Sending tar file {} completed", tar_file.display());
+        prepare_std_socket(stream)?;
+        Ok(())
+    }
+
     /// The main replication request -> reply flow is happening
     /// This function reads a single replication request
     /// and responds with the proper response.
     fn handle_single_request(
         store: &StorageAdapter,
         options: &ServerOptions,
-        reader: &mut impl BytesReader,
-        writer: &mut impl BytesWriter,
+        stream: &mut std::net::TcpStream,
+        replica_addr: &String,
     ) -> bool {
+        let mut reader = TcpStreamBytesReader::new(&stream);
+        let mut writer = TcpStreamBytesWriter::new(&stream);
+
         tracing::debug!("Waiting for replication request..");
         let req = loop {
-            let result = Self::read_request(reader);
+            let result = Self::read_request(&mut reader);
             match result {
                 Err(e) => {
                     tracing::error!("Failed to read request. {:?}", e);
@@ -116,8 +171,22 @@ impl ReplicationServer {
         tracing::debug!("Received replication request {:?}", req);
 
         match req.req_type {
+            ReplRequest::FULL_SYNC => {
+                if let Err(e) = Self::send_checkpoint(store, options, replica_addr, stream) {
+                    tracing::info!(
+                        "Failed sending db chceckpoint to replica {}. {:?}",
+                        replica_addr,
+                        e
+                    );
+                    return false;
+                }
+            }
             ReplRequest::GET_UPDATES_SINCE => {
-                tracing::debug!("Replica is requesting changes since: {}", req.payload);
+                tracing::debug!(
+                    "Replica {} is requesting changes since: {}",
+                    replica_addr,
+                    req.payload
+                );
                 let storage_updates = loop {
                     let storage_updates = match store.storage_updates_since(
                         req.payload,
@@ -184,7 +253,7 @@ impl ReplicationServer {
         loop {
             let (socket, addr) = listener.accept().await?;
             tracing::info!("Accepted new connection from replica: {:?}", addr);
-            let stream = match socket.into_std() {
+            let mut stream = match socket.into_std() {
                 Ok(socket) => socket,
                 Err(e) => {
                     tracing::error!("Failed to convert async socket -> std socket!. {:?}", e);
@@ -200,6 +269,7 @@ impl ReplicationServer {
             let _handle = std::thread::spawn(move || {
                 tracing::info!("Replication thread started for connection {:?}", addr);
                 let _guard = ReplicationThreadMarker::new(addr.to_string());
+                let replica_name = addr.to_string();
 
                 // we now work in a simple request/reply mode:
                 // the replica sends a request requesting changes since
@@ -212,15 +282,12 @@ impl ReplicationServer {
                     return;
                 }
 
-                // Read the request
-                let mut reader = TcpStreamBytesReader::new(&stream);
-                let mut writer = TcpStreamBytesWriter::new(&stream);
                 loop {
                     if !Self::handle_single_request(
                         &store_clone,
                         &server_options_clone,
-                        &mut reader,
-                        &mut writer,
+                        &mut stream,
+                        &replica_name,
                     ) {
                         tracing::info!("Closing connection with replica: {:?}", stream);
                         let _ = stream.shutdown(std::net::Shutdown::Both);

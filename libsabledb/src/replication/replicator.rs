@@ -141,8 +141,9 @@ impl Replicator {
             replication_config
         );
 
-        // Launch the replication client thread
         let replication_client = ReplicationClient::default();
+        // Launch the replication client on a dedicated thread
+        // and return immediately
         let tx = replication_client
             .run(self.server_options.clone(), self.store.clone())
             .await?;

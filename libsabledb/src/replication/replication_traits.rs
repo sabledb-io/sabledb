@@ -1,17 +1,17 @@
+use crate::io;
 use crate::{BytesMutUtils, SableError, U8ArrayReader};
 use bytes::BytesMut;
-use std::io::{Read, Write};
 use std::net::TcpStream;
 
 pub trait BytesWriter {
     /// Write a message. A "message" format is always: the length of the message
-    /// followed by the message content (the length is in big-endia notation)
+    /// followed by the message content (the length is in big-endian notation)
     fn write_message(&mut self, message: &mut BytesMut) -> Result<(), SableError>;
 }
 
 pub trait BytesReader {
     /// Read a message. A "message" format is always: the length of the message
-    /// followed by the message content (the length is in big-endia notation)
+    /// followed by the message content (the length is in big-endian notation)
     fn read_message(&mut self) -> Result<Option<BytesMut>, SableError>;
 }
 
@@ -28,25 +28,15 @@ impl<'a> TcpStreamBytesWriter<'a> {
 
 impl<'a> TcpStreamBytesWriter<'a> {
     fn write_usize(&mut self, num: usize) -> Result<(), SableError> {
-        let num = BytesMutUtils::from_usize(&num);
-        self.tcp_stream.write_all(&num)?;
-        Ok(())
+        let mut num = BytesMutUtils::from_usize(&num);
+        io::write_bytes(&mut self.tcp_stream, &mut num)
     }
 }
 
 impl<'a> BytesWriter for TcpStreamBytesWriter<'a> {
     fn write_message(&mut self, message: &mut BytesMut) -> Result<(), SableError> {
         self.write_usize(message.len())?;
-        match self.tcp_stream.write_all(message) {
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                // translate io::ErrorKind::BrokenPipe -> SableError::BrokenPipe
-                return Err(SableError::BrokenPipe);
-            }
-            Err(e) => return Err(SableError::StdIoError(e)),
-            Ok(_) => {}
-        }
-        tracing::trace!("Successfully wrote message of {} bytes", message.len());
-        Ok(())
+        io::write_bytes(&mut self.tcp_stream, message)
     }
 }
 
@@ -72,31 +62,12 @@ impl<'a> TcpStreamBytesReader<'a> {
 
     /// Pull some bytes from the socket
     fn read_some(&mut self) -> Result<Option<usize>, SableError> {
-        let mut buffer = vec![0u8; Self::MAX_BUFFER_SIZE];
-        let result = self.tcp_stream.read(&mut buffer);
-        match result {
-            Ok(0usize) => Err(SableError::ConnectionClosed),
-            Ok(count) => {
-                self.bytes_read.extend_from_slice(&buffer[..count]);
-                Ok(Some(count))
+        match io::read_bytes(&mut self.tcp_stream, Self::MAX_BUFFER_SIZE)? {
+            Some(data) => {
+                self.bytes_read.extend_from_slice(&data);
+                Ok(Some(data.len()))
             }
-            Err(e)
-                // On Windows, TcpStream returns `TimedOut`
-                // while on Linux, it would typically return
-                // `WouldBlock`
-                if e.kind() == std::io::ErrorKind::TimedOut
-                    || e.kind() == std::io::ErrorKind::WouldBlock =>
-            {
-                // Timeout occured, not an error
-                tracing::trace!("Read timedout");
-                Ok(None)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                // Interrupted, not an error
-                tracing::warn!("Connection interrupted");
-                Ok(None)
-            }
-            Err(e) => Err(SableError::StdIoError(e)),
+            None => Ok(None),
         }
     }
 }
@@ -127,7 +98,7 @@ impl<'a> BytesReader for TcpStreamBytesReader<'a> {
 
         let mut bytes_reader = U8ArrayReader::with_buffer(&self.bytes_read);
         let Some(count) = bytes_reader.read_usize() else {
-            // None can happen if the buffer does not have enough bytes to parse usize
+            // This can happen if the buffer does not have enough bytes to parse usize
             tracing::trace!("Don't enough bytes to determine the message length");
             return Ok(None);
         };

@@ -1,5 +1,6 @@
 use crate::{U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
+use num_format::{Locale, ToFormattedString};
 
 const OPCODE_PUT: u8 = 0;
 const OPCODE_DEL: u8 = 1;
@@ -97,11 +98,11 @@ pub struct StorageUpdates {
 impl std::fmt::Display for StorageUpdates {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = format!(
-            "start_seq_number: {}, end_seq_number: {}, changes_count: {}, serialised_data: {} bytes",
-            self.start_seq_number,
-            self.end_seq_number,
-            self.changes_count,
-            self.serialised_data.len()
+            "from: {}, to: {}, changes: {}, serialised data: {} bytes",
+            self.start_seq_number.to_formatted_string(&Locale::en),
+            self.end_seq_number.to_formatted_string(&Locale::en),
+            self.changes_count.to_formatted_string(&Locale::en),
+            self.serialised_data.len().to_formatted_string(&Locale::en)
         );
         write!(f, "{}", s)
     }

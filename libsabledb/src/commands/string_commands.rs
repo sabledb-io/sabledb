@@ -13,9 +13,9 @@ use crate::{
 
 use bytes::BytesMut;
 use num_traits::{Num, NumAssignOps};
-use std::rc::Rc;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::rc::Rc;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -1206,9 +1206,9 @@ mod test {
         commands::ClientNextAction, storage::StorageAdapter, Client, GenericCommands, ServerState,
         StorageOpenParams,
     };
-    use std::sync::Arc;
-    use std::rc::Rc;
     use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::Arc;
     use std::sync::Once;
     use test_case::test_case;
 

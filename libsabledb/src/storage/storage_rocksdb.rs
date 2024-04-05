@@ -6,6 +6,7 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use num_format::{Locale, ToFormattedString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -243,7 +244,10 @@ impl StorageRocksDb {
         }
 
         let sequence_file = self.path.join("changes.seq");
-        tracing::info!("Restore completed. Put {} records", updates_counter);
+        tracing::info!(
+            "Restore completed. Put {} records",
+            updates_counter.to_formatted_string(&Locale::en)
+        );
         tracing::info!("Last sequence written to db is:{}", last_seq);
         self.write_next_sequence(sequence_file, last_seq)?;
         Ok(())

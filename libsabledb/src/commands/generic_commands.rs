@@ -173,9 +173,9 @@ mod test {
     use crate::{
         commands::ClientNextAction, storage::StorageAdapter, Client, ServerState, StorageOpenParams,
     };
-    use std::sync::Arc;
-    use std::rc::Rc;
     use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::Arc;
     use std::sync::Once;
     use test_case::test_case;
 

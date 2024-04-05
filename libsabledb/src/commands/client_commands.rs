@@ -146,8 +146,8 @@ mod tests {
         commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
         StorageOpenParams, Telemetry,
     };
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::Once;
     use test_case::test_case;
 
