@@ -145,6 +145,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | info | ✓ |✓ |   |
 | client id | ✓ |✓ |   |
+| client kill | ✓ |🗙 |  supports: `client kill ID <client-id>` |
 | select | ✓ |✓ |   |
 | ping | ✓ |✓ |   |
 
