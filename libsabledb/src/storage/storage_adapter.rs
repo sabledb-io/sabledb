@@ -319,21 +319,25 @@ impl StorageAdapter {
         Ok(())
     }
 
-    pub fn create_backup(&self, location: &Path) -> Result<(), SableError> {
+    pub fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.create_backup(location)
+        db.create_checkpoint(location)
     }
 
-    /// Restore database from the latest backup
-    /// `backup_location` path the backup folder
-    /// `db_location` path the database location
-    pub fn restore_from_backup(
+    /// Restore database from a backup database located at `backup_location` (a directory)
+    /// If `delete_all_before_store` is true, we will purge all current records from the
+    /// db before starting the restore
+    pub fn restore_from_checkpoint(
+        &self,
         backup_location: &PathBuf,
-        db_location: &PathBuf,
+        delete_all_before_store: bool,
     ) -> Result<(), SableError> {
-        StorageRocksDb::restore_from_backup(backup_location, db_location)
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.restore_from_checkpoint(backup_location, delete_all_before_store)
     }
 
     /// Delete the database directory
@@ -408,103 +412,6 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use test_case::test_case;
-
-    #[cfg(feature = "rocks_db")]
-    #[test_case("rocksdb"; "rocksdb backup")]
-    fn test_backup(engine: &str) -> Result<(), SableError> {
-        let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from(format!("tests/test_backup_{}.db", engine));
-        let backup_db_path = PathBuf::from(format!("tests/test_backup_{}.db.backup", engine));
-        let _ = fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(true)
-            .set_cache_size(64)
-            .set_path(&db_path);
-        let rocks = crate::storage_rocksdb!(open_params.clone());
-
-        // put some items
-        println!("Populating db...");
-        for i in 0..100_000 {
-            let value = format!("value_string_{}", i);
-            let key = format!("key_{}", i);
-            rocks.put(
-                &BytesMut::from(&key[..]),
-                &BytesMut::from(&value[..]),
-                PutFlags::Override,
-            )?;
-        }
-        println!("Creating backup...");
-        rocks.create_backup(&backup_db_path)?;
-        println!("Creating backup...done");
-        Ok(())
-    }
-
-    #[cfg(feature = "rocks_db")]
-    #[test_case("rocksdb"; "rocksdb backup and restore")]
-    fn test_backup_and_restore(engine: &str) -> Result<(), SableError> {
-        let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from(format!("tests/test_backup_and_restore_{}.db", engine));
-        let backup_db_path = PathBuf::from(format!(
-            "tests/test_backup_and_restore_{}.db.backup",
-            engine
-        ));
-        let _ = fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(true)
-            .set_cache_size(64)
-            .set_path(&db_path);
-        {
-            let rocks = crate::storage_rocksdb!(open_params.clone());
-
-            // put some items
-            println!("Populating db...");
-            for i in 0..1_000 {
-                let value = format!("value_string_{}", i);
-                let key = format!("key_{}", i);
-                rocks.put(
-                    &BytesMut::from(&key[..]),
-                    &BytesMut::from(&value[..]),
-                    PutFlags::Override,
-                )?;
-            }
-            println!("Creating backup...");
-            rocks.create_backup(&backup_db_path)?;
-            println!("Creating backup...done");
-
-            for i in 1_000..2_000 {
-                let value = format!("value_string_{}", i);
-                let key = format!("key_{}", i);
-                rocks.put(
-                    &BytesMut::from(&key[..]),
-                    &BytesMut::from(&value[..]),
-                    PutFlags::Override,
-                )?;
-            }
-            // let everything drop here
-            println!("Creating backup...");
-            rocks.create_backup(&backup_db_path)?;
-            println!("Creating backup...done");
-        }
-
-        // destroy the original db, leaving the backup only
-        StorageAdapter::destory_db(&db_path)?;
-
-        // Restore from backup
-        StorageAdapter::restore_from_backup(&backup_db_path, &db_path)?;
-
-        {
-            // Reopen the database
-            let rocks = crate::storage_rocksdb!(open_params.clone());
-            for i in 0..2_000 {
-                let expected_value = format!("value_string_{}", i);
-                let key = format!("key_{}", i);
-                let value = rocks.get(&BytesMut::from(&key[..]))?;
-                assert!(value.is_some());
-                assert_eq!(String::from_utf8_lossy(&value.unwrap()), expected_value);
-            }
-        }
-        Ok(())
-    }
 
     #[test_case("rocksdb", 100000 ; "put 100,000 items with rocksdb")]
     fn test_persistency(engine: &str, item_count: usize) -> Result<(), SableError> {

@@ -37,7 +37,7 @@ pub struct LockManager {}
 
 #[allow(dead_code)]
 impl LockManager {
-    pub fn lock_multi_internal_keys_exclusive<'a>(keys: &[Rc<BytesMut>]) -> ShardLockGuard<'a> {
+    fn lock_multi_internal_keys_exclusive<'a>(keys: &[Rc<BytesMut>]) -> ShardLockGuard<'a> {
         let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(keys.len());
         // Calculate the slots and sort them
         let mut slots = Vec::<u16>::with_capacity(keys.len());
@@ -101,6 +101,70 @@ impl LockManager {
             primary_keys_refs.push(internal_key);
         }
         Self::lock_multi_internal_keys_exclusive(&primary_keys_refs)
+    }
+
+    /// Lock the entire storage
+    pub fn lock_all_keys_exclusive<'a>() -> ShardLockGuard<'a> {
+        let mut write_locks =
+            Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(crate::utils::SLOT_SIZE.into());
+
+        let mut slots = Vec::<u16>::with_capacity(crate::utils::SLOT_SIZE.into());
+        for slot in 0..crate::utils::SLOT_SIZE {
+            slots.push(slot);
+        }
+
+        // the sorting is required to avoid deadlocks
+        slots.sort();
+        slots.dedup();
+
+        for idx in slots.into_iter() {
+            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+                unreachable!("No lock in index {}", idx);
+            };
+
+            if let Ok(lock) = lock.write() {
+                write_locks.push(lock);
+            } else {
+                panic!("Can't obtain lock for slot: {}", idx);
+            }
+        }
+
+        ShardLockGuard {
+            read_locks: None,
+            write_locks: Some(write_locks),
+        }
+    }
+
+    /// Lock the entire storage
+    pub fn lock_all_keys_shared<'a>() -> ShardLockGuard<'a> {
+        let mut read_locks =
+            Vec::<RwLockReadGuard<'a, u16>>::with_capacity(crate::utils::SLOT_SIZE.into());
+
+        let mut slots = Vec::<u16>::with_capacity(crate::utils::SLOT_SIZE.into());
+        for slot in 0..crate::utils::SLOT_SIZE {
+            slots.push(slot);
+        }
+
+        // the sorting is required to avoid deadlocks
+        slots.sort();
+        slots.dedup();
+
+        for idx in slots.into_iter() {
+            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+                unreachable!("No lock in index {}", idx);
+            };
+
+            if let Ok(lock) = lock.read() {
+                read_locks.push(lock);
+            } else {
+                panic!("Can't obtain lock for slot: {}", idx);
+            }
+        }
+
+        ShardLockGuard {
+            read_locks: Some(read_locks),
+            write_locks: None,
+        }
     }
 
     // Internal API

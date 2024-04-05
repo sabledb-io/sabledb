@@ -13,6 +13,7 @@ type Database = rocksdb::DB;
 
 pub struct StorageRocksDb {
     store: Arc<Database>,
+    path: PathBuf,
     write_opts: rocksdb::WriteOptions,
 }
 
@@ -69,6 +70,7 @@ impl StorageRocksDb {
         Ok(StorageRocksDb {
             store: Arc::new(store),
             write_opts,
+            path: open_params.db_path.clone(),
         })
     }
 
@@ -184,30 +186,66 @@ impl StorageRocksDb {
         Ok(())
     }
 
-    pub fn create_backup(&self, location: &Path) -> Result<(), SableError> {
-        let opts = rocksdb::backup::BackupEngineOptions::new(location)?;
-        let env = rocksdb::Env::new()?;
+    /// Create a consistent checkpoint at `location`
+    /// Note that `location` must not exist, it will be created
+    pub fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
+        let chk_point = rocksdb::checkpoint::Checkpoint::new(&self.store)?;
+        chk_point.create_checkpoint(location)?;
 
-        // create new backup
-        let mut backup_engine = rocksdb::backup::BackupEngine::open(&opts, &env)?;
-        backup_engine.create_new_backup_flush(&self.store, true)?;
-
-        // purge old backups, keeping only the latest backups
-        backup_engine.purge_old_backups(1)?;
+        let sequence_file = location.join("changes.seq");
+        self.write_next_sequence(sequence_file, self.store.latest_sequence_number())?;
         Ok(())
     }
 
-    pub fn restore_from_backup(
+    /// Restore the database from checkpoint database.
+    /// This operation locks the entire database before it starts
+    /// All write operations are stalled during this operation
+    pub fn restore_from_checkpoint(
+        &self,
         backup_location: &PathBuf,
-        db_location: &PathBuf,
+        delete_all_before_store: bool,
     ) -> Result<(), SableError> {
-        let opts = rocksdb::backup::RestoreOptions::default();
-        let backup_opts = rocksdb::backup::BackupEngineOptions::new(backup_location)?;
-        let env = rocksdb::Env::new()?;
+        tracing::info!(
+            "Restoring database from checkpoint: {}",
+            backup_location.display()
+        );
+        let _unused = crate::LockManager::lock_all_keys_shared();
+        tracing::info!("Database is now locked (read-only mode)");
 
-        // create new backup
-        let mut backup_engine = rocksdb::backup::BackupEngine::open(&backup_opts, &env)?;
-        backup_engine.restore_from_latest_backup(db_location, db_location, &opts)?;
+        if delete_all_before_store {
+            // TODO: delete all entries from the database
+        }
+
+        let mut options = rocksdb::Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
+        options.set_log_level(rocksdb::LogLevel::Info);
+        let db_backup = rocksdb::DB::open(&options, backup_location)?;
+
+        let mut iter = db_backup.iterator(rocksdb::IteratorMode::Start);
+        let last_seq = db_backup.latest_sequence_number();
+
+        // Write in batch of 100K
+        let mut updates = rocksdb::WriteBatch::default();
+        let mut updates_counter = 0usize;
+        while let Some(Ok((key, value))) = iter.next() {
+            updates_counter = updates_counter.saturating_add(1);
+            updates.put(key, value);
+            if updates.len() % 100_000 == 0 {
+                self.store.write(updates)?;
+                updates = rocksdb::WriteBatch::default();
+            }
+        }
+
+        // apply the remainders
+        if !updates.is_empty() {
+            self.store.write(updates)?;
+        }
+
+        let sequence_file = self.path.join("changes.seq");
+        tracing::info!("Restore completed. Put {} records", updates_counter);
+        tracing::info!("Last sequence written to db is:{}", last_seq);
+        self.write_next_sequence(sequence_file, last_seq)?;
         Ok(())
     }
 
@@ -285,6 +323,13 @@ impl StorageRocksDb {
             }
         }
         Ok(myiter.storage_updates)
+    }
+
+    /// Write the last sequence number change
+    fn write_next_sequence(&self, sequence_file: PathBuf, last_seq: u64) -> Result<(), SableError> {
+        let content = format!("{}", last_seq);
+        std::fs::write(sequence_file, content)?;
+        Ok(())
     }
 }
 
@@ -413,6 +458,71 @@ mod tests {
 
         // verify that all keys have been visited and removed
         assert!(all_keys.is_empty());
+        Ok(())
+    }
+
+    #[cfg(feature = "rocks_db")]
+    #[test]
+    fn test_checkpoint() -> Result<(), SableError> {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from(format!("tests/test_checkpoint.db"));
+        let backup_db_path = PathBuf::from(format!("tests/test_checkpoint.db.checkpoint"));
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        // checkpoint path must not exist
+        let _ = std::fs::remove_dir_all(backup_db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let db = StorageRocksDb::open(open_params.clone())?;
+
+        // put some items
+        println!("Populating db...");
+        for i in 0..100_000 {
+            let value = format!("value_string_{}", i);
+            let key = format!("key_{}", i);
+            db.put(
+                &BytesMut::from(&key[..]),
+                &BytesMut::from(&value[..]),
+                PutFlags::Override,
+            )?;
+        }
+
+        println!(
+            "Creating backup...{}->{}",
+            db_path.display(),
+            backup_db_path.display()
+        );
+
+        // create a snapshot and drop the database
+        db.create_checkpoint(&backup_db_path)?;
+        drop(db);
+        println!("Success");
+
+        // Delete the db content
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        // Reopen it
+        let db = StorageRocksDb::open(open_params.clone())?;
+
+        // Confirm that all the keys are missing
+        for i in 0..100_000 {
+            let key = format!("key_{}", i);
+            assert!(db.get(&BytesMut::from(&key[..]))?.is_none());
+        }
+
+        println!("Restoring database...");
+        db.restore_from_checkpoint(&backup_db_path, false)?;
+        println!("Success");
+
+        // Confirm that all the keys are present
+        for i in 0..100_000 {
+            let key = format!("key_{}", i);
+            let expected_value = format!("value_string_{}", i);
+            let value = db.get(&BytesMut::from(&key[..]))?.unwrap();
+            assert_eq!(BytesMutUtils::to_string(&value), expected_value);
+        }
+
+        println!("All records restored successfully");
         Ok(())
     }
 }
