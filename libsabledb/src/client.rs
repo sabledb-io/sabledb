@@ -465,7 +465,7 @@ impl Client {
                 StringCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
-            RedisCommandName::Ttl | RedisCommandName::Del => {
+            RedisCommandName::Ttl | RedisCommandName::Del | RedisCommandName::Exists => {
                 GenericCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }

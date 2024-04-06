@@ -64,6 +64,7 @@ pub enum RedisCommandName {
     // Generic commands
     Ttl,
     Del,
+    Exists,
     NotSupported(String),
 }
 
@@ -173,6 +174,7 @@ lazy_static::lazy_static! {
         // generic commands
         ("ttl", CommandMetadata::new(RedisCommandName::Ttl, RedisCommandFlags::Read)),
         ("del", CommandMetadata::new(RedisCommandName::Del, RedisCommandFlags::Write)),
+        ("exists", CommandMetadata::new(RedisCommandName::Exists, RedisCommandFlags::Read)),
     ]);
 }
 

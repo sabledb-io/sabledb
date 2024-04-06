@@ -30,6 +30,9 @@ impl GenericCommands {
             RedisCommandName::Del => {
                 Self::del(client_state, command, response_buffer).await?;
             }
+            RedisCommandName::Exists => {
+                Self::exists(client_state, command, response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non generic command {}",
@@ -126,6 +129,34 @@ impl GenericCommands {
         Ok(())
     }
 
+    /// Returns if key exists.
+    /// The user should be aware that if the same existing key is mentioned in the arguments multiple times,
+    /// it will be counted multiple times. So if somekey exists, EXISTS somekey somekey will return 2.
+    async fn exists(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        // at least 2 items: EXISTS <KEY1> [..]
+        check_args_count!(command, 2, response_buffer);
+
+        let mut iter = command.args_vec().iter();
+        let _ = iter.next(); // skip the first param which is the command name
+        let mut items_found = 0usize;
+        let db_id = client_state.database_id();
+
+        let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+        for user_key in iter {
+            if generic_db.contains(user_key)? {
+                items_found = items_found.saturating_add(1);
+            }
+        }
+
+        let builder = RespBuilderV2::default();
+        builder.number_usize(response_buffer, items_found);
+        Ok(())
+    }
+
     /// Load entry from the database, don't care about the value type
     async fn query_key_type(
         client_state: Rc<ClientState>,
@@ -199,11 +230,21 @@ mod test {
         (vec!["llen", "mylist_1"], ":0\r\n"),
         (vec!["llen", "mylist_2"], ":0\r\n"),
         (vec!["del", "mylist_2"], ":0\r\n"),
-    ]; "test_del")]
-    fn test_del(args_vec: Vec<(Vec<&'static str>, &'static str)>) -> Result<(), SableError> {
+    ], "test_del"; "test_del")]
+    #[test_case(vec![
+        (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
+        (vec!["set", "mykey2", "myvalue1"], "+OK\r\n"),
+        (vec!["exists", "mykey1", "mykey2"], ":2\r\n"),
+        (vec!["exists", "mykey1", "mykey2", "mykey1"], ":3\r\n"),
+        (vec!["exists", "no_such_key", "mykey2", "mykey1"], ":2\r\n"),
+    ], "test_exists"; "test_exists")]
+    fn test_generic_commands(
+        args_vec: Vec<(Vec<&'static str>, &'static str)>,
+        test_name: &str,
+    ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database("test_delete_items_of_various_types").await;
+            let store = open_database(test_name).await;
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
