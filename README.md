@@ -138,17 +138,25 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | del | ✓ |✓ |   |
 | ttl | ✓ |✓ |   |
+| exists | ✓ |✓ |   |
 
-### Other commands
+### Server management commands
 
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
-| info | ✓ |✓ |   |
+| info | ✓ |✓ |  `SableDb` has its own INFO output format |
+| ping | ✓ |✓ |   |
+
+### Connection management commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
 | client id | ✓ |✓ |   |
 | client kill | ✓ |x |  supports: `client kill ID <client-id>` |
 | select | ✓ |✓ |   |
 | ping | ✓ |✓ |   |
 | exists | ✓ |✓ |   |
+
 
 ## Benchmarks
 
