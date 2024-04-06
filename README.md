@@ -92,7 +92,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | incr  | ✓  | ✓  |
 | incrby  | ✓  | ✓  |
 | incrbyfloat  | ✓  | ✓  |
-| lcs  | ✓  | 🗙  | Does not support: `IDX`, `MINMATCHLEN` and `WITHMATCHLEN`  |
+| lcs  | ✓  | x  | Does not support: `IDX`, `MINMATCHLEN` and `WITHMATCHLEN`  |
 | mget  | ✓  | ✓  |
 | mset  | ✓  | ✓  |
 | msetnx  | ✓  | ✓  |
@@ -145,9 +145,10 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | info | ✓ |✓ |   |
 | client id | ✓ |✓ |   |
-| client kill | ✓ |🗙 |  supports: `client kill ID <client-id>` |
+| client kill | ✓ |x |  supports: `client kill ID <client-id>` |
 | select | ✓ |✓ |   |
 | ping | ✓ |✓ |   |
+| exists | ✓ |✓ |   |
 
 ## Benchmarks
 
