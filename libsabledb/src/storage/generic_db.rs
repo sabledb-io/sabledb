@@ -52,6 +52,11 @@ impl<'a> GenericDb<'a> {
         self.put_internal(user_key, value, metadata, put_flags)
     }
 
+    pub fn contains(&self, user_key: &BytesMut) -> Result<bool, SableError> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        Ok(true)
+    }
+
     // =========-------------------------------------------
     // Internal helpers
     // =========-------------------------------------------

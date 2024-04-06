@@ -264,6 +264,14 @@ impl StorageAdapter {
         Ok(())
     }
 
+    /// Check whether `key` exists in the store
+    pub fn contains(&self, key: &BytesMut) -> Result<bool, SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.contains(key)
+    }
+
     /// Similar to delete, but with no app locking
     pub fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
         let Some(db) = &self.store else {
@@ -413,6 +421,21 @@ mod tests {
     use std::path::PathBuf;
     use test_case::test_case;
 
+    fn default_store(name: &str) -> Result<StorageAdapter, SableError> {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from(format!("tests/{}.db", name));
+        let _ = fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(false)
+            .set_cache_size(64)
+            .set_path(&db_path)
+            .set_wal_disabled(true);
+
+        let mut store = StorageAdapter::default();
+        store.open(open_params)?;
+        Ok(store)
+    }
+
     #[test_case("rocksdb", 100000 ; "put 100,000 items with rocksdb")]
     fn test_persistency(engine: &str, item_count: usize) -> Result<(), SableError> {
         let _ = std::fs::create_dir_all("tests");
@@ -457,6 +480,18 @@ mod tests {
         let seq1 = store.generate_id();
         let seq2 = store.generate_id();
         assert!(seq2 > seq1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_contains() -> Result<(), SableError> {
+        let store = default_store("test_contains").unwrap();
+        let k = BytesMut::from("Test Key");
+        let no_such_key = BytesMut::from("No such key");
+        store.put(&k, &BytesMut::from("Some value"), PutFlags::Override)?;
+
+        assert!(store.contains(&k).unwrap() == true);
+        assert!(store.contains(&no_such_key).unwrap() == false);
         Ok(())
     }
 

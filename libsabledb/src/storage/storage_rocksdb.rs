@@ -170,6 +170,16 @@ impl StorageRocksDb {
         }
     }
 
+    /// Check whether `key` exists in the store. This function efficient since it does not copy the value
+    pub fn contains(&self, key: &BytesMut) -> Result<bool, SableError> {
+        Telemetry::inc_total_io_read_calls();
+        let _io_stop_watch = IoDurationStopWatch::default();
+        if let Some(_) = self.store.get_pinned(key)? {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub fn put(
         &self,
         key: &BytesMut,
