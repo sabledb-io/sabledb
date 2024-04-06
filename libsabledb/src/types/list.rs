@@ -2,7 +2,7 @@ use crate::{
     commands::ErrorStrings,
     iter_next_or_prev, list_md_or_null_string, list_or_size_0,
     metadata::PrimaryKeyMetadata,
-    metadata::{CommonValueMetadata, ListValueMetadata},
+    metadata::{CommonValueMetadata, Encoding, ListValueMetadata},
     storage::PutFlags,
     BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, Storable, StorageAdapter, StorageCache,
     U8ArrayBuilder, U8ArrayReader,
@@ -1230,7 +1230,6 @@ pub struct ListItem {
 impl ListItem {
     // SIZE contain only the serialisable items
     pub const SIZE: usize = 4 * std::mem::size_of::<u64>() + std::mem::size_of::<u8>();
-    pub const KEY_LIST_ITEM: u8 = 1u8;
 
     pub fn id(&self) -> u64 {
         self.item_id
@@ -1409,16 +1408,17 @@ impl ListItem {
             std::mem::size_of::<u8>() + std::mem::size_of::<u64>() + std::mem::size_of::<u64>(),
         );
 
-        key.extend_from_slice(&BytesMutUtils::from_u8(&ListItem::KEY_LIST_ITEM));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&list_id));
-        key.extend_from_slice(&BytesMutUtils::from_u64(&item_id));
+        let mut builder = U8ArrayBuilder::with_buffer(&mut key);
+        builder.write_u8(Encoding::KEY_LIST_ITEM);
+        builder.write_u64(list_id);
+        builder.write_u64(item_id);
         key
     }
 
     /// Create list item with a given id and list-id
     pub fn new(list_id: u64, item_id: u64) -> ListItem {
         let mut list_item = ListItem {
-            key_type: ListItem::KEY_LIST_ITEM,
+            key_type: Encoding::KEY_LIST_ITEM,
             list_id: 0,
             item_id: 0,
             prev: 0,

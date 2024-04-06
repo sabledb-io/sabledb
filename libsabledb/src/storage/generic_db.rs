@@ -112,7 +112,7 @@ impl<'a> GenericDb<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{storage::StringsDb, StorageOpenParams, StringValueMetadata};
+    use crate::{metadata::Encoding, storage::StringsDb, StorageOpenParams, StringValueMetadata};
     use std::fs;
     use std::path::PathBuf;
 
@@ -154,7 +154,7 @@ mod tests {
             let max_bound: u64 = i * 10;
             let lower_bound: u64 = max_bound - 1;
             // check that we were able to read the common metadata properly
-            assert_eq!(md.value_type(), CommonValueMetadata::VALUE_STR);
+            assert_eq!(md.value_type(), Encoding::VALUE_STRING);
             assert!(md.expiration().ttl_in_seconds()? <= max_bound);
             assert!(md.expiration().ttl_in_seconds()? >= lower_bound);
 

@@ -5,6 +5,7 @@ use crate::{
     command_arg_at,
     commands::{HandleCommandResult, StringCommands},
     metadata::CommonValueMetadata,
+    metadata::Encoding,
     parse_string_to_number,
     storage::GenericDb,
     types::List,
@@ -64,12 +65,12 @@ impl GenericCommands {
             let key_type =
                 Self::query_key_type(client_state.clone(), command.clone(), user_key).await?;
             match key_type {
-                Some(CommonValueMetadata::VALUE_STR) => {
+                Some(Encoding::VALUE_STRING) => {
                     let generic_db = GenericDb::with_storage(&client_state.store, db_id);
                     generic_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
-                Some(CommonValueMetadata::VALUE_LIST) => {
+                Some(Encoding::VALUE_LIST) => {
                     let list = List::with_storage(&client_state.store, db_id);
                     list.remove(
                         user_key,

@@ -1,9 +1,9 @@
-use crate::{Expiration, SableError, U8ArrayBuilder, U8ArrayReader};
+use crate::{metadata::Encoding, Expiration, SableError, U8ArrayBuilder, U8ArrayReader};
 
 /// Contains information regarding the String type metadata
 #[derive(Clone, Debug)]
 pub struct CommonValueMetadata {
-    value_type: u8,
+    value_encoding: u8,
     /// Value ttl information
     expiration: Expiration,
 }
@@ -11,7 +11,7 @@ pub struct CommonValueMetadata {
 impl Default for CommonValueMetadata {
     fn default() -> Self {
         CommonValueMetadata {
-            value_type: CommonValueMetadata::VALUE_STR,
+            value_encoding: Encoding::VALUE_STRING,
             expiration: Expiration::default(),
         }
     }
@@ -20,12 +20,10 @@ impl Default for CommonValueMetadata {
 #[allow(dead_code)]
 impl CommonValueMetadata {
     pub const SIZE: usize = std::mem::size_of::<u8>() + Expiration::SIZE;
-    pub const VALUE_STR: u8 = 0;
-    pub const VALUE_LIST: u8 = 1;
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.value_type);
+        builder.write_u8(self.value_encoding);
         self.expiration.to_bytes(builder);
     }
 
@@ -36,7 +34,7 @@ impl CommonValueMetadata {
 
         let expiration = Expiration::from_bytes(reader)?;
         Ok(CommonValueMetadata {
-            value_type,
+            value_encoding: value_type,
             expiration,
         })
     }
@@ -50,24 +48,33 @@ impl CommonValueMetadata {
     }
 
     pub fn is_string(&self) -> bool {
-        self.value_type == CommonValueMetadata::VALUE_STR
+        self.value_encoding == Encoding::VALUE_STRING
     }
 
     pub fn is_list(&self) -> bool {
-        self.value_type == CommonValueMetadata::VALUE_LIST
+        self.value_encoding == Encoding::VALUE_LIST
+    }
+
+    pub fn is_hash(&self) -> bool {
+        self.value_encoding == Encoding::VALUE_HASH
     }
 
     pub fn value_type(&self) -> u8 {
-        self.value_type
+        self.value_encoding
     }
 
     pub fn set_string(mut self) -> Self {
-        self.value_type = CommonValueMetadata::VALUE_STR;
+        self.value_encoding = Encoding::VALUE_STRING;
         self
     }
 
     pub fn set_list(mut self) -> Self {
-        self.value_type = CommonValueMetadata::VALUE_LIST;
+        self.value_encoding = Encoding::VALUE_LIST;
+        self
+    }
+
+    pub fn set_hash(mut self) -> Self {
+        self.value_encoding = Encoding::VALUE_HASH;
         self
     }
 }

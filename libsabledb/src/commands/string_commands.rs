@@ -1,4 +1,4 @@
-use crate::{client::ClientState, commands::BaseCommands, storage::StringsDb};
+use crate::{client::ClientState, commands::BaseCommands, metadata::Encoding, storage::StringsDb};
 
 use crate::{
     check_args_count, check_value_type, command_arg_at, command_arg_at_as_str,
@@ -7,8 +7,8 @@ use crate::{
     metadata::ValueTypeIs,
     parse_string_to_number,
     storage::PutFlags,
-    to_number, to_number_ex, BytesMutUtils, CommonValueMetadata, LockManager, RedisCommand,
-    RedisCommandName, RespBuilderV2, SableError, StringUtils, StringValueMetadata, Telemetry,
+    to_number, to_number_ex, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
+    RespBuilderV2, SableError, StringUtils, StringValueMetadata, Telemetry,
 };
 
 use bytes::BytesMut;
@@ -180,7 +180,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
         if let Some((mut value, md)) = strings_db.get(key)? {
             // doing append
-            check_value_type!(md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
 
             value.extend_from_slice(str_to_append);
             strings_db.put(key, &value, &md, PutFlags::Override)?;
@@ -212,7 +212,7 @@ impl StringCommands {
 
         match strings_db.get(key)? {
             Some((value, metadata)) => {
-                check_value_type!(metadata, CommonValueMetadata::VALUE_STR, response_buffer);
+                check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
                 Telemetry::inc_db_hit();
                 builder.bulk_string(response_buffer, &value);
             }
@@ -239,7 +239,7 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
         if let Some((old_value, metadata)) = strings_db.get(key)? {
-            check_value_type!(metadata, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
             builder.bulk_string(response_buffer, &old_value);
 
             // delete the old value
@@ -267,7 +267,7 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
         if let Some((old_value, metadata)) = strings_db.get(key)? {
-            check_value_type!(metadata, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
             builder.bulk_string(response_buffer, &old_value);
         } else {
             builder.null_string(response_buffer);
@@ -299,7 +299,7 @@ impl StringCommands {
         match strings_db.get(key)? {
             Some((value, mut metadata)) => {
                 // ensure the key is of type string
-                check_value_type!(metadata, CommonValueMetadata::VALUE_STR, response_buffer);
+                check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
 
                 Telemetry::inc_db_hit();
                 builder.bulk_string(response_buffer, &value);
@@ -411,7 +411,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
             Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 -1,
@@ -456,7 +456,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
             Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 1,
@@ -503,7 +503,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
             Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 -decrement,
@@ -550,7 +550,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
             Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 decrement,
@@ -603,7 +603,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
             Self::incr_by_internal::<f64>(
                 Some(&old_value),
                 decrement,
@@ -744,7 +744,7 @@ impl StringCommands {
 
         for key in user_keys.iter() {
             if let Some((value, metadata)) = strings_db.get(key)? {
-                if metadata.is_type(CommonValueMetadata::VALUE_STR) {
+                if metadata.is_type(Encoding::VALUE_STRING) {
                     builder.add_bulk_string(response_buffer, &value);
                 } else {
                     // not a string value
@@ -942,7 +942,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         let new_value = if let Some((old_value, md)) = strings_db.get(key)? {
-            check_value_type!(md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
             Self::setrange_internal(key, Some(&old_value), Some(value), offset, response_buffer)
         } else {
             Self::setrange_internal(key, None, Some(value), offset, response_buffer)
@@ -974,7 +974,7 @@ impl StringCommands {
         let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
 
         if let Some((value, md)) = strings_db.get(key)? {
-            check_value_type!(md, CommonValueMetadata::VALUE_STR, response_buffer);
+            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
             builder.number::<usize>(response_buffer, value.len(), false);
         } else {
             builder.number_u64(response_buffer, 0);
@@ -1052,7 +1052,7 @@ impl StringCommands {
 
                 // return the old value?
                 if flags.intersects(SetFlags::ReturnOldValue) {
-                    if !old_metadata.is_type(CommonValueMetadata::VALUE_STR) {
+                    if !old_metadata.is_type(Encoding::VALUE_STRING) {
                         return Ok(SetInternalReturnValue::WrongType);
                     }
                     return_value = Some(old_value);
