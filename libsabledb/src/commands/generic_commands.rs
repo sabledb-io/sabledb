@@ -109,8 +109,6 @@ impl GenericCommands {
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
         let generic_db = GenericDb::with_storage(&client_state.store, client_state.database_id());
-        // even though the key might now be representing a string, it is OK
-        // to use StringsDb here since we don't really care about the value
         if let Some((_, value_metadata)) = generic_db.get(key)? {
             if !value_metadata.expiration().has_ttl() {
                 // No timeout
