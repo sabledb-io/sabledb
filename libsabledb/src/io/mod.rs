@@ -100,8 +100,8 @@ where
 pub struct Archive {}
 
 impl Archive {
-    /// Compress and archive the directory `dir_path` returning the path to the
-    /// newly created compressed archive
+    /// Archive the directory `dir_path` returning the path to the
+    /// newly created archive
     pub fn create(&self, dir_path: &Path) -> Result<PathBuf, SableError> {
         let tar_gz_path = format!("{}.tar", dir_path.display());
         let tar_gz = std::fs::File::create(&tar_gz_path)?;
@@ -112,12 +112,12 @@ impl Archive {
         Ok(PathBuf::from(tar_gz_path))
     }
 
-    /// Extract `src` -> `tar`
+    /// Extract `src` (which is usually a "tar" file) int `target` location (a directory)
     pub fn extract(&self, src: &Path, target: &Path) -> Result<(), SableError> {
         let tar_gz = std::fs::File::open(src)?;
         let mut archive = tar::Archive::new(tar_gz);
         // let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tar_gz));
-        archive.unpack(&target)?;
+        archive.unpack(target)?;
         Ok(())
     }
 }

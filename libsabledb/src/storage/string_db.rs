@@ -12,7 +12,6 @@ pub struct StringsDb<'a> {
     db_id: u16,
 }
 
-#[allow(dead_code)]
 impl<'a> StringsDb<'a> {
     pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
         StringsDb { store, db_id }

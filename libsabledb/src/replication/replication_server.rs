@@ -145,8 +145,8 @@ impl ReplicationServer {
         stream: &mut std::net::TcpStream,
         replica_addr: &String,
     ) -> bool {
-        let mut reader = TcpStreamBytesReader::new(&stream);
-        let mut writer = TcpStreamBytesWriter::new(&stream);
+        let mut reader = TcpStreamBytesReader::new(stream);
+        let mut writer = TcpStreamBytesWriter::new(stream);
 
         tracing::debug!("Waiting for replication request..");
         let req = loop {

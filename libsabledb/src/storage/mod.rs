@@ -2,6 +2,7 @@ mod storage_adapter;
 mod storage_cache;
 mod storage_rocksdb;
 mod string_db;
+mod generic_db;
 
 pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
 pub use crate::storage::storage_adapter::{
