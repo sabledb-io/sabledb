@@ -25,8 +25,35 @@ pub enum HashPutResult {
     WrongType,
     /// Put `usize` elements (usize is > 0)
     Some(usize),
-    /// Put did not update anything
+}
+
+/// `HashDb::get` result
+#[derive(PartialEq, Eq, Debug)]
+pub enum HashGetResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// The results
+    Some(Vec<Option<BytesMut>>),
+    /// No fields were found
     None,
+}
+
+/// `HashDb::delete` result
+#[derive(PartialEq, Eq, Debug)]
+pub enum HashDeleteResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Number of items deleted
+    Some(usize),
+}
+
+/// `HashDb::delete` result
+#[derive(PartialEq, Eq, Debug)]
+pub enum HashLenResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Number of items deleted
+    Some(usize),
 }
 
 enum DeleteHashMetadataResult {
@@ -57,17 +84,13 @@ impl<'a> HashDb<'a> {
     }
 
     /// Sets the specified fields to their respective values in the hash stored at `user_key`
-    /// Returns:
-    /// `HashPutResult::WrongType` - if a key exists in the database but for a different type (e.g. string or list etc)
-    /// `HashPutResult::None` - if number of items to put is empty
-    /// `HashPutResult::Some(N)` - number of fields updated
     pub fn put(
         &self,
         user_key: &BytesMut,
         field_vals: &[(&BytesMut, &BytesMut)],
     ) -> Result<HashPutResult, SableError> {
         if field_vals.is_empty() {
-            return Ok(HashPutResult::None);
+            return Ok(HashPutResult::Some(0));
         }
 
         // locate the hash
@@ -93,21 +116,23 @@ impl<'a> HashDb<'a> {
     }
 
     /// Return the values associated with the provided fields.
-    /// If `fields` is empty, return `None`.
-    /// Otherwise, we return a vector of size `fields.len()` with the values.
-    /// Non existing field, will return a `None` value
     pub fn get(
         &self,
         user_key: &BytesMut,
         fields: &[&BytesMut],
-    ) -> Result<Option<Vec<Option<BytesMut>>>, SableError> {
+    ) -> Result<HashGetResult, SableError> {
         if fields.is_empty() {
-            return Ok(None);
+            return Ok(HashGetResult::None);
         }
 
         // locate the hash
         let hash = match self.get_hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType | GetHashMetadataResult::None => return Ok(None),
+            GetHashMetadataResult::WrongType => {
+                return Ok(HashGetResult::WrongType);
+            }
+            GetHashMetadataResult::None => {
+                return Ok(HashGetResult::None);
+            }
             GetHashMetadataResult::Some(hash) => hash,
         };
 
@@ -116,14 +141,23 @@ impl<'a> HashDb<'a> {
             values.push(self.get_hash_field_value(hash.id(), field)?);
         }
 
-        Ok(Some(values))
+        Ok(HashGetResult::Some(values))
     }
 
     /// Removes the specified fields from the hash stored at `user_key`
-    pub fn delete(&self, user_key: &BytesMut, fields: &[&BytesMut]) -> Result<usize, SableError> {
+    pub fn delete(
+        &self,
+        user_key: &BytesMut,
+        fields: &[&BytesMut],
+    ) -> Result<HashDeleteResult, SableError> {
         // locate the hash
         let mut hash = match self.get_hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType | GetHashMetadataResult::None => return Ok(0usize),
+            GetHashMetadataResult::WrongType => {
+                return Ok(HashDeleteResult::WrongType);
+            }
+            GetHashMetadataResult::None => {
+                return Ok(HashDeleteResult::Some(0));
+            }
             GetHashMetadataResult::Some(hash) => hash,
         };
 
@@ -138,16 +172,21 @@ impl<'a> HashDb<'a> {
         // update the hash metadata
         hash.decr_len_by(items_deleted as u64);
         self.put_hash_metadata(user_key, &hash)?;
-        Ok(items_deleted)
+        Ok(HashDeleteResult::Some(items_deleted))
     }
 
     /// Return the size of the hash
-    pub fn len(&self, user_key: &BytesMut) -> Result<usize, SableError> {
+    pub fn len(&self, user_key: &BytesMut) -> Result<HashLenResult, SableError> {
         let hash = match self.get_hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType | GetHashMetadataResult::None => return Ok(0usize),
+            GetHashMetadataResult::WrongType => {
+                return Ok(HashLenResult::WrongType);
+            }
+            GetHashMetadataResult::None => {
+                return Ok(HashLenResult::Some(0));
+            }
             GetHashMetadataResult::Some(hash) => hash,
         };
-        Ok(hash.len() as usize)
+        Ok(HashLenResult::Some(hash.len() as usize))
     }
 
     ///=======================================================
@@ -308,6 +347,35 @@ mod tests {
     }
 
     #[test]
+    fn test_hash_wrong_type() -> Result<(), SableError> {
+        let db = create_database("test_hash_wrong_type");
+        let hash_db = HashDb::with_storage(&db, 0);
+        let strings_db = crate::storage::StringsDb::with_storage(&db, 0);
+
+        let string_md = crate::StringValueMetadata::default();
+
+        let key = BytesMut::from("key");
+        let value = BytesMut::from("value");
+        strings_db.put(&key, &value, &string_md, PutFlags::Override)?;
+
+        // run a hash operation on a string key
+        assert_eq!(hash_db.len(&key).unwrap(), HashLenResult::WrongType);
+        assert_eq!(
+            hash_db.get(&key, &[&key]).unwrap(),
+            HashGetResult::WrongType
+        );
+        assert_eq!(
+            hash_db.delete(&key, &[&key]).unwrap(),
+            HashDeleteResult::WrongType
+        );
+        assert_eq!(
+            hash_db.put(&key, &[(&key, &key)]).unwrap(),
+            HashPutResult::WrongType
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_hash_db() -> Result<(), SableError> {
         let db = create_database("test_hash_db");
         let hash_db = HashDb::with_storage(&db, 0);
@@ -336,22 +404,25 @@ mod tests {
             HashPutResult::Some(3)
         );
 
-        assert_eq!(hash_db.len(&hash_name).unwrap(), 3);
+        assert_eq!(hash_db.len(&hash_name).unwrap(), HashLenResult::Some(3));
         assert_eq!(
             hash_db
                 .delete(&hash_name, &[&field1, &no_such_field])
                 .unwrap(),
-            1
+            HashDeleteResult::Some(1)
         );
 
-        assert_eq!(hash_db.len(&hash_name).unwrap(), 2);
+        assert_eq!(hash_db.len(&hash_name).unwrap(), HashLenResult::Some(2));
 
         {
             // Check the first hash
-            let results_vec = hash_db
+
+            let HashGetResult::Some(results_vec) = hash_db
                 .get(&hash_name, &[&field1, &no_such_field, &field2, &field3])
                 .unwrap()
-                .unwrap();
+            else {
+                panic!("get failed");
+            };
 
             // non existing fields, will create a `None` value in the result array
             assert_eq!(results_vec.len(), 4);
@@ -365,10 +436,12 @@ mod tests {
         }
         {
             // Confirm that the manipulations on the first hash did not impact the second one
-            let results_vec = hash_db
+            let HashGetResult::Some(results_vec) = hash_db
                 .get(&hash_name_2, &[&field1, &no_such_field, &field2, &field3])
                 .unwrap()
-                .unwrap();
+            else {
+                panic!("get failed");
+            };
 
             // non existing fields, will create a `None` value in the result array
             assert_eq!(results_vec.len(), 4);
@@ -379,7 +452,7 @@ mod tests {
                 let result = results_vec.get(i).unwrap();
                 assert_eq!(result, &expected_values[i]);
             }
-            assert_eq!(hash_db.len(&hash_name_2).unwrap(), 3);
+            assert_eq!(hash_db.len(&hash_name_2).unwrap(), HashLenResult::Some(3));
         }
         Ok(())
     }
