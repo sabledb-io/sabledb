@@ -373,6 +373,11 @@ impl<'a> U8ArrayReader<'a> {
         self.consumed = self.consumed.saturating_add(U8ArrayReader::U64_SIZE);
         Some(u64::from_be_bytes(arr))
     }
+
+    /// Rewind the reader back to the beginning
+    pub fn rewind(&mut self) {
+        self.consumed = 0;
+    }
 }
 
 pub struct U8ArrayBuilder<'a> {

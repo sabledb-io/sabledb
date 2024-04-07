@@ -20,6 +20,7 @@ mod value_metadata;
 pub use encoding::Encoding;
 pub use expiration::Expiration;
 
+pub use hash_value_metadata::{HashFieldKey, HashValueMetadata};
 #[allow(unused_imports)]
 pub use list_value_metadata::ListValueMetadata;
 pub use primary_key_metadata::PrimaryKeyMetadata;

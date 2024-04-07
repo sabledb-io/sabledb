@@ -1,5 +1,6 @@
 use crate::{
-    metadata::CommonValueMetadata, metadata::Encoding, SableError, U8ArrayBuilder, U8ArrayReader,
+    metadata::CommonValueMetadata, metadata::Encoding, Expiration, SableError, U8ArrayBuilder,
+    U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -24,9 +25,12 @@ impl HashValueMetadata {
         }
     }
 
-    /// Return the hash unique ID
-    pub fn id(&self) -> u64 {
-        self.hash_id
+    pub fn expiration(&self) -> &Expiration {
+        self.common.expiration()
+    }
+
+    pub fn expiration_mut(&mut self) -> &mut Expiration {
+        self.common.expiration_mut()
     }
 
     /// Return the number of items owned by this hash
@@ -37,6 +41,20 @@ impl HashValueMetadata {
     /// Equivalent to `len() == 0`
     pub fn is_empty(&self) -> bool {
         self.hash_size.eq(&0u64)
+    }
+
+    /// Return the hash unique ID
+    pub fn id(&self) -> u64 {
+        self.hash_id
+    }
+
+    /// Return the hash unique ID
+    pub fn incr_len_by(&mut self, diff: u64) {
+        self.hash_size = self.hash_size.saturating_add(diff);
+    }
+
+    pub fn decr_len_by(&mut self, diff: u64) {
+        self.hash_size = self.hash_size.saturating_sub(diff);
     }
 
     /// Set the hash ID
@@ -67,19 +85,19 @@ impl HashValueMetadata {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-pub struct HashItemKey {
+pub struct HashFieldKey<'a> {
     kind: u8,
     hash_id: u64,
-    user_key: BytesMut,
+    user_key: &'a [u8],
 }
 
 #[allow(dead_code)]
-impl HashItemKey {
+impl<'a> HashFieldKey<'a> {
     // SIZE contain only the serialisable items
     pub const SIZE: usize = std::mem::size_of::<u8>() + std::mem::size_of::<u64>();
 
-    pub fn with_user_key(hash_id: u64, user_key: BytesMut) -> Self {
-        HashItemKey {
+    pub fn with_user_key(hash_id: u64, user_key: &'a BytesMut) -> Self {
+        HashFieldKey {
             kind: Encoding::KEY_HASH_ITEM,
             hash_id,
             user_key,
@@ -90,18 +108,18 @@ impl HashItemKey {
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         builder.write_u8(self.kind);
         builder.write_u64(self.hash_id);
-        builder.write_bytes(&self.user_key);
+        builder.write_bytes(self.user_key);
     }
 
-    pub fn from_bytes(buff: &BytesMut) -> Result<Self, SableError> {
+    pub fn from_bytes(buff: &'a BytesMut) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buff);
         let kind = reader.read_u8().ok_or(SableError::SerialisationError)?;
         let hash_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let (_, user_key) = buff.split_at(reader.consumed());
-        Ok(HashItemKey {
+        Ok(HashFieldKey {
             kind,
             hash_id,
-            user_key: BytesMut::from(user_key),
+            user_key,
         })
     }
 
@@ -124,15 +142,13 @@ impl HashItemKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BytesMutUtils;
 
     #[test]
     pub fn test_hash_key_serialization() -> Result<(), SableError> {
-        let hash_item_key = HashItemKey::with_user_key(42, BytesMut::from("my_hash_item_key"));
-        assert_eq!(
-            BytesMutUtils::to_string(&hash_item_key.user_key).as_str(),
-            "my_hash_item_key"
-        );
+        let field_key = BytesMut::from("field_key");
+        let hash_item_key = HashFieldKey::with_user_key(42, &field_key);
+        let kk = BytesMut::from(hash_item_key.user_key);
+        assert_eq!(kk, BytesMut::from("field_key"),);
         assert_eq!(hash_item_key.hash_id, 42);
         assert_eq!(hash_item_key.kind, Encoding::KEY_HASH_ITEM);
 
@@ -140,7 +156,7 @@ mod tests {
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         hash_item_key.to_bytes(&mut reader);
 
-        let deserialised = HashItemKey::from_bytes(&buffer).unwrap();
+        let deserialised = HashFieldKey::from_bytes(&buffer).unwrap();
         assert_eq!(deserialised, hash_item_key);
         Ok(())
     }

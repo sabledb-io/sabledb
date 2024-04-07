@@ -1,6 +1,7 @@
 pub mod client;
 pub mod commands;
 pub mod error_codes;
+pub mod io;
 pub mod metadata;
 pub mod replication;
 pub mod request_parser;
@@ -17,7 +18,6 @@ pub mod types;
 pub mod utils;
 pub mod worker;
 pub mod worker_manager;
-pub mod io;
 
 pub use client::Client;
 pub use commands::{
