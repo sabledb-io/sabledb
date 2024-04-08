@@ -1,3 +1,4 @@
+use crate::commands::ErrorStrings;
 #[allow(unused_imports)]
 use crate::{
     check_args_count, check_value_type,
@@ -12,7 +13,6 @@ use crate::{
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
-use crate::{commands::ErrorStrings, U8ArrayReader};
 
 use bytes::BytesMut;
 use std::rc::Rc;
@@ -258,14 +258,14 @@ impl GenericCommands {
                 let num = BytesMutUtils::to_u64(seconds);
                 expiration.set_expire_timestamp_seconds(num)?;
                 generic_db.put_expiration(key, &expiration)?;
+                builder.ok(response_buffer);
+                return Ok(());
             }
             _ => {
                 builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
                 return Ok(());
             }
         }
-        builder.ok(response_buffer);
-        Ok(())
     }
 }
 
