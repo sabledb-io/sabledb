@@ -348,12 +348,6 @@ impl StorageAdapter {
         db.restore_from_checkpoint(backup_location, delete_all_before_store)
     }
 
-    /// Delete the database directory
-    pub fn destory_db(db_location: &PathBuf) -> Result<(), SableError> {
-        std::fs::remove_dir_all(db_location)?;
-        Ok(())
-    }
-
     /// Manually flush any journal to the disk
     pub fn flush_wal(&self) -> Result<(), SableError> {
         let Some(db) = &self.store else {

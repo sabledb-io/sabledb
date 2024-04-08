@@ -1,7 +1,7 @@
 /// A database accessor that does not really care about the value
 use crate::{
-    storage::PutFlags, CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter,
-    U8ArrayBuilder, U8ArrayReader,
+    storage::PutFlags, CommonValueMetadata, Expiration, PrimaryKeyMetadata, SableError,
+    StorageAdapter, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -57,6 +57,28 @@ impl<'a> GenericDb<'a> {
     pub fn contains(&self, user_key: &BytesMut) -> Result<bool, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.store.contains(&internal_key)
+    }
+
+    /// Return the expiration properties of a `user_key`
+    pub fn get_expiration(&self, user_key: &BytesMut) -> Result<Option<Expiration>, SableError> {
+        let Some((_, common_md)) = self.get_internal(user_key)? else {
+            return Ok(None);
+        };
+        Ok(Some(common_md.expiration().clone()))
+    }
+
+    /// Update the expiration properties of `user_key`
+    pub fn put_expiration(
+        &self,
+        user_key: &BytesMut,
+        expiration: &Expiration,
+    ) -> Result<(), SableError> {
+        let Some((value, mut common_md)) = self.get_internal(user_key)? else {
+            return Ok(());
+        };
+
+        *common_md.expiration_mut() = expiration.clone();
+        self.put_internal(user_key, &value, &common_md, PutFlags::Override)
     }
 
     // =========-------------------------------------------
@@ -116,18 +138,21 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    #[test]
-    fn test_generic_db() -> Result<(), SableError> {
+    fn open_database(name: &str) -> StorageAdapter {
         let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from("tests/test_generic_db.db");
+        let db_path = PathBuf::from(format!("tests/{}.db", name));
         let _ = fs::remove_dir_all(db_path.clone());
         let open_params = StorageOpenParams::default()
             .set_compression(false)
             .set_cache_size(64)
             .set_path(&db_path)
             .set_wal_disabled(true);
-        let store = crate::storage_rocksdb!(open_params.clone());
+        crate::storage_rocksdb!(open_params.clone())
+    }
 
+    #[test]
+    fn test_generic_db() -> Result<(), SableError> {
+        let store = open_database("test_generic_db");
         let strings_db = StringsDb::with_storage(&store, 0);
         let generic_db = GenericDb::with_storage(&store, 0);
 
@@ -178,6 +203,34 @@ mod tests {
             assert!(md.expiration().ttl_in_seconds()? >= lower_bound);
             assert_eq!(value, expected_value);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_updating_expiration() -> Result<(), SableError> {
+        let store = open_database("test_updating_expiration");
+        let strings_db = StringsDb::with_storage(&store, 0);
+        let generic_db = GenericDb::with_storage(&store, 0);
+
+        let key = BytesMut::from("key");
+        let value = BytesMut::from("value");
+        let mut md = StringValueMetadata::new();
+
+        // Put some key with expiration values in the database
+        md.expiration_mut().set_ttl_millis(500)?;
+        strings_db.put(&key, &value, &md, PutFlags::Override)?;
+
+        // get the expiration property of the key
+        let mut expiration = generic_db.get_expiration(&key)?.unwrap();
+        assert_eq!(expiration.ttl_ms, 500);
+
+        // update the expiration and confirm that the change persists
+        expiration.set_ttl_millis(750).unwrap();
+        generic_db.put_expiration(&key, &expiration).unwrap();
+
+        let updated_expiration = generic_db.get_expiration(&key)?.unwrap();
+        assert_eq!(updated_expiration.ttl_ms, 750);
+        assert_eq!(updated_expiration, expiration);
         Ok(())
     }
 }
