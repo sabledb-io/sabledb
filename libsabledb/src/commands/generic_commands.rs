@@ -180,6 +180,7 @@ impl GenericCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
+        let builder = RespBuilderV2::default();
         // at least 2 arguments
         check_args_count!(command, 2, response_buffer);
 
@@ -192,7 +193,7 @@ impl GenericCommands {
         let generic_db = GenericDb::with_storage(&client_state.store, db_id);
 
         if !generic_db.contains(key)? {
-            // handle error
+            builder.null_string(response_buffer);
         }
 
         let mut reader = U8ArrayReader::with_buffer(&timeout);
