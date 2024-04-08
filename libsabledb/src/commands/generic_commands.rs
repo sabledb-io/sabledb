@@ -1,3 +1,4 @@
+use crate::U8ArrayReader;
 #[allow(unused_imports)]
 use crate::{
     check_args_count, check_value_type,
@@ -179,6 +180,25 @@ impl GenericCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
+        // at least 2 arguments
+        check_args_count!(command, 2, response_buffer);
+
+        let db_id = client_state.database_id();
+
+        // EXPIRE key seconds
+        let key = command_arg_at!(command, 1);
+        let timeout = command_arg_at!(command, 2);
+
+        let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+
+        if !generic_db.contains(key)? {
+            // handle error
+        }
+
+        let mut reader = U8ArrayReader::with_buffer(&timeout);
+        let expiration = Expiration::from_bytes(&mut reader)?;
+        generic_db.put_expiration(key, &expiration)?;
+
         Ok(())
     }
 }
