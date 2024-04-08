@@ -1,4 +1,3 @@
-use crate::U8ArrayReader;
 #[allow(unused_imports)]
 use crate::{
     check_args_count, check_value_type,
@@ -13,6 +12,7 @@ use crate::{
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
+use crate::{commands::ErrorStrings, U8ArrayReader};
 
 use bytes::BytesMut;
 use std::rc::Rc;
@@ -180,26 +180,98 @@ impl GenericCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
-        let builder = RespBuilderV2::default();
-        // at least 2 arguments
-        check_args_count!(command, 2, response_buffer);
+        // at least 3 arguments
+        check_args_count!(command, 3, response_buffer);
 
         let db_id = client_state.database_id();
-
-        // EXPIRE key seconds
-        let key = command_arg_at!(command, 1);
-        let timeout = command_arg_at!(command, 2);
-
+        let builder = RespBuilderV2::default();
         let generic_db = GenericDb::with_storage(&client_state.store, db_id);
-        if !generic_db.contains(key)? {
-            builder.null_string(response_buffer);
-        }
 
-        let mut reader = U8ArrayReader::with_buffer(&timeout);
-        let expiration = Expiration::from_bytes(&mut reader)?;
-        generic_db.put_expiration(key, &expiration)?;
-        builder.ok(response_buffer);
-        
+        // EXPIRE key seconds [NX | XX | GT | LT]
+        let mut iter = command.args_vec().iter();
+        // skip "expire"
+        iter.next();
+
+        // check the remaining arguments
+        match (iter.next(), iter.next(), iter.next()) {
+            (Some(key), Some(seconds), Some(arg)) => {
+                let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
+                match arg_lowercase.as_str() {
+                    "nx" => {
+                        // NX -- Set expiry only when the key has no expiry
+                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
+                            return Ok(());
+                        };
+                        if !value_metadata.expiration().has_ttl() {
+                            let num = BytesMutUtils::to_u64(seconds);
+                            let mut exp = value_metadata.expiration_mut().clone();
+                            exp.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &exp)?;
+                        }
+                        return Ok(());
+                    }
+                    "xx" => {
+                        // XX -- Set expiry only when the key has an existing expiry
+                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
+                            return Ok(());
+                        };
+                        if value_metadata.expiration().has_ttl() {
+                            let num = BytesMutUtils::to_u64(seconds);
+                            let mut exp = value_metadata.expiration_mut().clone();
+                            exp.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &exp)?;
+                        }
+                        return Ok(());
+                    }
+                    "gt" => {
+                        // GT -- Set expiry only when the new expiry is greater than current one
+                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
+                            return Ok(());
+                        };
+                        if value_metadata.expiration().has_ttl() {
+                            let num = BytesMutUtils::to_u64(seconds);
+                            let mut exp = value_metadata.expiration_mut().clone();
+                            if num > exp.ttl_ms {
+                                exp.set_expire_timestamp_seconds(num)?;
+                                generic_db.put_expiration(key, &exp)?;
+                            }
+                        }
+                    }
+                    "lt" => {
+                        // LT -- Set expiry only when the new expiry is less than current one
+                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
+                            return Ok(());
+                        };
+                        if value_metadata.expiration().has_ttl() {
+                            let num = BytesMutUtils::to_u64(seconds);
+                            let mut exp = value_metadata.expiration_mut().clone();
+                            if num < exp.ttl_ms {
+                                exp.set_expire_timestamp_seconds(num)?;
+                                generic_db.put_expiration(key, &exp)?;
+                            }
+                        }
+                    }
+                    _ => {
+                        // prepare error message to the user
+                        builder.error_string(response_buffer, "...");
+                        return Ok(());
+                    }
+                }
+            }
+            (Some(key), Some(seconds), None) => {
+                if let Some(expiration) = generic_db.get_expiration(key)? {
+                    let mut exp = expiration.clone();
+                    let num = BytesMutUtils::to_u64(seconds);
+                    exp.set_expire_timestamp_seconds(num)?;
+                    generic_db.put_expiration(key, &exp)?;
+                }
+            }
+            _ => {
+                // Anything else is just syntax error (this should be checked against redis output)
+                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
+                return Ok(());
+            }
+        }
         Ok(())
     }
 }
