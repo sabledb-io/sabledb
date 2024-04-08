@@ -68,7 +68,7 @@ impl<'a> GenericDb<'a> {
     }
 
     /// Update the expiration properties of `user_key`
-    pub fn set_expiration(
+    pub fn put_expiration(
         &self,
         user_key: &BytesMut,
         expiration: &Expiration,
@@ -226,7 +226,7 @@ mod tests {
 
         // update the expiration and confirm that the change persists
         expiration.set_ttl_millis(750).unwrap();
-        generic_db.set_expiration(&key, &expiration).unwrap();
+        generic_db.put_expiration(&key, &expiration).unwrap();
 
         let updated_expiration = generic_db.get_expiration(&key)?.unwrap();
         assert_eq!(updated_expiration.ttl_ms, 750);
