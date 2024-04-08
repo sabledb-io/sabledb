@@ -681,7 +681,7 @@ impl ListCommands {
                 return Ok(HandleCommandResult::Completed);
             }
         };
-        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let list = List::with_storage(&client_state.store, client_state.database_id());
         list.linsert(key, element, pivot, response_buffer, flags)?;
         Ok(HandleCommandResult::Completed)

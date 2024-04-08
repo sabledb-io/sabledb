@@ -1,8 +1,8 @@
 use crate::{
     commands::{ClientNextAction, ErrorStrings, HandleCommandResult},
-    ClientCommands, GenericCommands, ListCommands, ParserError, RedisCommand, RedisCommandName,
-    RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState, StorageAdapter,
-    StringCommands, Telemetry,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
+    RedisCommandName, RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState,
+    StorageAdapter, StringCommands, Telemetry,
 };
 
 use bytes::BytesMut;
@@ -521,6 +521,11 @@ impl Client {
             }
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
                 ServerCommands::handle_command(client_state, command, &mut buffer).await?;
+                ClientNextAction::SendResponse(buffer)
+            }
+            // Hash commands
+            RedisCommandName::Hset | RedisCommandName::Hget => {
+                HashCommands::handle_command(client_state, command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             // Misc

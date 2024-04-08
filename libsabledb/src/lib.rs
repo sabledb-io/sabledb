@@ -22,7 +22,7 @@ pub mod worker_manager;
 pub use client::Client;
 pub use commands::{
     ClientCommands, GenericCommands, ListCommands, RedisCommand, RedisCommandName, ServerCommands,
-    StringCommands,
+    StringCommands, HashCommands,
 };
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};

@@ -65,6 +65,9 @@ pub enum RedisCommandName {
     Ttl,
     Del,
     Exists,
+    // Hash commands
+    Hset,
+    Hget,
     NotSupported(String),
 }
 
@@ -175,6 +178,9 @@ lazy_static::lazy_static! {
         ("ttl", CommandMetadata::new(RedisCommandName::Ttl, RedisCommandFlags::Read)),
         ("del", CommandMetadata::new(RedisCommandName::Del, RedisCommandFlags::Write)),
         ("exists", CommandMetadata::new(RedisCommandName::Exists, RedisCommandFlags::Read)),
+        // Hash commands
+        ("hset", CommandMetadata::new(RedisCommandName::Hset, RedisCommandFlags::Write)),
+        ("hget", CommandMetadata::new(RedisCommandName::Hget, RedisCommandFlags::Read)),
     ]);
 }
 

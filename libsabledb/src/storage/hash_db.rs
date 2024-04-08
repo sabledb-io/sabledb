@@ -56,6 +56,7 @@ pub enum HashLenResult {
     Some(usize),
 }
 
+// internal enums
 enum DeleteHashMetadataResult {
     /// Delete succeeded
     Ok,
@@ -65,7 +66,13 @@ enum DeleteHashMetadataResult {
     WrongType,
 }
 
-#[allow(dead_code)]
+enum PutFieldResult {
+    /// Ok...
+    Ok,
+    /// Already exists in hash
+    AlreadyExists,
+}
+
 /// Hash DB wrapper. This class is specialized in reading/writing hash
 /// (commands from the `HSET`, `HLEN` etc family)
 ///
@@ -106,8 +113,10 @@ impl<'a> HashDb<'a> {
         let mut items_added = 0usize;
         for (key, value) in field_vals {
             // we overide the field's value
-            self.put_hash_field_value(hash.id(), key, value)?;
-            items_added = items_added.saturating_add(1);
+            match self.put_hash_field_value(hash.id(), key, value)? {
+                PutFieldResult::AlreadyExists => {}
+                PutFieldResult::Ok => items_added = items_added.saturating_add(1),
+            }
         }
 
         hash.incr_len_by(items_added as u64);
@@ -300,9 +309,13 @@ impl<'a> HashDb<'a> {
         hash_id: u64,
         user_field: &BytesMut,
         user_value: &BytesMut,
-    ) -> Result<(), SableError> {
+    ) -> Result<PutFieldResult, SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        self.store.put(&key, user_value, PutFlags::Override)
+        if self.store.contains(&key)? {
+            return Ok(PutFieldResult::AlreadyExists);
+        }
+        self.store.put(&key, user_value, PutFlags::Override)?;
+        Ok(PutFieldResult::Ok)
     }
 
     /// Given raw bytes (read from the db) return whether it represents a `HashValueMetadata`
