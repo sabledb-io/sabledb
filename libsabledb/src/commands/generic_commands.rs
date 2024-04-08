@@ -255,7 +255,13 @@ impl GenericCommands {
                     Some(expiration) => expiration,
                     None => Expiration::default(),
                 };
-                let num = BytesMutUtils::to_u64(seconds);
+                let Some(num) = BytesMutUtils::parse::<u64>(seconds) else {
+                    builder.error_string(
+                        response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    return Ok(());
+                };
                 expiration.set_expire_timestamp_seconds(num)?;
                 generic_db.put_expiration(key, &expiration)?;
                 builder.ok(response_buffer);
