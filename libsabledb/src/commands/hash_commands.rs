@@ -121,8 +121,14 @@ impl HashCommands {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
                 return Ok(());
             }
-            HashGetResult::Some(items) => items,
+            HashGetResult::Some(items) => {
+                // update telemetries
+                Telemetry::inc_db_hit();
+                items
+            }
             HashGetResult::None => {
+                // update telemetries
+                Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
                 return Ok(());
             }
