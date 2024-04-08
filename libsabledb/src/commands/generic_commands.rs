@@ -196,82 +196,75 @@ impl GenericCommands {
         match (iter.next(), iter.next(), iter.next()) {
             (Some(key), Some(seconds), Some(arg)) => {
                 let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
+                let Some((_, mut value_metadata)) = generic_db.get(key)? else {
+                    builder.number_usize(response_buffer, 0);
+                    return Ok(());
+                };
+
+                let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
+                    builder.error_string(
+                        response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    return Ok(());
+                };
+
+                let exp = value_metadata.expiration_mut();
+
                 match arg_lowercase.as_str() {
                     "nx" => {
                         // NX -- Set expiry only when the key has no expiry
-                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
-                            return Ok(());
-                        };
-                        if !value_metadata.expiration().has_ttl() {
-                            let num = BytesMutUtils::to_u64(seconds);
-                            let mut exp = value_metadata.expiration_mut().clone();
-                            exp.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &exp)?;
-                        }
+                        exp.set_expire_timestamp_seconds(num)?;
+                        generic_db.put_expiration(key, &exp)?;
+                        builder.ok(response_buffer);
                         return Ok(());
                     }
                     "xx" => {
                         // XX -- Set expiry only when the key has an existing expiry
-                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
-                            return Ok(());
-                        };
-                        if value_metadata.expiration().has_ttl() {
-                            let num = BytesMutUtils::to_u64(seconds);
-                            let mut exp = value_metadata.expiration_mut().clone();
-                            exp.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &exp)?;
-                        }
+                        exp.set_expire_timestamp_seconds(num)?;
+                        generic_db.put_expiration(key, &exp)?;
+                        builder.ok(response_buffer);
                         return Ok(());
                     }
                     "gt" => {
                         // GT -- Set expiry only when the new expiry is greater than current one
-                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
-                            return Ok(());
-                        };
-                        if value_metadata.expiration().has_ttl() {
-                            let num = BytesMutUtils::to_u64(seconds);
-                            let mut exp = value_metadata.expiration_mut().clone();
-                            if num > exp.ttl_ms {
-                                exp.set_expire_timestamp_seconds(num)?;
-                                generic_db.put_expiration(key, &exp)?;
-                            }
+                        if num > exp.ttl_ms {
+                            exp.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &exp)?;
                         }
+                        builder.ok(response_buffer);
+                        return Ok(());
                     }
                     "lt" => {
                         // LT -- Set expiry only when the new expiry is less than current one
-                        let Some((_, mut value_metadata)) = generic_db.get(key)? else {
-                            return Ok(());
-                        };
-                        if value_metadata.expiration().has_ttl() {
-                            let num = BytesMutUtils::to_u64(seconds);
-                            let mut exp = value_metadata.expiration_mut().clone();
-                            if num < exp.ttl_ms {
-                                exp.set_expire_timestamp_seconds(num)?;
-                                generic_db.put_expiration(key, &exp)?;
-                            }
+                        if num < exp.ttl_ms {
+                            exp.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &exp)?;
                         }
+                        builder.ok(response_buffer);
+                        return Ok(());
                     }
                     _ => {
-                        // prepare error message to the user
-                        builder.error_string(response_buffer, "...");
+                        builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
                         return Ok(());
                     }
                 }
             }
             (Some(key), Some(seconds), None) => {
-                if let Some(expiration) = generic_db.get_expiration(key)? {
-                    let mut exp = expiration.clone();
-                    let num = BytesMutUtils::to_u64(seconds);
-                    exp.set_expire_timestamp_seconds(num)?;
-                    generic_db.put_expiration(key, &exp)?;
-                }
+                let mut expiration = match generic_db.get_expiration(key)? {
+                    Some(expiration) => expiration,
+                    None => Expiration::default(),
+                };
+                let num = BytesMutUtils::to_u64(seconds);
+                expiration.set_expire_timestamp_seconds(num)?;
+                generic_db.put_expiration(key, &expiration)?;
             }
             _ => {
-                // Anything else is just syntax error (this should be checked against redis output)
                 builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
                 return Ok(());
             }
         }
+        builder.ok(response_buffer);
         Ok(())
     }
 }
