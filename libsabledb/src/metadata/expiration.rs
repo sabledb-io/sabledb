@@ -1,6 +1,6 @@
 use crate::{SableError, TimeUtils, U8ArrayBuilder, U8ArrayReader};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expiration {
     /// last updated, ms since UNIX_EPOCH
     pub last_updated: u64,
