@@ -191,7 +191,6 @@ impl GenericCommands {
         let timeout = command_arg_at!(command, 2);
 
         let generic_db = GenericDb::with_storage(&client_state.store, db_id);
-
         if !generic_db.contains(key)? {
             builder.null_string(response_buffer);
         }
@@ -199,7 +198,8 @@ impl GenericCommands {
         let mut reader = U8ArrayReader::with_buffer(&timeout);
         let expiration = Expiration::from_bytes(&mut reader)?;
         generic_db.put_expiration(key, &expiration)?;
-
+        builder.ok(response_buffer);
+        
         Ok(())
     }
 }
