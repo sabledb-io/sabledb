@@ -135,6 +135,13 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | rpush   | ✓   | ✓  |   |
 | rpushx   | ✓   | ✓   |   |
 
+### Hash commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| hset | ✓ |✓ |   |
+| hget | ✓ |✓ |   |
+
 ### Generic commands
 
 | Command  | Supported  | Fully supported?  | Comment  |
