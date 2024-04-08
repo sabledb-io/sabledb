@@ -65,6 +65,7 @@ pub enum RedisCommandName {
     Ttl,
     Del,
     Exists,
+    Expire,
     NotSupported(String),
 }
 
@@ -175,6 +176,7 @@ lazy_static::lazy_static! {
         ("ttl", CommandMetadata::new(RedisCommandName::Ttl, RedisCommandFlags::Read)),
         ("del", CommandMetadata::new(RedisCommandName::Del, RedisCommandFlags::Write)),
         ("exists", CommandMetadata::new(RedisCommandName::Exists, RedisCommandFlags::Read)),
+        ("expire", CommandMetadata::new(RedisCommandName::Expire, RedisCommandFlags::Write)),
     ]);
 }
 

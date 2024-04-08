@@ -34,6 +34,9 @@ impl GenericCommands {
             RedisCommandName::Exists => {
                 Self::exists(client_state, command, response_buffer).await?;
             }
+            RedisCommandName::Expire => {
+                Self::expire(client_state, command, response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non generic command {}",
@@ -169,6 +172,14 @@ impl GenericCommands {
             return Ok(None);
         };
         Ok(Some(md.value_type()))
+    }
+
+    async fn expire(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        Ok(())
     }
 }
 
