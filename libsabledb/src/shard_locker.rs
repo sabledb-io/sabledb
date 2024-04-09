@@ -18,7 +18,6 @@ struct ShardLocker {
     locks: Vec<RwLock<u16>>,
 }
 
-#[allow(dead_code)]
 impl ShardLocker {
     const SLOT_SIZE: u16 = 16384;
 
@@ -35,7 +34,6 @@ impl ShardLocker {
 
 pub struct LockManager {}
 
-#[allow(dead_code)]
 impl LockManager {
     fn lock_multi_internal_keys_exclusive<'a>(keys: &[Rc<BytesMut>]) -> ShardLockGuard<'a> {
         let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(keys.len());
@@ -218,6 +216,7 @@ impl LockManager {
         }
     }
 
+    #[allow(dead_code)]
     fn noop_lock<'a>() -> ShardLockGuard<'a> {
         ShardLockGuard {
             write_locks: None,

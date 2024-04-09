@@ -1,13 +1,14 @@
 #[allow(unused_imports)]
 use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
-    storage::{PutFlags, StorageTrait},
+    storage::{IterateCallback, PutFlags, StorageTrait},
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
 
 use bytes::BytesMut;
 use num_format::{Locale, ToFormattedString};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 type Database = rocksdb::DB;
@@ -113,41 +114,6 @@ impl StorageRocksDb {
                     .store
                     .put_opt(key.clone(), value.clone(), &self.write_opts);
             }
-        }
-        Ok(())
-    }
-
-    pub fn iterate<F>(&self, prefix: BytesMut, mut callback: F) -> Result<(), SableError>
-    where
-        F: FnMut(BytesMut, BytesMut) -> bool,
-    {
-        let mut iter = self.store.raw_iterator();
-
-        // search our prefix
-        iter.seek(prefix.clone());
-
-        loop {
-            if !iter.valid() {
-                break;
-            }
-
-            // get the key & value
-            let Some(key) = iter.key() else {
-                break;
-            };
-
-            if !key.starts_with(&prefix) {
-                break;
-            }
-
-            let Some(value) = iter.value() else {
-                break;
-            };
-
-            if !callback(BytesMut::from(key), BytesMut::from(value)) {
-                break;
-            }
-            iter.next();
         }
         Ok(())
     }
@@ -330,6 +296,42 @@ impl StorageTrait for StorageRocksDb {
             }
         }
         Ok(myiter.storage_updates)
+    }
+
+    fn iterate(
+        &self,
+        prefix: Rc<BytesMut>,
+        callback: Box<IterateCallback>,
+    ) -> Result<(), SableError> {
+        let mut iter = self.store.raw_iterator();
+
+        // search our prefix
+        iter.seek(prefix.as_ref());
+
+        loop {
+            if !iter.valid() {
+                break;
+            }
+
+            // get the key & value
+            let Some(key) = iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            let Some(value) = iter.value() else {
+                break;
+            };
+
+            if !callback(key, value) {
+                break;
+            }
+            iter.next();
+        }
+        Ok(())
     }
 }
 

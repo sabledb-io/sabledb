@@ -4,6 +4,9 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::path::Path;
+use std::rc::Rc;
+
+pub type IterateCallback = dyn Fn(&[u8], &[u8]) -> bool;
 
 /// Define the database interface
 pub trait StorageTrait {
@@ -51,4 +54,11 @@ pub trait StorageTrait {
         memory_limit: Option<u64>,
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError>;
+    
+    /// Iterate on all keys starting with `prefix` and apply `callback` on them
+    fn iterate(
+        &self,
+        prefix: Rc<BytesMut>,
+        callback: Box<IterateCallback>,
+    ) -> Result<(), SableError>;
 }

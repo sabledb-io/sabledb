@@ -1,4 +1,8 @@
-use crate::{replication::StorageUpdates, storage::StorageTrait, utils, StorageRocksDb};
+use crate::{
+    replication::StorageUpdates,
+    storage::{IterateCallback, StorageTrait},
+    utils, StorageRocksDb,
+};
 
 #[allow(unused_imports)]
 use std::cell::RefCell;
@@ -6,6 +10,7 @@ use std::cell::RefCell;
 use crate::SableError;
 use bytes::BytesMut;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -361,6 +366,18 @@ impl StorageAdapter {
         };
         db.storage_updates_since(sequence_number, memory_limit, changes_count_limit)
     }
+
+    /// Iterate on all items starting with `prefix` and apply `callback` on them
+    pub fn iterate(
+        &self,
+        prefix: Rc<BytesMut>,
+        callback: Box<IterateCallback>,
+    ) -> Result<(), SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.iterate(prefix, callback)
+    }
 }
 
 #[allow(unsafe_code)]
@@ -378,8 +395,10 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::BytesMutUtils;
+    use std::cell::RefCell;
     use std::fs;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use test_case::test_case;
 
     fn default_store(name: &str) -> Result<StorageAdapter, SableError> {
@@ -456,53 +475,60 @@ mod tests {
         Ok(())
     }
 
-    //    #[cfg(feature = "rocks_db")]
-    //    #[test]
-    //    fn test_prefix_iteration() -> Result<(), SableError> {
-    //        let _ = std::fs::create_dir_all("tests");
-    //        let db_path = PathBuf::from("tests/test_prefix.db");
-    //        let _ = fs::remove_dir_all(db_path.clone());
-    //        let open_params = StorageOpenParams::default()
-    //            .set_compression(false)
-    //            .set_cache_size(64)
-    //            .set_path(&db_path)
-    //            .set_wal_disabled(true);
-    //
-    //        let mut store = StorageAdapter::default();
-    //        let _ = store.open(open_params);
-    //        let value = BytesMut::from("string_value");
-    //
-    //        let keys = vec![
-    //            BytesMut::from("1_k1"),
-    //            BytesMut::from("2_k2"),
-    //            BytesMut::from("2_k3"),
-    //            BytesMut::from("1_k4"),
-    //        ];
-    //
-    //        for key in keys.iter() {
-    //            store.put(key, &value, PutFlags::Override)?;
-    //        }
-    //
-    //        let mut result = Vec::<BytesMut>::new();
-    //        let seek_me = BytesMut::from("1");
-    //        let _ = store.iterate(seek_me.clone(), |k, _v| {
-    //            if !k.starts_with(&seek_me) {
-    //                false
-    //            } else {
-    //                result.push(k);
-    //                true
-    //            }
-    //        });
-    //
-    //        assert_eq!(result.len(), 2);
-    //        assert_eq!(
-    //            BytesMutUtils::to_string(result.get(0).unwrap()),
-    //            BytesMutUtils::to_string(keys.get(0).unwrap())
-    //        );
-    //        assert_eq!(
-    //            BytesMutUtils::to_string(result.get(1).unwrap()),
-    //            BytesMutUtils::to_string(keys.get(3).unwrap())
-    //        );
-    //        Ok(())
-    //    }
+    #[test]
+    fn test_prefix_iteration() -> Result<(), SableError> {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_prefix.db");
+        let _ = fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(false)
+            .set_cache_size(64)
+            .set_path(&db_path)
+            .set_wal_disabled(true);
+
+        let mut store = StorageAdapter::default();
+        let _ = store.open(open_params);
+        let value = BytesMut::from("string_value");
+
+        let keys = vec![
+            BytesMut::from("1_k1"),
+            BytesMut::from("2_k2"),
+            BytesMut::from("2_k3"),
+            BytesMut::from("1_k4"),
+        ];
+
+        for key in keys.iter() {
+            store.put(key, &value, PutFlags::Override)?;
+        }
+
+        // Collect the matching keys here
+        let result = Rc::new(RefCell::new(Vec::<BytesMut>::new()));
+
+        // this is a cheap clone
+        let result_clone = result.clone();
+        let seek_me = Rc::new(BytesMut::from("1"));
+
+        let _ = store.iterate(
+            seek_me.clone(),
+            Box::new(move |k, _v| {
+                if !k.starts_with(seek_me.as_ref()) {
+                    false
+                } else {
+                    result_clone.borrow_mut().push(BytesMut::from(k));
+                    true
+                }
+            }),
+        );
+
+        assert_eq!(result.borrow().len(), 2);
+        assert_eq!(
+            BytesMutUtils::to_string(result.borrow().get(0).unwrap()),
+            BytesMutUtils::to_string(keys.get(0).unwrap())
+        );
+        assert_eq!(
+            BytesMutUtils::to_string(result.borrow().get(1).unwrap()),
+            BytesMutUtils::to_string(keys.get(3).unwrap())
+        );
+        Ok(())
+    }
 }
