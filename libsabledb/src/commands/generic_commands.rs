@@ -208,9 +208,9 @@ impl GenericCommands {
             (Some(seconds), Some(arg)) => {
                 let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
 
-                let mut expiration = match generic_db.get_expiration(key)? {
-                    Some(expiration) => expiration,
-                    None => Expiration::default(),
+                let (mut expiration, has_expiration) = match generic_db.get_expiration(key)? {
+                    Some(expiration) => (expiration, true),
+                    None => (Expiration::default(), false),
                 };
 
                 let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
@@ -224,16 +224,24 @@ impl GenericCommands {
                 match arg_lowercase.as_str() {
                     "nx" => {
                         // NX -- Set expiry only when the key has no expiry
-                        expiration.set_expire_timestamp_seconds(num)?;
-                        generic_db.put_expiration(key, &expiration)?;
-                        builder.number_usize(response_buffer, 1);
+                        if !has_expiration {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
                         return Ok(());
                     }
                     "xx" => {
                         // XX -- Set expiry only when the key has an existing expiry
-                        expiration.set_expire_timestamp_seconds(num)?;
-                        generic_db.put_expiration(key, &expiration)?;
-                        builder.number_usize(response_buffer, 1);
+                        if has_expiration {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
                         return Ok(());
                     }
                     "gt" => {
@@ -374,6 +382,12 @@ mod test {
         (vec!["expire", "mykey3", "123", "LT"], ":0\r\n"),
         (vec!["expire", "mykey3", "90", "LT"], ":1\r\n"),
         (vec!["get", "mykey3"], "$-1\r\n"),
+        (vec!["set", "mykey4", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey4", "120", "NX"], ":0\r\n"),
+        (vec!["expire", "mykey4", "120", "XX"], ":1\r\n"),
+        (vec!["set", "mykey5", "myvalue"], "+OK\r\n"),
+        (vec!["expire", "mykey5", "120", "XX"], ":0\r\n"),
+        (vec!["expire", "mykey5", "120", "NX"], ":1\r\n"),
     ], "test_expire"; "test_expire")]
     fn test_generic_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
