@@ -5,6 +5,7 @@ mod storage_cache;
 mod storage_rocksdb;
 mod storage_trait;
 mod string_db;
+mod write_cache;
 
 pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
 pub use crate::storage::storage_adapter::{

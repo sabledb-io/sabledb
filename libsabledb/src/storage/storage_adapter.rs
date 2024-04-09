@@ -245,7 +245,7 @@ impl StorageAdapter {
         PathBuf::from(name)
     }
 
-    /// Similar to get, but with no app locking
+    /// Get a value represented by `key` from the database
     pub fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
@@ -253,7 +253,7 @@ impl StorageAdapter {
         db.get(key)
     }
 
-    /// Similar to put, but with no app locking
+    /// Put a `key` : `value` pair into the database
     pub fn put(
         &self,
         key: &BytesMut,
