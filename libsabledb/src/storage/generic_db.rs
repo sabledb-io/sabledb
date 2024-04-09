@@ -64,9 +64,7 @@ impl<'a> GenericDb<'a> {
         let Some((_, common_md)) = self.get_internal(user_key)? else {
             return Ok(None);
         };
-        let exp = common_md.expiration();
-        println!("{}", exp.);
-        Ok(Some(exp))
+        Ok(Some(common_md.expiration().clone()))
     }
 
     /// Update the expiration properties of `user_key`
