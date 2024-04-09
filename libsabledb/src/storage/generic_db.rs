@@ -231,6 +231,10 @@ mod tests {
         let updated_expiration = generic_db.get_expiration(&key)?.unwrap();
         assert_eq!(updated_expiration.ttl_ms, 750);
         assert_eq!(updated_expiration, expiration);
+
+        // confirm that updating the expiration, does not affect the value
+        let (db_value, _) = strings_db.get(&key)?.unwrap();
+        assert_eq!(db_value, value);
         Ok(())
     }
 }

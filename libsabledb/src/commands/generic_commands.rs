@@ -187,14 +187,14 @@ impl GenericCommands {
         let builder = RespBuilderV2::default();
 
         // EXPIRE key seconds [NX | XX | GT | LT]
-        let mut iter = command.args_vec().iter();
+        let key = command_arg_at!(command, 1);
+        let seconds = command_arg_at!(command, 2);
 
-        // skip "expire"
-        iter.next();
-        let Some(key) = iter.next() else {
+        // Convert into seconds
+        let Some(seconds) = BytesMutUtils::parse::<u64>(seconds) else {
             builder.error_string(
                 response_buffer,
-                "ERR wrong number of arguments for 'expire' command",
+                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             );
             return Ok(());
         };
@@ -203,103 +203,70 @@ impl GenericCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, db_id);
         let generic_db = GenericDb::with_storage(client_state.database(), db_id);
 
-        // check the remaining arguments
-        match (iter.next(), iter.next()) {
-            (Some(seconds), Some(arg)) => {
-                let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
+        // Make sure the key exists in the database
+        let Some(mut expiration) = generic_db.get_expiration(key)? else {
+            builder.number_usize(response_buffer, 0);
+            return Ok(());
+        };
 
-                let mut expiration = match generic_db.get_expiration(key)? {
-                    Some(expiration) => expiration,
-                    None => Expiration::default(),
-                };
+        // If no other param was provided, set the ttl in seconds and leave
+        let Some(arg) = command.arg(3) else {
+            expiration.set_ttl_seconds(seconds)?;
+            generic_db.put_expiration(key, &expiration)?;
+            builder.number_usize(response_buffer, 1);
+            return Ok(());
+        };
 
-                let Some(num) = BytesMutUtils::parse::<u64>(seconds) else {
-                    builder.error_string(
-                        response_buffer,
-                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-                    );
-                    return Ok(());
-                };
-
-                match arg_lowercase.as_str() {
-                    "nx" => {
-                        // NX -- Set expiry only when the key has no expiry
-                        if !expiration.has_ttl() {
-                            expiration.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &expiration)?;
-                            builder.number_usize(response_buffer, 1);
-                        } else {
-                            builder.number_usize(response_buffer, 0);
-                        }
-                        Ok(())
-                    }
-                    "xx" => {
-                        // XX -- Set expiry only when the key has an existing expiry
-                        if expiration.has_ttl() {
-                            expiration.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &expiration)?;
-                            builder.number_usize(response_buffer, 1);
-                        } else {
-                            builder.number_usize(response_buffer, 0);
-                        }
-                        Ok(())
-                    }
-                    "gt" => {
-                        // GT -- Set expiry only when the new expiry is greater than current one
-                        if num > expiration.ttl_in_seconds()? {
-                            expiration.set_expire_timestamp_millis(num)?;
-                            generic_db.put_expiration(key, &expiration)?;
-                            builder.number_usize(response_buffer, 1);
-                        } else {
-                            builder.number_usize(response_buffer, 0);
-                        }
-                        Ok(())
-                    }
-                    "lt" => {
-                        // LT -- Set expiry only when the new expiry is less than current one
-                        if num < expiration.ttl_in_seconds()? {
-                            expiration.set_expire_timestamp_millis(num)?;
-                            generic_db.put_expiration(key, &expiration)?;
-                            builder.number_usize(response_buffer, 1);
-                        } else {
-                            builder.number_usize(response_buffer, 0);
-                        }
-                        Ok(())
-                    }
-                    option => {
-                        builder.error_string(
-                            response_buffer,
-                            format!("ERR Unsupported option {}", option).as_str(),
-                        );
-                        Ok(())
-                    }
+        let arg = BytesMutUtils::to_string(arg).to_lowercase();
+        match arg.as_str() {
+            "nx" => {
+                // NX -- Set expiry only when the key has no expiry
+                if !expiration.has_ttl() {
+                    expiration.set_ttl_seconds(seconds)?;
+                    generic_db.put_expiration(key, &expiration)?;
+                    builder.number_usize(response_buffer, 1);
+                } else {
+                    builder.number_usize(response_buffer, 0);
                 }
             }
-            (Some(seconds), None) => {
-                let mut expiration = match generic_db.get_expiration(key)? {
-                    Some(expiration) => expiration,
-                    None => Expiration::default(),
-                };
-                let Some(num) = BytesMutUtils::parse::<u64>(seconds) else {
-                    builder.error_string(
-                        response_buffer,
-                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-                    );
-                    return Ok(());
-                };
-                expiration.set_expire_timestamp_seconds(num)?;
-                generic_db.put_expiration(key, &expiration)?;
-                builder.number_usize(response_buffer, 1);
-                Ok(())
+            "xx" => {
+                // XX -- Set expiry only when the key has an existing expiry
+                if expiration.has_ttl() {
+                    expiration.set_ttl_seconds(seconds)?;
+                    generic_db.put_expiration(key, &expiration)?;
+                    builder.number_usize(response_buffer, 1);
+                } else {
+                    builder.number_usize(response_buffer, 0);
+                }
             }
-            _ => {
+            "gt" => {
+                // GT -- Set expiry only when the new expiry is greater than current one
+                if seconds > expiration.ttl_in_seconds()? {
+                    expiration.set_ttl_seconds(seconds)?;
+                    generic_db.put_expiration(key, &expiration)?;
+                    builder.number_usize(response_buffer, 1);
+                } else {
+                    builder.number_usize(response_buffer, 0);
+                }
+            }
+            "lt" => {
+                // LT -- Set expiry only when the new expiry is less than current one
+                if seconds < expiration.ttl_in_seconds()? {
+                    expiration.set_ttl_seconds(seconds)?;
+                    generic_db.put_expiration(key, &expiration)?;
+                    builder.number_usize(response_buffer, 1);
+                } else {
+                    builder.number_usize(response_buffer, 0);
+                }
+            }
+            option => {
                 builder.error_string(
                     response_buffer,
-                    "ERR wrong number of arguments for 'expire' command",
+                    format!("ERR Unsupported option {}", option).as_str(),
                 );
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 
@@ -319,36 +286,21 @@ mod test {
     use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::Once;
     use test_case::test_case;
 
-    lazy_static::lazy_static! {
-        static ref INIT: Once = Once::new();
-    }
-
-    async fn initialise_test() {
-        INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/generic_commands");
-            let _ = std::fs::create_dir_all("tests/generic_commands");
-        });
-    }
-
-    /// Initialise the database
-    async fn open_database(command_name: &str) -> StorageAdapter {
-        // Cleanup the previous test folder
-        initialise_test().await;
-
-        // create random file name
-        let db_file = format!("tests/generic_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/generic_commands");
-        let db_path = PathBuf::from(&db_file);
-        let _ = std::fs::remove_dir_all(&db_file);
+    fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
+        let _ = std::fs::create_dir_all("tests/generic_commands/");
+        let db_path = PathBuf::from(format!("tests/generic_commands/{}.db", name));
+        let _ = std::fs::remove_dir_all(db_path.clone());
         let open_params = StorageOpenParams::default()
             .set_compression(false)
             .set_cache_size(64)
             .set_path(&db_path)
             .set_wal_disabled(true);
-        crate::storage_rocksdb!(open_params)
+
+        let mut store = StorageAdapter::default();
+        store.open(open_params)?;
+        Ok(store)
     }
 
     #[test_case(vec![
@@ -373,15 +325,15 @@ mod test {
     #[test_case(vec![
         (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
         (vec!["expire", "mykey1", "100"], ":1\r\n"),
-        (vec!["get", "mykey1"], "$-1\r\n"),
+        (vec!["get", "mykey1"], "$7\r\nmyvalue\r\n"),
         (vec!["set", "mykey2", "myvalue", "EX", "100"], "+OK\r\n"),
         (vec!["expire", "mykey2", "90", "GT"], ":0\r\n"),
         (vec!["expire", "mykey2", "120", "GT"], ":1\r\n"),
-        (vec!["get", "mykey2"], "$-1\r\n"),
+        (vec!["get", "mykey2"], "$7\r\nmyvalue\r\n"),
         (vec!["set", "mykey3", "myvalue", "EX", "100"], "+OK\r\n"),
         (vec!["expire", "mykey3", "123", "LT"], ":0\r\n"),
         (vec!["expire", "mykey3", "90", "LT"], ":1\r\n"),
-        (vec!["get", "mykey3"], "$-1\r\n"),
+        (vec!["get", "mykey3"], "$7\r\nmyvalue\r\n"),
         (vec!["set", "mykey4", "myvalue", "EX", "100"], "+OK\r\n"),
         (vec!["expire", "mykey4", "120", "NX"], ":0\r\n"),
         (vec!["expire", "mykey4", "120", "XX"], ":1\r\n"),
@@ -395,7 +347,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database(test_name).await;
+            let store = open_store(test_name).unwrap();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {

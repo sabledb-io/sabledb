@@ -104,7 +104,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn default_store(name: &str) -> Result<StorageAdapter, SableError> {
+    fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
         let _ = std::fs::create_dir_all("tests");
         let db_path = PathBuf::from(format!("tests/{}.db", name));
         let _ = fs::remove_dir_all(db_path.clone());
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_get_from_cache() {
-        let store = default_store("test_write_cache").unwrap();
+        let store = open_store("test_write_cache").unwrap();
 
         // put some records into the database
         for i in 0..100 {
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_put_cache() {
-        let store = default_store("test_put_cache").unwrap();
+        let store = open_store("test_put_cache").unwrap();
 
         // put some records into the database
         for i in 0..100 {
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_delete_cache() {
-        let store = default_store("test_delete_cache").unwrap();
+        let store = open_store("test_delete_cache").unwrap();
 
         // put some records into the database
         for i in 0..100 {

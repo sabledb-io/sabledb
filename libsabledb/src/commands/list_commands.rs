@@ -872,40 +872,23 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::Once;
     use test_case::test_case;
     use tokio::sync::mpsc::Receiver;
     use tokio::time::Duration;
 
-    lazy_static::lazy_static! {
-        static ref INIT: Once = Once::new();
-    }
-
-    async fn initialise_test() {
-        INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/list_commands");
-            let _ = std::fs::create_dir_all("tests/list_commands");
-        });
-    }
-
-    /// Initialise the database
-    async fn open_database(command_name: &str) -> StorageAdapter {
-        // Cleanup the previous test folder
-        initialise_test().await;
-
-        // create random file name
-        let db_file = format!("tests/list_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/list_commands");
-        let db_path = PathBuf::from(&db_file);
-        let _ = std::fs::remove_dir_all(&db_file);
+    fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
+        let _ = std::fs::create_dir_all("tests/list_commands/");
+        let db_path = PathBuf::from(format!("tests/list_commands/{}.db", name));
+        let _ = std::fs::remove_dir_all(db_path.clone());
         let open_params = StorageOpenParams::default()
             .set_compression(false)
             .set_cache_size(64)
             .set_path(&db_path)
             .set_wal_disabled(true);
+
         let mut store = StorageAdapter::default();
-        let _ = store.open(open_params);
-        store
+        store.open(open_params)?;
+        Ok(store)
     }
 
     #[test_case(vec![
@@ -1132,7 +1115,7 @@ mod tests {
     fn test_list_commands(args_vec: Vec<(Vec<&'static str>, &'static str)>, test_name: &str) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database(test_name).await;
+            let store = open_store(test_name).unwrap();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -1204,7 +1187,7 @@ mod tests {
     fn test_blocking_pop() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database("test_blocking_pop").await;
+            let store = open_store("test_blocking_pop_2").unwrap();
 
             let server = Arc::<ServerState>::default();
             let reader = Client::new(server.clone(), store.clone(), None);
