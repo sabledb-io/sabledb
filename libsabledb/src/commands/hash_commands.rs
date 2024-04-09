@@ -7,7 +7,7 @@ use crate::{
     metadata::CommonValueMetadata,
     metadata::Encoding,
     parse_string_to_number,
-    storage::{GenericDb, HashDb, HashDeleteResult, HashGetResult, HashPutResult},
+    storage::{GenericDb, HashDb, HashDeleteResult, HashGetResult, HashLenResult, HashPutResult},
     types::List,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
@@ -34,6 +34,9 @@ impl HashCommands {
             RedisCommandName::Hdel => {
                 Self::hdel(client_state, command, response_buffer).await?;
             }
+            RedisCommandName::Hlen => {
+                Self::hlen(client_state, command, response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non hash command {}",
@@ -57,7 +60,8 @@ impl HashCommands {
         iter.next(); // skip "hset"
         iter.next(); // skips the key
 
-        let mut field_values = Vec::<(&BytesMut, &BytesMut)>::new();
+        let mut field_values =
+            Vec::<(&BytesMut, &BytesMut)>::with_capacity(command.arg_count().saturating_div(2));
         // hset key <field> <value> [<field><value>..]
         loop {
             let (field, value) = (iter.next(), iter.next());
@@ -162,7 +166,7 @@ impl HashCommands {
         iter.next(); // skips the key
 
         // hdel key <field> <value> [<field><value>..]
-        let mut fields = Vec::<&BytesMut>::new();
+        let mut fields = Vec::<&BytesMut>::with_capacity(command.arg_count().saturating_sub(2));
         for field in iter {
             fields.push(field);
         }
@@ -188,6 +192,31 @@ impl HashCommands {
         };
 
         builder.number_usize(response_buffer, items_put);
+        Ok(())
+    }
+
+    /// Returns the number of fields contained in the hash stored at key
+    async fn hlen(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+
+        // Lock and delete
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let count = match hash_db.len(key)? {
+            HashLenResult::Some(count) => count,
+            HashLenResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+        };
+        builder.number_usize(response_buffer, count);
         Ok(())
     }
 }
@@ -263,6 +292,12 @@ mod test {
         (vec!["hset", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"], ":3\r\n"),
         (vec!["hdel", "myhash", "f1", "f2", "f3"], ":3\r\n"),
     ], "test_hdel"; "test_hdel")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "field1", "value1", "field2", "value2"], ":2\r\n"),
+        (vec!["hlen", "myhash"], ":2\r\n"),
+        (vec!["hlen", "nosuchhash"], ":0\r\n"),
+        (vec!["hlen"], "-ERR wrong number of arguments for 'hlen' command\r\n"),
+    ], "test_hlen"; "test_hlen")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
