@@ -201,7 +201,7 @@ impl GenericCommands {
 
         let db_id = client_state.database_id();
         let _unused = LockManager::lock_user_key_exclusive(key, db_id);
-        let generic_db = GenericDb::with_storage(&client_state.database(), db_id);
+        let generic_db = GenericDb::with_storage(client_state.database(), db_id);
 
         // check the remaining arguments
         match (iter.next(), iter.next()) {
@@ -213,7 +213,7 @@ impl GenericCommands {
                     None => Expiration::default(),
                 };
 
-                let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
+                let Some(num) = BytesMutUtils::parse::<u64>(seconds) else {
                     builder.error_string(
                         response_buffer,
                         ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
@@ -231,7 +231,7 @@ impl GenericCommands {
                         } else {
                             builder.number_usize(response_buffer, 0);
                         }
-                        return Ok(());
+                        Ok(())
                     }
                     "xx" => {
                         // XX -- Set expiry only when the key has an existing expiry
@@ -242,7 +242,7 @@ impl GenericCommands {
                         } else {
                             builder.number_usize(response_buffer, 0);
                         }
-                        return Ok(());
+                        Ok(())
                     }
                     "gt" => {
                         // GT -- Set expiry only when the new expiry is greater than current one
@@ -253,7 +253,7 @@ impl GenericCommands {
                         } else {
                             builder.number_usize(response_buffer, 0);
                         }
-                        return Ok(());
+                        Ok(())
                     }
                     "lt" => {
                         // LT -- Set expiry only when the new expiry is less than current one
@@ -264,14 +264,14 @@ impl GenericCommands {
                         } else {
                             builder.number_usize(response_buffer, 0);
                         }
-                        return Ok(());
+                        Ok(())
                     }
                     option => {
                         builder.error_string(
                             response_buffer,
                             format!("ERR Unsupported option {}", option).as_str(),
                         );
-                        return Ok(());
+                        Ok(())
                     }
                 }
             }
@@ -290,14 +290,14 @@ impl GenericCommands {
                 expiration.set_expire_timestamp_seconds(num)?;
                 generic_db.put_expiration(key, &expiration)?;
                 builder.number_usize(response_buffer, 1);
-                return Ok(());
+                Ok(())
             }
             _ => {
                 builder.error_string(
                     response_buffer,
                     "ERR wrong number of arguments for 'expire' command",
                 );
-                return Ok(());
+                Ok(())
             }
         }
     }
