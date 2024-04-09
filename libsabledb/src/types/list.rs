@@ -47,7 +47,7 @@ enum IterResult {
 #[derive(Debug, Clone)]
 enum InsertResult {
     NotFound,
-    Some(ListItem),
+    Some(()),
 }
 
 enum PosResult {
@@ -1145,8 +1145,8 @@ impl<'a> List<'a> {
         list.set_len(list.len().saturating_add(1));
 
         // store the new element
-        cache.put(new_item.clone());
-        Ok(InsertResult::Some(new_item))
+        cache.put(new_item);
+        Ok(InsertResult::Some(()))
     }
 
     /// ---

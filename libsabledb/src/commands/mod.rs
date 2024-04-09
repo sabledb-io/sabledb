@@ -158,6 +158,7 @@ mod client_commands;
 mod command;
 mod error_strings;
 mod generic_commands;
+mod hash_commands;
 mod list_commands;
 mod server_commands;
 mod string_commands;
@@ -167,7 +168,9 @@ pub use base_commands::BaseCommands;
 pub use client_commands::ClientCommands;
 pub use command::{RedisCommand, RedisCommandName};
 pub use generic_commands::GenericCommands;
+pub use hash_commands::HashCommands;
 pub use list_commands::ListCommands;
 pub use server_commands::ServerCommands;
 pub use string_commands::StringCommands;
+
 use tokio::{sync::mpsc::Receiver, time::Duration};

@@ -1,4 +1,4 @@
-use crate::{replication::StorageUpdates, utils, StorageRocksDb};
+use crate::{replication::StorageUpdates, storage::StorageTrait, utils, StorageRocksDb};
 
 #[allow(unused_imports)]
 use std::cell::RefCell;
@@ -203,8 +203,7 @@ impl BatchUpdate {
 
 #[derive(Clone, Default)]
 pub struct StorageAdapter {
-    #[cfg(feature = "rocks_db")]
-    store: Option<Arc<StorageRocksDb>>,
+    store: Option<Arc<dyn StorageTrait>>,
     open_params: StorageOpenParams,
 }
 
@@ -212,7 +211,6 @@ pub struct StorageAdapter {
 /// replace `RocksDb` in the future with another storage engine
 impl StorageAdapter {
     /// Open the storage
-    #[cfg(feature = "rocks_db")]
     pub fn open(&mut self, open_params: StorageOpenParams) -> Result<(), SableError> {
         tracing::info!("Opening storage type: RocksDb");
         self.open_params = open_params.clone();
@@ -287,37 +285,6 @@ impl StorageAdapter {
         MONOTONIC_COUNTER.fetch_add(1, Ordering::SeqCst)
     }
 
-    #[allow(dead_code)]
-    /// Position an internal iterator on all items starting with `prefix`
-    /// and invoke `callback` on all key/value pairs found.
-    ///
-    /// IMPORTANT: the iteration only sets the lower boundary for iteration
-    /// it is up to the `callback` to check that the items passed to `callback`
-    /// actually starting with `prefix`
-    ///
-    /// ```no_compile
-    ///
-    /// let seek_me = BytesMut::from("1");
-    /// store.iterate(seek_me.clone(), |k, _v| {
-    ///     if k.starts_with(&seek_me) {
-    ///         .. do something with it...
-    ///         true
-    ///     } else {
-    ///         false
-    ///     }
-    /// })?;
-    ///
-    /// ```
-    pub fn iterate<F>(&self, prefix: BytesMut, callback: F) -> Result<(), SableError>
-    where
-        F: FnMut(BytesMut, BytesMut) -> bool,
-    {
-        let Some(db) = &self.store else {
-            return Err(SableError::OtherError("Database is not opened".to_string()));
-        };
-        db.iterate(prefix, callback)
-    }
-
     /// Apply batch update to the database
     pub fn apply_batch(&self, update: &BatchUpdate) -> Result<(), SableError> {
         let Some(db) = &self.store else {
@@ -339,7 +306,7 @@ impl StorageAdapter {
     /// db before starting the restore
     pub fn restore_from_checkpoint(
         &self,
-        backup_location: &PathBuf,
+        backup_location: &Path,
         delete_all_before_store: bool,
     ) -> Result<(), SableError> {
         let Some(db) = &self.store else {
@@ -489,53 +456,53 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "rocks_db")]
-    #[test]
-    fn test_prefix_iteration() -> Result<(), SableError> {
-        let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from("tests/test_prefix.db");
-        let _ = fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-
-        let mut store = StorageAdapter::default();
-        let _ = store.open(open_params);
-        let value = BytesMut::from("string_value");
-
-        let keys = vec![
-            BytesMut::from("1_k1"),
-            BytesMut::from("2_k2"),
-            BytesMut::from("2_k3"),
-            BytesMut::from("1_k4"),
-        ];
-
-        for key in keys.iter() {
-            store.put(key, &value, PutFlags::Override)?;
-        }
-
-        let mut result = Vec::<BytesMut>::new();
-        let seek_me = BytesMut::from("1");
-        let _ = store.iterate(seek_me.clone(), |k, _v| {
-            if !k.starts_with(&seek_me) {
-                false
-            } else {
-                result.push(k);
-                true
-            }
-        });
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            BytesMutUtils::to_string(result.get(0).unwrap()),
-            BytesMutUtils::to_string(keys.get(0).unwrap())
-        );
-        assert_eq!(
-            BytesMutUtils::to_string(result.get(1).unwrap()),
-            BytesMutUtils::to_string(keys.get(3).unwrap())
-        );
-        Ok(())
-    }
+    //    #[cfg(feature = "rocks_db")]
+    //    #[test]
+    //    fn test_prefix_iteration() -> Result<(), SableError> {
+    //        let _ = std::fs::create_dir_all("tests");
+    //        let db_path = PathBuf::from("tests/test_prefix.db");
+    //        let _ = fs::remove_dir_all(db_path.clone());
+    //        let open_params = StorageOpenParams::default()
+    //            .set_compression(false)
+    //            .set_cache_size(64)
+    //            .set_path(&db_path)
+    //            .set_wal_disabled(true);
+    //
+    //        let mut store = StorageAdapter::default();
+    //        let _ = store.open(open_params);
+    //        let value = BytesMut::from("string_value");
+    //
+    //        let keys = vec![
+    //            BytesMut::from("1_k1"),
+    //            BytesMut::from("2_k2"),
+    //            BytesMut::from("2_k3"),
+    //            BytesMut::from("1_k4"),
+    //        ];
+    //
+    //        for key in keys.iter() {
+    //            store.put(key, &value, PutFlags::Override)?;
+    //        }
+    //
+    //        let mut result = Vec::<BytesMut>::new();
+    //        let seek_me = BytesMut::from("1");
+    //        let _ = store.iterate(seek_me.clone(), |k, _v| {
+    //            if !k.starts_with(&seek_me) {
+    //                false
+    //            } else {
+    //                result.push(k);
+    //                true
+    //            }
+    //        });
+    //
+    //        assert_eq!(result.len(), 2);
+    //        assert_eq!(
+    //            BytesMutUtils::to_string(result.get(0).unwrap()),
+    //            BytesMutUtils::to_string(keys.get(0).unwrap())
+    //        );
+    //        assert_eq!(
+    //            BytesMutUtils::to_string(result.get(1).unwrap()),
+    //            BytesMutUtils::to_string(keys.get(3).unwrap())
+    //        );
+    //        Ok(())
+    //    }
 }

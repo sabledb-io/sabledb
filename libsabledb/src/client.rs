@@ -1,8 +1,8 @@
 use crate::{
     commands::{ClientNextAction, ErrorStrings, HandleCommandResult},
-    ClientCommands, GenericCommands, ListCommands, ParserError, RedisCommand, RedisCommandName,
-    RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState, StorageAdapter,
-    StringCommands, Telemetry,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
+    RedisCommandName, RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState,
+    StorageAdapter, StringCommands, Telemetry,
 };
 
 use bytes::BytesMut;
@@ -43,8 +43,8 @@ fn new_client_id() -> u128 {
 
 pub struct ClientState {
     server_state: Arc<ServerState>,
-    pub store: StorageAdapter,
-    pub client_id: u128,
+    store: StorageAdapter,
+    client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     db_id: AtomicU16,
     attributes: RwLock<HashMap<String, String>>,
@@ -67,6 +67,14 @@ pub enum WaitResult {
 }
 
 impl ClientState {
+    pub fn database(&self) -> &StorageAdapter {
+        &self.store
+    }
+
+    pub fn id(&self) -> u128 {
+        self.client_id
+    }
+
     pub fn server_inner_state(&self) -> Arc<ServerState> {
         self.server_state.clone()
     }
@@ -524,6 +532,11 @@ impl Client {
             }
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
                 ServerCommands::handle_command(client_state, command, &mut buffer).await?;
+                ClientNextAction::SendResponse(buffer)
+            }
+            // Hash commands
+            RedisCommandName::Hset | RedisCommandName::Hget => {
+                HashCommands::handle_command(client_state, command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }
             // Misc

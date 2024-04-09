@@ -71,7 +71,7 @@ impl ClientCommands {
                 builder.ok(response_buffer);
             }
             "id" => {
-                builder.number::<u128>(response_buffer, client_state.client_id, false);
+                builder.number::<u128>(response_buffer, client_state.id(), false);
             }
             "kill" => {
                 check_args_count!(command, 4, response_buffer);
@@ -241,7 +241,7 @@ mod tests {
             let client1 = Client::new(Arc::<ServerState>::default(), store.clone(), None);
             let client2 = Client::new(Arc::<ServerState>::default(), store, None);
 
-            let client1_id = format!("{}", client1.inner().client_id);
+            let client1_id = format!("{}", client1.inner().id());
             let kill_command = Rc::new(
                 RedisCommand::new(vec![
                     BytesMut::from("client"),
