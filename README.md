@@ -143,6 +143,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | hget | ✓ |✓ |   |
 | hdel | ✓ |✓ |   |
 | hlen | ✓ |✓ |   |
+| hlen | ✓ |✓ |   |
 
 ### Generic commands
 
@@ -151,6 +152,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | del | ✓ |✓ |   |
 | ttl | ✓ |✓ |   |
 | exists | ✓ |✓ |   |
+| expire | ✓ |✓ |   |
 
 ### Server management commands
 
@@ -169,7 +171,6 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | client kill | ✓ |x |  supports: `client kill ID <client-id>` |
 | select | ✓ |✓ |   |
 | ping | ✓ |✓ |   |
-| exists | ✓ |✓ |   |
 
 
 ## Benchmarks
