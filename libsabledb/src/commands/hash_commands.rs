@@ -7,7 +7,7 @@ use crate::{
     metadata::CommonValueMetadata,
     metadata::Encoding,
     parse_string_to_number,
-    storage::{GenericDb, HashDb, HashGetResult, HashPutResult},
+    storage::{GenericDb, HashDb, HashDeleteResult, HashGetResult, HashPutResult},
     types::List,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
@@ -30,6 +30,9 @@ impl HashCommands {
             }
             RedisCommandName::Hget => {
                 Self::hget(client_state, command, response_buffer).await?;
+            }
+            RedisCommandName::Hdel => {
+                Self::hdel(client_state, command, response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -142,6 +145,51 @@ impl HashCommands {
         }
         Ok(())
     }
+
+    /// Removes the specified fields from the hash stored at key. Specified fields that do not exist within this hash
+    /// are ignored. If key does not exist, it is treated as an empty hash and this command returns 0
+    async fn hdel(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // skip "hset"
+        iter.next(); // skips the key
+
+        // hdel key <field> <value> [<field><value>..]
+        let mut fields = Vec::<&BytesMut>::new();
+        while let Some(field) = iter.next() {
+            fields.push(field);
+        }
+
+        if fields.is_empty() {
+            builder.error_string(
+                response_buffer,
+                "ERR wrong number of arguments for 'hdel' command",
+            );
+            return Ok(());
+        }
+
+        // Lock and delete
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let items_put = match hash_db.delete(key, &fields)? {
+            HashDeleteResult::Some(count) => count,
+            HashDeleteResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+        };
+
+        builder.number_usize(response_buffer, items_put);
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -206,6 +254,15 @@ mod test {
         (vec!["hget", "myhash", "field2"], "$6\r\nvalue2\r\n"),
         (vec!["hget", "myhash", "nosuchfield"], "$-1\r\n"),
     ], "test_hget"; "test_hget")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "field1", "value1", "field2", "value2"], ":2\r\n"),
+        (vec!["hdel", "myhash1"], "-ERR wrong number of arguments for 'hdel' command\r\n"),
+        (vec!["hdel", "myhash"], "-ERR wrong number of arguments for 'hdel' command\r\n"),
+        (vec!["hdel", "nosuchhash", "field1"], ":0\r\n"),
+        (vec!["hdel", "myhash", "field1", "field1", "field1"], ":1\r\n"),
+        (vec!["hset", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"], ":3\r\n"),
+        (vec!["hdel", "myhash", "f1", "f2", "f3"], ":3\r\n"),
+    ], "test_hdel"; "test_hdel")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

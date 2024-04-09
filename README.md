@@ -141,6 +141,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | hset | ✓ |✓ |   |
 | hget | ✓ |✓ |   |
+| hdel | ✓ |✓ |   |
 
 ### Generic commands
 
@@ -156,6 +157,8 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | info | ✓ |✓ |  `SableDb` has its own INFO output format |
 | ping | ✓ |✓ |   |
+| replicaof | ✓ |✓ |   |
+| slaveof | ✓ |✓ |   |
 
 ### Connection management commands
 

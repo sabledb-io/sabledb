@@ -54,7 +54,7 @@ pub trait StorageTrait {
         memory_limit: Option<u64>,
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError>;
-    
+
     /// Iterate on all keys starting with `prefix` and apply `callback` on them
     fn iterate(
         &self,

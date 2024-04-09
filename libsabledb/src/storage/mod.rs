@@ -11,10 +11,10 @@ pub use crate::storage::storage_adapter::{
     BatchUpdate, PutFlags, StorageAdapter, StorageOpenParams,
 };
 pub use generic_db::GenericDb;
-pub use hash_db::{HashDb, HashGetResult, HashPutResult};
+pub use hash_db::{HashDb, HashDeleteResult, HashGetResult, HashPutResult};
 pub use storage_cache::{Storable, StorageCache};
 pub use storage_rocksdb::StorageRocksDb;
-pub use storage_trait::{StorageTrait, IterateCallback};
+pub use storage_trait::{IterateCallback, StorageTrait};
 pub use string_db::StringsDb;
 
 #[macro_export]
