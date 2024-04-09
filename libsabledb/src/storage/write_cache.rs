@@ -56,6 +56,15 @@ impl<'a> DbWriteCache<'a> {
         Ok(())
     }
 
+    /// Return true if `key` exists in the cache or in the underlying storage
+    pub fn contains(&self, key: BytesMut) -> Result<bool, SableError> {
+        if let Some(value) = self.changes.get(&key) {
+            Ok(value.is_some())
+        } else {
+            self.store.contains(&key)
+        }
+    }
+
     /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
     /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
     /// this means that it was deleted, so return a `None` as well
@@ -172,6 +181,20 @@ mod tests {
 
         assert_eq!(updates.items_to_put().unwrap().len(), 10);
         assert!(updates.keys_to_delete().is_none());
+    }
+
+    #[test]
+    fn test_contains_cache() {
+        let store = open_store("test_contains_cache").unwrap();
+        let key = BytesMut::from("key");
+        let value = BytesMut::from("value");
+        store.put(&key, &value, PutFlags::Override).unwrap();
+
+        let db_cache = DbWriteCache::with_storage(&store);
+        assert!(db_cache.contains(key).unwrap());
+
+        let no_such_key = BytesMut::from("no_such_key");
+        assert!(!db_cache.contains(no_such_key).unwrap());
     }
 
     #[test]
