@@ -364,14 +364,16 @@ mod test {
     ], "test_exists"; "test_exists")]
     #[test_case(vec![
         (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
-        (vec!["expire", "mykey1", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "100"], ":1\r\n"),
         (vec!["get", "mykey1"], "$-1\r\n"),
-        (vec!["expire", "mykey1", "110", "nx"], ":1\r\n"),
-        (vec!["expire", "mykey1", "110", "xx"], ":1\r\n"),
-        (vec!["expire", "mykey1", "10", "gt"], ":0\r\n"),
-        (vec!["expire", "mykey1", "200", "gt"], ":1\r\n"),
-        (vec!["expire", "mykey1", "220", "lt"], ":0\r\n"),
-        (vec!["expire", "mykey1", "20", "lt"], ":1\r\n"),
+        (vec!["set", "mykey2", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey2", "90", "GT"], ":0\r\n"),
+        (vec!["expire", "mykey2", "120", "GT"], ":1\r\n"),
+        (vec!["get", "mykey2"], "$-1\r\n"),
+        (vec!["set", "mykey3", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey3", "123", "LT"], ":0\r\n"),
+        (vec!["expire", "mykey3", "90", "LT"], ":1\r\n"),
+        (vec!["get", "mykey3"], "$-1\r\n"),
     ], "test_expire"; "test_expire")]
     fn test_generic_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
