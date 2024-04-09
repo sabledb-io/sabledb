@@ -1,3 +1,4 @@
+use crate::commands::ErrorStrings;
 #[allow(unused_imports)]
 use crate::{
     check_args_count, check_value_type,
@@ -33,6 +34,9 @@ impl GenericCommands {
             }
             RedisCommandName::Exists => {
                 Self::exists(client_state, command, response_buffer).await?;
+            }
+            RedisCommandName::Expire => {
+                Self::expire(client_state, command, response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -172,6 +176,131 @@ impl GenericCommands {
         };
         Ok(Some(md.value_type()))
     }
+
+    async fn expire(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        // at least 3 arguments
+        check_args_count!(command, 3, response_buffer);
+        let builder = RespBuilderV2::default();
+
+        // EXPIRE key seconds [NX | XX | GT | LT]
+        let mut iter = command.args_vec().iter();
+
+        // skip "expire"
+        iter.next();
+        let Some(key) = iter.next() else {
+            builder.error_string(
+                response_buffer,
+                "ERR wrong number of arguments for 'expire' command",
+            );
+            return Ok(());
+        };
+
+        let db_id = client_state.database_id();
+        let _unused = LockManager::lock_user_key_exclusive(key, db_id);
+        let generic_db = GenericDb::with_storage(&client_state.database(), db_id);
+
+        // check the remaining arguments
+        match (iter.next(), iter.next()) {
+            (Some(seconds), Some(arg)) => {
+                let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
+
+                let mut expiration = match generic_db.get_expiration(key)? {
+                    Some(expiration) => expiration,
+                    None => Expiration::default(),
+                };
+
+                let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
+                    builder.error_string(
+                        response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    return Ok(());
+                };
+
+                match arg_lowercase.as_str() {
+                    "nx" => {
+                        // NX -- Set expiry only when the key has no expiry
+                        if !expiration.has_ttl() {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
+                        return Ok(());
+                    }
+                    "xx" => {
+                        // XX -- Set expiry only when the key has an existing expiry
+                        if expiration.has_ttl() {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
+                        return Ok(());
+                    }
+                    "gt" => {
+                        // GT -- Set expiry only when the new expiry is greater than current one
+                        if num > expiration.ttl_in_seconds()? {
+                            expiration.set_expire_timestamp_millis(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
+                        return Ok(());
+                    }
+                    "lt" => {
+                        // LT -- Set expiry only when the new expiry is less than current one
+                        if num < expiration.ttl_in_seconds()? {
+                            expiration.set_expire_timestamp_millis(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.number_usize(response_buffer, 1);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
+                        }
+                        return Ok(());
+                    }
+                    option => {
+                        builder.error_string(
+                            response_buffer,
+                            format!("ERR Unsupported option {}", option).as_str(),
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            (Some(seconds), None) => {
+                let mut expiration = match generic_db.get_expiration(key)? {
+                    Some(expiration) => expiration,
+                    None => Expiration::default(),
+                };
+                let Some(num) = BytesMutUtils::parse::<u64>(seconds) else {
+                    builder.error_string(
+                        response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    return Ok(());
+                };
+                expiration.set_expire_timestamp_seconds(num)?;
+                generic_db.put_expiration(key, &expiration)?;
+                builder.number_usize(response_buffer, 1);
+                return Ok(());
+            }
+            _ => {
+                builder.error_string(
+                    response_buffer,
+                    "ERR wrong number of arguments for 'expire' command",
+                );
+                return Ok(());
+            }
+        }
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -241,6 +370,25 @@ mod test {
         (vec!["exists", "mykey1", "mykey2", "mykey1"], ":3\r\n"),
         (vec!["exists", "no_such_key", "mykey2", "mykey1"], ":2\r\n"),
     ], "test_exists"; "test_exists")]
+    #[test_case(vec![
+        (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "100"], ":1\r\n"),
+        (vec!["get", "mykey1"], "$-1\r\n"),
+        (vec!["set", "mykey2", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey2", "90", "GT"], ":0\r\n"),
+        (vec!["expire", "mykey2", "120", "GT"], ":1\r\n"),
+        (vec!["get", "mykey2"], "$-1\r\n"),
+        (vec!["set", "mykey3", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey3", "123", "LT"], ":0\r\n"),
+        (vec!["expire", "mykey3", "90", "LT"], ":1\r\n"),
+        (vec!["get", "mykey3"], "$-1\r\n"),
+        (vec!["set", "mykey4", "myvalue", "EX", "100"], "+OK\r\n"),
+        (vec!["expire", "mykey4", "120", "NX"], ":0\r\n"),
+        (vec!["expire", "mykey4", "120", "XX"], ":1\r\n"),
+        (vec!["set", "mykey5", "myvalue"], "+OK\r\n"),
+        (vec!["expire", "mykey5", "120", "XX"], ":0\r\n"),
+        (vec!["expire", "mykey5", "120", "NX"], ":1\r\n"),
+    ], "test_expire"; "test_expire")]
     fn test_generic_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

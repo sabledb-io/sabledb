@@ -65,6 +65,7 @@ pub enum RedisCommandName {
     Ttl,
     Del,
     Exists,
+    Expire,
     // Hash commands
     Hset,
     Hget,
@@ -131,7 +132,7 @@ lazy_static::lazy_static! {
         ("incr", CommandMetadata::new(RedisCommandName::Incr, RedisCommandFlags::Write)),
         ("incrby", CommandMetadata::new(RedisCommandName::IncrBy, RedisCommandFlags::Write)),
         ("incrbyfloat", CommandMetadata::new(RedisCommandName::IncrByFloat, RedisCommandFlags::Write)),
-        ("set", CommandMetadata::new(RedisCommandName::Set, RedisCommandFlags::Write)),
+    ("set", CommandMetadata::new(RedisCommandName::Set, RedisCommandFlags::Write)),
         ("get", CommandMetadata::new(RedisCommandName::Get, RedisCommandFlags::Read)),
         ("getdel", CommandMetadata::new(RedisCommandName::GetDel, RedisCommandFlags::Write)),
         ("getset", CommandMetadata::new(RedisCommandName::GetSet, RedisCommandFlags::Write)),
@@ -180,6 +181,7 @@ lazy_static::lazy_static! {
         ("ttl", CommandMetadata::new(RedisCommandName::Ttl, RedisCommandFlags::Read)),
         ("del", CommandMetadata::new(RedisCommandName::Del, RedisCommandFlags::Write)),
         ("exists", CommandMetadata::new(RedisCommandName::Exists, RedisCommandFlags::Read)),
+        ("expire", CommandMetadata::new(RedisCommandName::Expire, RedisCommandFlags::Write)),
         // Hash commands
         ("hset", CommandMetadata::new(RedisCommandName::Hset, RedisCommandFlags::Write)),
         ("hget", CommandMetadata::new(RedisCommandName::Hget, RedisCommandFlags::Read)),
