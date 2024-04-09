@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
-    storage::PutFlags,
+    storage::{PutFlags, StorageTrait},
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
 
@@ -117,13 +117,57 @@ impl StorageRocksDb {
         Ok(())
     }
 
+    pub fn iterate<F>(&self, prefix: BytesMut, mut callback: F) -> Result<(), SableError>
+    where
+        F: FnMut(BytesMut, BytesMut) -> bool,
+    {
+        let mut iter = self.store.raw_iterator();
+
+        // search our prefix
+        iter.seek(prefix.clone());
+
+        loop {
+            if !iter.valid() {
+                break;
+            }
+
+            // get the key & value
+            let Some(key) = iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            let Some(value) = iter.value() else {
+                break;
+            };
+
+            if !callback(BytesMut::from(key), BytesMut::from(value)) {
+                break;
+            }
+            iter.next();
+        }
+        Ok(())
+    }
+
+    /// Write the last sequence number change
+    fn write_next_sequence(&self, sequence_file: PathBuf, last_seq: u64) -> Result<(), SableError> {
+        let content = format!("{}", last_seq);
+        std::fs::write(sequence_file, content)?;
+        Ok(())
+    }
+}
+
+impl StorageTrait for StorageRocksDb {
     /// Manually flushes the WAL files to the disk
-    pub fn flush_wal(&self) -> Result<(), SableError> {
+    fn flush_wal(&self) -> Result<(), SableError> {
         self.store.flush_wal(false)?;
         Ok(())
     }
 
-    pub fn apply_batch(&self, update: &BatchUpdate) -> Result<(), SableError> {
+    fn apply_batch(&self, update: &BatchUpdate) -> Result<(), SableError> {
         let mut updates = rocksdb::WriteBatch::default();
         if let Some(keys) = update.keys_to_delete() {
             for k in keys.iter() {
@@ -143,7 +187,7 @@ impl StorageRocksDb {
         Ok(())
     }
 
-    pub fn flush(&self) -> Result<(), SableError> {
+    fn flush(&self) -> Result<(), SableError> {
         // measure time spent doing IO
         let _io_stop_watch = IoDurationStopWatch::default();
         Telemetry::inc_total_io_write_calls();
@@ -151,15 +195,7 @@ impl StorageRocksDb {
         Ok(())
     }
 
-    pub fn clear(&self) -> Result<(), SableError> {
-        // measure time spent doing IO
-        let _io_stop_watch = IoDurationStopWatch::default();
-        Telemetry::inc_total_io_write_calls();
-        //self.store.d()?;
-        Ok(())
-    }
-
-    pub fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
+    fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
         Telemetry::inc_total_io_read_calls();
         let _io_stop_watch = IoDurationStopWatch::default();
         let raw_value = self.store.get(key)?;
@@ -171,22 +207,17 @@ impl StorageRocksDb {
     }
 
     /// Check whether `key` exists in the store. This function efficient since it does not copy the value
-    pub fn contains(&self, key: &BytesMut) -> Result<bool, SableError> {
+    fn contains(&self, key: &BytesMut) -> Result<bool, SableError> {
         Telemetry::inc_total_io_read_calls();
         let _io_stop_watch = IoDurationStopWatch::default();
         Ok((self.store.get_pinned(key)?).is_some())
     }
 
-    pub fn put(
-        &self,
-        key: &BytesMut,
-        value: &BytesMut,
-        put_flags: PutFlags,
-    ) -> Result<(), SableError> {
+    fn put(&self, key: &BytesMut, value: &BytesMut, put_flags: PutFlags) -> Result<(), SableError> {
         self.put_internal(key, value, put_flags)
     }
 
-    pub fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
+    fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
         // measure time spent doing IO
         Telemetry::inc_total_io_write_calls();
         let _io_stop_watch = IoDurationStopWatch::default();
@@ -196,7 +227,7 @@ impl StorageRocksDb {
 
     /// Create a consistent checkpoint at `location`
     /// Note that `location` must not exist, it will be created
-    pub fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
+    fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
         let chk_point = rocksdb::checkpoint::Checkpoint::new(&self.store)?;
         chk_point.create_checkpoint(location)?;
 
@@ -208,9 +239,9 @@ impl StorageRocksDb {
     /// Restore the database from checkpoint database.
     /// This operation locks the entire database before it starts
     /// All write operations are stalled during this operation
-    pub fn restore_from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
-        backup_location: &PathBuf,
+        backup_location: &Path,
         delete_all_before_store: bool,
     ) -> Result<(), SableError> {
         tracing::info!(
@@ -260,46 +291,11 @@ impl StorageRocksDb {
         Ok(())
     }
 
-    pub fn iterate<F>(&self, prefix: BytesMut, mut callback: F) -> Result<(), SableError>
-    where
-        F: FnMut(BytesMut, BytesMut) -> bool,
-    {
-        let mut iter = self.store.raw_iterator();
-
-        // search our prefix
-        iter.seek(prefix.clone());
-
-        loop {
-            if !iter.valid() {
-                break;
-            }
-
-            // get the key & value
-            let Some(key) = iter.key() else {
-                break;
-            };
-
-            if !key.starts_with(&prefix) {
-                break;
-            }
-
-            let Some(value) = iter.value() else {
-                break;
-            };
-
-            if !callback(BytesMut::from(key), BytesMut::from(value)) {
-                break;
-            }
-            iter.next();
-        }
-        Ok(())
-    }
-
     /// Return all changes since the requested `sequence_number`
     /// If not `None`, `memory_limit` sets the limit for the
     /// memory (in bytes) that a single change since message can
     /// return
-    pub fn storage_updates_since(
+    fn storage_updates_since(
         &self,
         sequence_number: u64,
         memory_limit: Option<u64>,
@@ -334,13 +330,6 @@ impl StorageRocksDb {
             }
         }
         Ok(myiter.storage_updates)
-    }
-
-    /// Write the last sequence number change
-    fn write_next_sequence(&self, sequence_file: PathBuf, last_seq: u64) -> Result<(), SableError> {
-        let content = format!("{}", last_seq);
-        std::fs::write(sequence_file, content)?;
-        Ok(())
     }
 }
 

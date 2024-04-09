@@ -3,6 +3,7 @@ mod hash_db;
 mod storage_adapter;
 mod storage_cache;
 mod storage_rocksdb;
+mod storage_trait;
 mod string_db;
 
 pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
@@ -13,6 +14,7 @@ pub use generic_db::GenericDb;
 pub use hash_db::{HashDb, HashGetResult, HashPutResult};
 pub use storage_cache::{Storable, StorageCache};
 pub use storage_rocksdb::StorageRocksDb;
+pub use storage_trait::StorageTrait;
 pub use string_db::StringsDb;
 
 #[macro_export]
