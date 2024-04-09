@@ -208,9 +208,9 @@ impl GenericCommands {
             (Some(seconds), Some(arg)) => {
                 let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
 
-                let (mut expiration, has_expiration) = match generic_db.get_expiration(key)? {
-                    Some(expiration) => (expiration, true),
-                    None => (Expiration::default(), false),
+                let mut expiration = match generic_db.get_expiration(key)? {
+                    Some(expiration) => expiration,
+                    None => Expiration::default(),
                 };
 
                 let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
@@ -224,7 +224,7 @@ impl GenericCommands {
                 match arg_lowercase.as_str() {
                     "nx" => {
                         // NX -- Set expiry only when the key has no expiry
-                        if !has_expiration {
+                        if !expiration.has_ttl() {
                             expiration.set_expire_timestamp_seconds(num)?;
                             generic_db.put_expiration(key, &expiration)?;
                             builder.number_usize(response_buffer, 1);
@@ -235,7 +235,7 @@ impl GenericCommands {
                     }
                     "xx" => {
                         // XX -- Set expiry only when the key has an existing expiry
-                        if has_expiration {
+                        if expiration.has_ttl() {
                             expiration.set_expire_timestamp_seconds(num)?;
                             generic_db.put_expiration(key, &expiration)?;
                             builder.number_usize(response_buffer, 1);

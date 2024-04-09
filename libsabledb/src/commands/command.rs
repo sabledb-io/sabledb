@@ -130,7 +130,7 @@ lazy_static::lazy_static! {
         ("incr", CommandMetadata::new(RedisCommandName::Incr, RedisCommandFlags::Write)),
         ("incrby", CommandMetadata::new(RedisCommandName::IncrBy, RedisCommandFlags::Write)),
         ("incrbyfloat", CommandMetadata::new(RedisCommandName::IncrByFloat, RedisCommandFlags::Write)),
-        ("set", CommandMetadata::new(RedisCommandName::Set, RedisCommandFlags::Write)),
+    ("set", CommandMetadata::new(RedisCommandName::Set, RedisCommandFlags::Write)),
         ("get", CommandMetadata::new(RedisCommandName::Get, RedisCommandFlags::Read)),
         ("getdel", CommandMetadata::new(RedisCommandName::GetDel, RedisCommandFlags::Write)),
         ("getset", CommandMetadata::new(RedisCommandName::GetSet, RedisCommandFlags::Write)),
