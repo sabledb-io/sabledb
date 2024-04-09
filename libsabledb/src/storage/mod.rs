@@ -17,6 +17,7 @@ pub use storage_cache::{Storable, StorageCache};
 pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{IterateCallback, StorageTrait};
 pub use string_db::StringsDb;
+pub use write_cache::DbWriteCache;
 
 #[macro_export]
 macro_rules! storage_rocksdb {

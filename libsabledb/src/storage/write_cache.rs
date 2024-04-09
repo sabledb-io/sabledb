@@ -1,6 +1,6 @@
 use crate::{storage::BatchUpdate, SableError, StorageAdapter};
 use bytes::BytesMut;
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::rc::Rc;
 
 #[allow(dead_code)]
@@ -30,7 +30,7 @@ impl CacheEntry {
 #[allow(dead_code)]
 pub struct DbWriteCache<'a> {
     store: &'a StorageAdapter,
-    changes: HashMap<BytesMut, Option<Rc<CacheEntry>>>,
+    changes: DashMap<BytesMut, Option<Rc<CacheEntry>>>,
 }
 
 #[allow(dead_code)]
@@ -38,11 +38,11 @@ impl<'a> DbWriteCache<'a> {
     pub fn with_storage(store: &'a StorageAdapter) -> Self {
         DbWriteCache {
             store,
-            changes: HashMap::<BytesMut, Option<Rc<CacheEntry>>>::default(),
+            changes: DashMap::<BytesMut, Option<Rc<CacheEntry>>>::default(),
         }
     }
 
-    pub fn put(&mut self, key: BytesMut, value: BytesMut) -> Result<(), SableError> {
+    pub fn put(&self, key: BytesMut, value: BytesMut) -> Result<(), SableError> {
         let entry = Rc::new(CacheEntry::new(value, true));
         let _ = self.changes.insert(key, Some(entry));
         Ok(())
@@ -51,7 +51,7 @@ impl<'a> DbWriteCache<'a> {
     /// Note that we do not remove the entry from the `changes` hash,
     /// instead we use a `None` marker to indicate that this entry
     /// should be converted into a `delete` operation
-    pub fn delete(&mut self, key: BytesMut) -> Result<(), SableError> {
+    pub fn delete(&self, key: BytesMut) -> Result<(), SableError> {
         let _ = self.changes.insert(key, None);
         Ok(())
     }
@@ -59,7 +59,7 @@ impl<'a> DbWriteCache<'a> {
     /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
     /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
     /// this means that it was deleted, so return a `None` as well
-    pub fn get(&mut self, key: BytesMut) -> Result<Option<BytesMut>, SableError> {
+    pub fn get(&self, key: BytesMut) -> Result<Option<BytesMut>, SableError> {
         let Some(value) = self.changes.get(&key) else {
             // No such entry
             if let Some(value) = self.store.get(&key)? {
@@ -72,7 +72,7 @@ impl<'a> DbWriteCache<'a> {
         };
 
         // found an match in cache
-        if let Some(value) = value {
+        if let Some(value) = value.value() {
             // an actual value
             Ok(Some(value.data.clone()))
         } else {
@@ -83,12 +83,12 @@ impl<'a> DbWriteCache<'a> {
 
     pub fn to_write_batch(&self) -> BatchUpdate {
         let mut batch_update = BatchUpdate::default();
-        for (key, val) in &self.changes {
-            match val {
-                None => batch_update.delete(key.clone()),
+        for entry in &self.changes {
+            match entry.value() {
+                None => batch_update.delete(entry.key().clone()),
                 Some(value) => {
                     if value.is_dirty {
-                        batch_update.put(key.clone(), value.data.clone());
+                        batch_update.put(entry.key().clone(), value.data.clone());
                     }
                 }
             }
@@ -131,7 +131,7 @@ mod tests {
         }
 
         // Test that `get` accesses the storage
-        let mut db_cache = DbWriteCache::with_storage(&store);
+        let db_cache = DbWriteCache::with_storage(&store);
         for i in 0..100 {
             let key = BytesMut::from(format!("k{}", i).as_str());
             let value = db_cache.get(key).unwrap().unwrap();
@@ -157,7 +157,7 @@ mod tests {
         }
 
         // Test that `get` accesses the storage
-        let mut db_cache = DbWriteCache::with_storage(&store);
+        let db_cache = DbWriteCache::with_storage(&store);
         for i in 0..10 {
             let key = BytesMut::from(format!("new_k{}", i).as_str());
             let value = BytesMut::from(format!("v{}", i).as_str());
@@ -186,7 +186,7 @@ mod tests {
         }
 
         // Test that `get` accesses the storage
-        let mut db_cache = DbWriteCache::with_storage(&store);
+        let db_cache = DbWriteCache::with_storage(&store);
         let mut expected_keys = std::collections::HashSet::<BytesMut>::with_capacity(50);
         for i in 0..50 {
             let key = BytesMut::from(format!("k{}", i).as_str());

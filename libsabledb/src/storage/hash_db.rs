@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::{
     metadata::{HashFieldKey, HashValueMetadata},
-    storage::PutFlags,
+    storage::{DbWriteCache, PutFlags},
     CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
 };
@@ -82,12 +82,19 @@ pub struct HashDb<'a> {
     /// This class handles String command database access
     store: &'a StorageAdapter,
     db_id: u16,
+    #[allow(dead_code)]
+    cache: Box<DbWriteCache<'a>>,
 }
 
 #[allow(dead_code)]
 impl<'a> HashDb<'a> {
     pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
-        HashDb { store, db_id }
+        let cache = Box::new(DbWriteCache::with_storage(store));
+        HashDb {
+            store,
+            db_id,
+            cache,
+        }
     }
 
     /// Sets the specified fields to their respective values in the hash stored at `user_key`
