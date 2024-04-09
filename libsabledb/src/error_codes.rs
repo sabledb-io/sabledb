@@ -38,7 +38,7 @@ pub enum SableError {
     AlreadyExists,
     #[error("Tokio channel error. {0}")]
     ChannelSendError(#[from] tokio::sync::mpsc::error::SendError<u8>),
-    #[error("Feature {0} is not implemented")]
+    #[error("Not implemented error. {0}")]
     NotImplemented(String),
     #[error("INI configuration error. {0}")]
     ConfigError(#[from] ini::Error),
