@@ -163,7 +163,7 @@ impl HashCommands {
 
         // hdel key <field> <value> [<field><value>..]
         let mut fields = Vec::<&BytesMut>::new();
-        while let Some(field) = iter.next() {
+        for field in iter {
             fields.push(field);
         }
 
