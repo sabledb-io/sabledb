@@ -187,20 +187,27 @@ impl GenericCommands {
 
         let db_id = client_state.database_id();
         let builder = RespBuilderV2::default();
-        let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+        let generic_db = GenericDb::with_storage(&client_state.database(), db_id);
 
         // EXPIRE key seconds [NX | XX | GT | LT]
         let mut iter = command.args_vec().iter();
         // skip "expire"
         iter.next();
+        let Some(key) = iter.next() else {
+            builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
+            return Ok(());
+        };
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
         // check the remaining arguments
-        match (iter.next(), iter.next(), iter.next()) {
-            (Some(key), Some(seconds), Some(arg)) => {
+        match (iter.next(), iter.next()) {
+            (Some(seconds), Some(arg)) => {
                 let arg_lowercase = BytesMutUtils::to_string(arg).to_lowercase();
-                let Some((_, mut value_metadata)) = generic_db.get(key)? else {
-                    builder.number_usize(response_buffer, 0);
-                    return Ok(());
+
+                let mut expiration = match generic_db.get_expiration(key)? {
+                    Some(expiration) => expiration,
+                    None => Expiration::default(),
                 };
 
                 let Some(num) = BytesMutUtils::parse::<u64>(&seconds) else {
@@ -211,39 +218,41 @@ impl GenericCommands {
                     return Ok(());
                 };
 
-                let exp = value_metadata.expiration_mut();
-
                 match arg_lowercase.as_str() {
                     "nx" => {
                         // NX -- Set expiry only when the key has no expiry
-                        exp.set_expire_timestamp_seconds(num)?;
-                        generic_db.put_expiration(key, &exp)?;
+                        expiration.set_expire_timestamp_seconds(num)?;
+                        generic_db.put_expiration(key, &expiration)?;
                         builder.ok(response_buffer);
                         return Ok(());
                     }
                     "xx" => {
                         // XX -- Set expiry only when the key has an existing expiry
-                        exp.set_expire_timestamp_seconds(num)?;
-                        generic_db.put_expiration(key, &exp)?;
+                        expiration.set_expire_timestamp_seconds(num)?;
+                        generic_db.put_expiration(key, &expiration)?;
                         builder.ok(response_buffer);
                         return Ok(());
                     }
                     "gt" => {
                         // GT -- Set expiry only when the new expiry is greater than current one
-                        if num > exp.ttl_ms {
-                            exp.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &exp)?;
+                        if num > expiration.ttl_ms {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.ok(response_buffer);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
                         }
-                        builder.ok(response_buffer);
                         return Ok(());
                     }
                     "lt" => {
                         // LT -- Set expiry only when the new expiry is less than current one
-                        if num < exp.ttl_ms {
-                            exp.set_expire_timestamp_seconds(num)?;
-                            generic_db.put_expiration(key, &exp)?;
+                        if num < expiration.ttl_ms {
+                            expiration.set_expire_timestamp_seconds(num)?;
+                            generic_db.put_expiration(key, &expiration)?;
+                            builder.ok(response_buffer);
+                        } else {
+                            builder.number_usize(response_buffer, 0);
                         }
-                        builder.ok(response_buffer);
                         return Ok(());
                     }
                     _ => {
@@ -252,7 +261,7 @@ impl GenericCommands {
                     }
                 }
             }
-            (Some(key), Some(seconds), None) => {
+            (Some(seconds), None) => {
                 let mut expiration = match generic_db.get_expiration(key)? {
                     Some(expiration) => expiration,
                     None => Expiration::default(),
@@ -344,6 +353,17 @@ mod test {
         (vec!["exists", "mykey1", "mykey2", "mykey1"], ":3\r\n"),
         (vec!["exists", "no_such_key", "mykey2", "mykey1"], ":2\r\n"),
     ], "test_exists"; "test_exists")]
+    #[test_case(vec![
+        (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "100"], "+OK\r\n"),
+        (vec!["get", "mykey1"], "$-1\r\n"),
+        (vec!["expire", "mykey1", "110", "nx"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "110", "xx"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "10", "gt"], ":0\r\n"),
+        (vec!["expire", "mykey1", "200", "gt"], "+OK\r\n"),
+        (vec!["expire", "mykey1", "220", "lt"], ":0\r\n"),
+        (vec!["expire", "mykey1", "20", "lt"], "+OK\r\n"),
+    ], "test_expire"; "test_expire")]
     fn test_generic_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
