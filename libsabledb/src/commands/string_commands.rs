@@ -177,7 +177,8 @@ impl StringCommands {
 
         // entering
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((mut value, md)) = strings_db.get(key)? {
             // doing append
             check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
@@ -208,7 +209,8 @@ impl StringCommands {
 
         // fetch the value
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         match strings_db.get(key)? {
             Some((value, metadata)) => {
@@ -237,7 +239,8 @@ impl StringCommands {
 
         // start atomic operation here
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((old_value, metadata)) = strings_db.get(key)? {
             check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
             builder.bulk_string(response_buffer, &old_value);
@@ -265,7 +268,8 @@ impl StringCommands {
 
         // start atomic operation here
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((old_value, metadata)) = strings_db.get(key)? {
             check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
             builder.bulk_string(response_buffer, &old_value);
@@ -295,7 +299,8 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
             Some((value, mut metadata)) => {
                 // ensure the key is of type string
@@ -366,7 +371,8 @@ impl StringCommands {
         let builder = RespBuilderV2::default();
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         let result = strings_db.get(key)?;
         match result {
             Some((value, _)) => {
@@ -408,7 +414,8 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
             check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
@@ -453,7 +460,8 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
             check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
@@ -500,7 +508,8 @@ impl StringCommands {
 
         let decrement = to_number!(interval, i64, response_buffer, Ok(()));
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
             check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
@@ -547,7 +556,8 @@ impl StringCommands {
 
         let decrement = to_number!(interval, i64, response_buffer, Ok(()));
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
             check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
@@ -600,7 +610,8 @@ impl StringCommands {
         );
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
             check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
@@ -647,7 +658,8 @@ impl StringCommands {
 
         let user_keys = vec![key1, key2];
         let _unused = LockManager::lock_user_keys_shared(&user_keys, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         // read the values for key1 and key2
         let Some((value1, _)) = strings_db.get(key1)? else {
@@ -740,7 +752,8 @@ impl StringCommands {
 
         // obtain a shared lock on the keys
         let _unused = LockManager::lock_user_keys_shared(&user_keys, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         for key in user_keys.iter() {
             if let Some((value, metadata)) = strings_db.get(key)? {
@@ -792,7 +805,8 @@ impl StringCommands {
         }
 
         let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         strings_db.multi_put(&keys_and_values, PutFlags::Override)?;
         // can't fail
         builder.ok(response_buffer);
@@ -835,7 +849,8 @@ impl StringCommands {
 
         // if any error occured, return `0`
         let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         if strings_db.multi_put(&keys_and_values, PutFlags::PutIfNotExists)? {
             builder.number_i64(response_buffer, 1);
@@ -939,7 +954,8 @@ impl StringCommands {
         let value = command_arg_at!(command, 3);
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         let new_value = if let Some((old_value, md)) = strings_db.get(key)? {
             check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
@@ -971,7 +987,8 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         if let Some((value, md)) = strings_db.get(key)? {
             check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
@@ -1014,7 +1031,8 @@ impl StringCommands {
         let mut metadata = StringValueMetadata::new();
         let mut return_value: Option<BytesMut> = None;
 
-        let strings_db = StringsDb::with_storage(&client_state.store, client_state.database_id());
+        let strings_db =
+            StringsDb::with_storage(client_state.database(), client_state.database_id());
         // sanity
         if flags.intersects(SetFlags::SetIfNotExists) && flags.intersects(SetFlags::SetIfExists) {
             return Ok(SetInternalReturnValue::SyntaxError);

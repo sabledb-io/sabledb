@@ -66,12 +66,12 @@ impl GenericCommands {
                 Self::query_key_type(client_state.clone(), command.clone(), user_key).await?;
             match key_type {
                 Some(Encoding::VALUE_STRING) => {
-                    let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
                     generic_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
                 Some(Encoding::VALUE_LIST) => {
-                    let list = List::with_storage(&client_state.store, db_id);
+                    let list = List::with_storage(client_state.database(), db_id);
                     list.remove(
                         user_key,
                         None, // remove all items
@@ -86,7 +86,7 @@ impl GenericCommands {
                         user_key,
                         unknown_type
                     );
-                    let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
                     generic_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
@@ -112,7 +112,8 @@ impl GenericCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let generic_db = GenericDb::with_storage(&client_state.store, client_state.database_id());
+        let generic_db =
+            GenericDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((_, value_metadata)) = generic_db.get(key)? {
             if !value_metadata.expiration().has_ttl() {
                 // No timeout
@@ -146,7 +147,7 @@ impl GenericCommands {
         let mut items_found = 0usize;
         let db_id = client_state.database_id();
 
-        let generic_db = GenericDb::with_storage(&client_state.store, db_id);
+        let generic_db = GenericDb::with_storage(client_state.database(), db_id);
         for user_key in iter {
             if generic_db.contains(user_key)? {
                 items_found = items_found.saturating_add(1);
@@ -164,7 +165,8 @@ impl GenericCommands {
         _command: Rc<RedisCommand>,
         user_key: &BytesMut,
     ) -> Result<Option<u8>, SableError> {
-        let generic_db = GenericDb::with_storage(&client_state.store, client_state.database_id());
+        let generic_db =
+            GenericDb::with_storage(client_state.database(), client_state.database_id());
         let Some((_, md)) = generic_db.get(user_key)? else {
             return Ok(None);
         };

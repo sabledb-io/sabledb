@@ -86,7 +86,7 @@ impl HashCommands {
         let key = command_arg_at!(command, 1);
         // Hash write updating 2 entries + doing read, so we need to exclusive lock it
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
-        let hash_db = HashDb::with_storage(&client_state.store, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items_put = match hash_db.put(key, &field_values)? {
             HashPutResult::Some(count) => count,
@@ -114,7 +114,7 @@ impl HashCommands {
 
         // this is a read command, lock shared here
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        let hash_db = HashDb::with_storage(&client_state.store, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items = match hash_db.get(key, &[&field])? {
             HashGetResult::WrongType => {
