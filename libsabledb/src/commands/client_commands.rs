@@ -212,17 +212,17 @@ mod tests {
         rt.block_on(async move {
             println!("opening db");
             let store = open_database(test_name).await;
-
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
+                let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
                 let cmd = Rc::new(RedisCommand::for_test(args));
-                match Client::handle_command(client.inner(), cmd).await.unwrap() {
-                    ClientNextAction::SendResponse(response_buffer) => {
-                        assert_eq!(
-                            BytesMutUtils::to_string(&response_buffer).as_str(),
-                            expected_value
-                        );
+                match Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                    .await
+                    .unwrap()
+                {
+                    ClientNextAction::NoAction => {
+                        assert_eq!(sink.read_all().await.as_str(), expected_value);
                     }
                     _ => {}
                 }
@@ -253,15 +253,13 @@ mod tests {
             );
 
             // Kill client 1
-            match Client::handle_command(client2.inner(), kill_command)
+            let mut sink = crate::tests::ResponseSink::with_name("test_client_kill").await;
+            match Client::handle_command(client2.inner(), kill_command, &mut sink.fp)
                 .await
                 .unwrap()
             {
-                ClientNextAction::SendResponse(response_buffer) => {
-                    assert_eq!(
-                        BytesMutUtils::to_string(&response_buffer).as_str(),
-                        "+OK\r\n"
-                    );
+                ClientNextAction::NoAction => {
+                    assert_eq!(sink.read_all().await.as_str(), "+OK\r\n");
                 }
                 other => {
                     panic!("Did not expect this result! {:?}", other)
@@ -270,7 +268,8 @@ mod tests {
 
             // Try to use client 1
             let some_command = Rc::new(RedisCommand::for_test(vec!["set", "some", "value"]));
-            match Client::handle_command(client1.inner(), some_command)
+            let mut sink = crate::tests::ResponseSink::with_name("test_client_kill").await;
+            match Client::handle_command(client1.inner(), some_command, &mut sink.fp)
                 .await
                 .unwrap()
             {

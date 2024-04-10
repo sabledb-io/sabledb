@@ -135,6 +135,34 @@ macro_rules! error_with_throttling {
 //
 #[cfg(test)]
 mod tests {
+    use tokio::io::AsyncReadExt;
+    #[allow(dead_code)]
+    pub struct ResponseSink {
+        temp_file: crate::io::TempFile,
+        pub fp: tokio::fs::File,
+    }
+
+    impl ResponseSink {
+        pub async fn with_name(name: &str) -> Self {
+            let temp_file = crate::io::TempFile::with_name(name);
+            let fp = tokio::fs::File::create(&temp_file.fullpath())
+                .await
+                .unwrap();
+            ResponseSink { temp_file, fp }
+        }
+
+        pub async fn read_all(&mut self) -> String {
+            self.fp.sync_data().await.unwrap();
+            let mut fp = tokio::fs::File::open(&self.temp_file.fullpath())
+                .await
+                .unwrap();
+
+            let mut buffer = bytes::BytesMut::with_capacity(1024);
+            fp.read_buf(&mut buffer).await.unwrap();
+            crate::BytesMutUtils::to_string(&buffer)
+        }
+    }
+
     use super::*;
 
     #[test]

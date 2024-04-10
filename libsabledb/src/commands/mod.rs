@@ -151,6 +151,8 @@ pub enum ClientNextAction {
     SendResponse(bytes::BytesMut),
     Wait((Receiver<u8>, Duration)),
     TerminateConnection(bytes::BytesMut),
+    /// Response was already sent to the client
+    NoAction,
 }
 
 mod base_commands;

@@ -1,5 +1,7 @@
-const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
+mod temp_file;
+pub use temp_file::TempFile;
 
+const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
 use crate::SableError;
 use bytes::BytesMut;
 use std::io::{Read, Write};

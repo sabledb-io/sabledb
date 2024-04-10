@@ -326,9 +326,13 @@ impl Client {
 
             // Use a loop here to handle timeouts & retries
             loop {
-                let response = Self::handle_command(client_state.clone(), command.clone()).await;
+                let response =
+                    Self::handle_command(client_state.clone(), command.clone(), &mut tx).await;
                 match response {
                     Ok(next_action) => match next_action {
+                        ClientNextAction::NoAction => {
+                            break;
+                        }
                         ClientNextAction::SendResponse(response) => {
                             // command completed successfully
                             Self::send_response(&mut tx, &response, client_state.client_id).await?;
@@ -421,6 +425,7 @@ impl Client {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<ClientNextAction, SableError> {
         let builder = RespBuilderV2::default();
         let mut buffer = BytesMut::with_capacity(256);
@@ -429,7 +434,8 @@ impl Client {
         match Self::can_handle(client_state.clone(), command.clone()) {
             CanHandleCommandResult::WriteInReadOnlyReplica => {
                 builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);
-                return Ok(ClientNextAction::SendResponse(buffer));
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                return Ok(ClientNextAction::NoAction);
             }
             CanHandleCommandResult::ClientKilled => {
                 builder.error_string(&mut buffer, "ERR: server closed the connection");
@@ -442,11 +448,13 @@ impl Client {
         let client_action = match kind {
             RedisCommandName::Ping => {
                 builder.pong(&mut buffer);
-                ClientNextAction::SendResponse(buffer)
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::Cmd => {
                 builder.empty_array(&mut buffer);
-                ClientNextAction::SendResponse(buffer)
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::Set
             | RedisCommandName::Append
@@ -470,19 +478,24 @@ impl Client {
             | RedisCommandName::SetRange
             | RedisCommandName::Strlen
             | RedisCommandName::Substr => {
-                StringCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
-                ClientNextAction::SendResponse(buffer)
+                StringCommands::handle_command(client_state.clone(), command.clone(), &mut buffer)
+                    .await?;
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::Ttl
             | RedisCommandName::Del
             | RedisCommandName::Exists
             | RedisCommandName::Expire => {
-                GenericCommands::handle_command(client_state, command.clone(), &mut buffer).await?;
-                ClientNextAction::SendResponse(buffer)
+                GenericCommands::handle_command(client_state.clone(), command.clone(), &mut buffer)
+                    .await?;
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::Config => {
                 builder.ok(&mut buffer);
-                ClientNextAction::SendResponse(buffer)
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::Info => {
                 // build the stats
@@ -493,7 +506,8 @@ impl Client {
                     .expect("mutex")
                     .to_string();
                 builder.bulk_string(&mut buffer, &BytesMut::from(stats.as_bytes()));
-                ClientNextAction::SendResponse(buffer)
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             // List commands
             RedisCommandName::Lpush
@@ -518,8 +532,13 @@ impl Client {
             | RedisCommandName::Blpop
             | RedisCommandName::Brpop
             | RedisCommandName::Blmpop => {
-                match ListCommands::handle_command(client_state, command, &mut buffer).await? {
-                    HandleCommandResult::Completed => ClientNextAction::SendResponse(buffer),
+                match ListCommands::handle_command(client_state.clone(), command, &mut buffer)
+                    .await?
+                {
+                    HandleCommandResult::Completed => {
+                        Self::send_response(tx, &buffer, client_state.client_id).await?;
+                        ClientNextAction::NoAction
+                    }
                     HandleCommandResult::Blocked((rx, duration)) => {
                         ClientNextAction::Wait((rx, duration))
                     }
@@ -527,12 +546,14 @@ impl Client {
             }
             // Client commands
             RedisCommandName::Client | RedisCommandName::Select => {
-                ClientCommands::handle_command(client_state, command, &mut buffer).await?;
-                ClientNextAction::SendResponse(buffer)
+                ClientCommands::handle_command(client_state.clone(), command, &mut buffer).await?;
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
-                ServerCommands::handle_command(client_state, command, &mut buffer).await?;
-                ClientNextAction::SendResponse(buffer)
+                ServerCommands::handle_command(client_state.clone(), command, &mut buffer).await?;
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             // Hash commands
             RedisCommandName::Hset
@@ -540,14 +561,16 @@ impl Client {
             | RedisCommandName::Hdel
             | RedisCommandName::Hlen
             | RedisCommandName::Hexists => {
-                HashCommands::handle_command(client_state, command, &mut buffer).await?;
-                ClientNextAction::SendResponse(buffer)
+                HashCommands::handle_command(client_state.clone(), command, &mut buffer).await?;
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
             // Misc
             RedisCommandName::NotSupported(msg) => {
                 tracing::info!(msg);
                 builder.error_string(&mut buffer, msg.as_str());
-                ClientNextAction::SendResponse(buffer)
+                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                ClientNextAction::NoAction
             }
         };
         Ok(client_action)

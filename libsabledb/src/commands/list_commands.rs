@@ -1119,8 +1119,9 @@ mod tests {
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
+                let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
                 let cmd = Rc::new(RedisCommand::for_test(args));
-                match Client::handle_command(client.inner(), cmd.clone())
+                match Client::handle_command(client.inner(), cmd.clone(), &mut sink.fp)
                     .await
                     .unwrap()
                 {
@@ -1133,6 +1134,9 @@ mod tests {
                             BytesMutUtils::to_string(&response_buffer).as_str(),
                             expected_value
                         );
+                    }
+                    ClientNextAction::NoAction => {
+                        assert_eq!(&sink.read_all().await, expected_value);
                     }
                     ClientNextAction::Wait((rx, duration)) => {
                         println!("--> got Wait for duration of {:?}", duration);
@@ -1164,8 +1168,12 @@ mod tests {
         client_state: Rc<ClientState>,
         cmd: Rc<RedisCommand>,
     ) -> (Receiver<u8>, Duration) {
-        let next_action = Client::handle_command(client_state, cmd).await.unwrap();
+        let mut sink = crate::tests::ResponseSink::with_name("deferred_command").await;
+        let next_action = Client::handle_command(client_state, cmd, &mut sink.fp)
+            .await
+            .unwrap();
         match next_action {
+            ClientNextAction::NoAction => panic!("expected to be blocked"),
             ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
             ClientNextAction::TerminateConnection(_) => panic!("expected to be blocked"),
             ClientNextAction::Wait((rx, duration)) => (rx, duration),
@@ -1174,11 +1182,15 @@ mod tests {
 
     /// Execute a command
     async fn execute_command(client_state: Rc<ClientState>, cmd: Rc<RedisCommand>) -> BytesMut {
-        let next_action = Client::handle_command(client_state, cmd.clone())
+        let mut sink = crate::tests::ResponseSink::with_name("deferred_command").await;
+        let next_action = Client::handle_command(client_state, cmd.clone(), &mut sink.fp)
             .await
             .unwrap();
         match next_action {
             ClientNextAction::SendResponse(buffer) => buffer,
+            ClientNextAction::NoAction => {
+                BytesMutUtils::from_string(sink.read_all().await.as_str())
+            }
             ClientNextAction::TerminateConnection(_) => {
                 panic!("Command {:?} is not expected to be blocked", cmd)
             }
