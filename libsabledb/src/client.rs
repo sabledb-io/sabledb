@@ -538,7 +538,8 @@ impl Client {
             RedisCommandName::Hset
             | RedisCommandName::Hget
             | RedisCommandName::Hdel
-            | RedisCommandName::Hlen => {
+            | RedisCommandName::Hlen
+            | RedisCommandName::Hexists => {
                 HashCommands::handle_command(client_state, command, &mut buffer).await?;
                 ClientNextAction::SendResponse(buffer)
             }

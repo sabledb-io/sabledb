@@ -7,7 +7,10 @@ use crate::{
     metadata::CommonValueMetadata,
     metadata::Encoding,
     parse_string_to_number,
-    storage::{GenericDb, HashDb, HashDeleteResult, HashGetResult, HashLenResult, HashPutResult},
+    storage::{
+        GenericDb, HashDb, HashDeleteResult, HashExistsResult, HashGetResult, HashLenResult,
+        HashPutResult,
+    },
     types::List,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
@@ -36,6 +39,9 @@ impl HashCommands {
             }
             RedisCommandName::Hlen => {
                 Self::hlen(client_state, command, response_buffer).await?;
+            }
+            RedisCommandName::Hexists => {
+                Self::hexists(client_state, command, response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -219,6 +225,31 @@ impl HashCommands {
         builder.number_usize(response_buffer, count);
         Ok(())
     }
+
+    /// Returns the number of fields contained in the hash stored at key
+    async fn hexists(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+        let field = command_arg_at!(command, 2);
+
+        // Lock and delete
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        match hash_db.field_exists(key, field)? {
+            HashExistsResult::NotExists => builder.number_usize(response_buffer, 0),
+            HashExistsResult::Exists => builder.number_usize(response_buffer, 1),
+            HashExistsResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE)
+            }
+        };
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -298,6 +329,15 @@ mod test {
         (vec!["hlen", "nosuchhash"], ":0\r\n"),
         (vec!["hlen"], "-ERR wrong number of arguments for 'hlen' command\r\n"),
     ], "test_hlen"; "test_hlen")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "field1", "value1", "field2", "value2"], ":2\r\n"),
+        (vec!["set", "str_key", "field1"], "+OK\r\n"),
+        (vec!["hexists", "myhash", "nosuchfield"], ":0\r\n"),
+        (vec!["hexists", "str_key"], "-ERR wrong number of arguments for 'hexists' command\r\n"),
+        (vec!["hexists", "str_key", "field"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hexists", "no_such_hash", "field1"], ":0\r\n"),
+        (vec!["hexists", "myhash", "field1", ], ":1\r\n"),
+    ], "test_hexists"; "test_hexists")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

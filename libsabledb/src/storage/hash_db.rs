@@ -56,6 +56,17 @@ pub enum HashLenResult {
     Some(usize),
 }
 
+/// `HashDb::contains_hash_field` result
+#[derive(PartialEq, Eq, Debug)]
+pub enum HashExistsResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Field exists in hash
+    Exists,
+    /// Field does not exist in hash
+    NotExists,
+}
+
 // internal enums
 enum DeleteHashMetadataResult {
     /// Delete succeeded
@@ -211,6 +222,30 @@ impl<'a> HashDb<'a> {
             GetHashMetadataResult::Some(hash) => hash,
         };
         Ok(HashLenResult::Some(hash.len() as usize))
+    }
+
+    /// Check whether `user_field` exists in the hash `user_key`
+    pub fn field_exists(
+        &self,
+        user_key: &BytesMut,
+        user_field: &BytesMut,
+    ) -> Result<HashExistsResult, SableError> {
+        // locate the hash
+        let hash = match self.get_hash_metadata(user_key)? {
+            GetHashMetadataResult::WrongType => {
+                return Ok(HashExistsResult::WrongType);
+            }
+            GetHashMetadataResult::None => {
+                return Ok(HashExistsResult::NotExists);
+            }
+            GetHashMetadataResult::Some(hash) => hash,
+        };
+
+        if self.contains_hash_field(hash.id(), user_field)? {
+            Ok(HashExistsResult::Exists)
+        } else {
+            Ok(HashExistsResult::NotExists)
+        }
     }
 
     ///=======================================================
