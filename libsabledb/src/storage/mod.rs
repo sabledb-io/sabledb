@@ -1,7 +1,6 @@
 mod generic_db;
 mod hash_db;
 mod storage_adapter;
-mod storage_cache;
 mod storage_rocksdb;
 mod storage_trait;
 mod string_db;
@@ -13,7 +12,6 @@ pub use crate::storage::storage_adapter::{
 };
 pub use generic_db::GenericDb;
 pub use hash_db::{HashDb, HashDeleteResult, HashGetResult, HashLenResult, HashPutResult};
-pub use storage_cache::{Storable, StorageCache};
 pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{IterateCallback, StorageTrait};
 pub use string_db::StringsDb;

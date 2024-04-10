@@ -6,8 +6,8 @@ use crate::{
     metadata::{CommonValueMetadata, Encoding, ListValueMetadata},
     storage::DbWriteCache,
     storage::PutFlags,
-    BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, Storable, StorageAdapter,
-    U8ArrayBuilder, U8ArrayReader,
+    BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, StorageAdapter, U8ArrayBuilder,
+    U8ArrayReader,
 };
 
 use bytes::BytesMut;
@@ -1410,9 +1410,7 @@ impl ListItem {
             Ok(Some(list_item))
         }
     }
-}
 
-impl Storable for ListItem {
     /// Return a serialised key for this `ListItem`
     fn serialised_key(&self) -> BytesMut {
         Self::create_key(self.list_id, self.item_id)

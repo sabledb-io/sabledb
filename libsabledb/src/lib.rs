@@ -21,8 +21,8 @@ pub mod worker_manager;
 
 pub use client::Client;
 pub use commands::{
-    ClientCommands, GenericCommands, ListCommands, RedisCommand, RedisCommandName, ServerCommands,
-    StringCommands, HashCommands,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
+    ServerCommands, StringCommands,
 };
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
@@ -32,9 +32,7 @@ pub use server::{Server, ServerState};
 pub use server_options::ServerOptions;
 pub use shard_locker::LockManager;
 pub use stopwatch::IoDurationStopWatch;
-pub use storage::{
-    BatchUpdate, Storable, StorageAdapter, StorageCache, StorageOpenParams, StorageRocksDb,
-};
+pub use storage::{BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb};
 pub use telemetry::Telemetry;
 pub use transport::Transport;
 pub use utils::{BytesMutUtils, StringUtils, TimeUtils, U8ArrayBuilder, U8ArrayReader};
