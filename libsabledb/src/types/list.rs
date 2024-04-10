@@ -1424,10 +1424,10 @@ impl ListItem {
                 + self.user_data.len(),
         );
 
-        val.extend_from_slice(&BytesMutUtils::from_u64(&self.prev));
-        val.extend_from_slice(&BytesMutUtils::from_u64(&self.next));
-        val.extend_from_slice(&self.user_data);
-
+        let mut builder = U8ArrayBuilder::with_buffer(&mut val);
+        builder.write_u64(self.prev);
+        builder.write_u64(self.next);
+        builder.write_bytes(&self.user_data);
         val
     }
 
