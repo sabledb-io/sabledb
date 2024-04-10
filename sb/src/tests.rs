@@ -122,3 +122,25 @@ pub async fn run_pop(
     }
     Ok(())
 }
+
+/// Run the `hset` test case
+pub async fn run_hset(
+    mut stream: StreamType,
+    opts: Options,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let count = opts.client_requests();
+    let key_size = opts.key_size;
+    let key_range = opts.key_range;
+    let payload = bench_utils::generate_payload(opts.data_size);
+    let mut client = RedisClient::default();
+    for i in 0..count {
+        let key = bench_utils::generate_key(key_size, key_range);
+        let field = bytes::BytesMut::from(format!("field_{}", i).as_str());
+        let sw = StopWatch::default();
+        client.hset(&mut stream, &key, &field, &payload).await?;
+
+        stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
+        stats::incr_requests();
+    }
+    Ok(())
+}

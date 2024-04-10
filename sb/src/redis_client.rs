@@ -182,6 +182,36 @@ impl RedisClient {
         Ok(())
     }
 
+    pub async fn hset(
+        &mut self,
+        stream: &mut StreamType,
+        key: &BytesMut,
+        field: &BytesMut,
+        value: &BytesMut,
+    ) -> Result<RedisObject, SableError> {
+        let mut buffer = BytesMut::new();
+        // build the command
+        self.builder.add_array_len(&mut buffer, 4);
+        self.builder
+            .add_bulk_string(&mut buffer, &BytesMut::from("hset"));
+        self.builder.add_bulk_string(&mut buffer, key);
+        self.builder.add_bulk_string(&mut buffer, field);
+        self.builder.add_bulk_string(&mut buffer, value);
+
+        // send the request & read the response
+        self.write_buffer(stream, &buffer).await?;
+
+        // read response
+        match self.read_response(stream).await? {
+            RedisObject::NullString => Ok(RedisObject::NullString),
+            RedisObject::Integer(num) => Ok(RedisObject::Integer(num)),
+            other => Err(SableError::OtherError(format!(
+                "Unexpected response. `{:?}`",
+                other
+            ))),
+        }
+    }
+
     pub async fn get(
         &mut self,
         stream: &mut StreamType,

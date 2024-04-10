@@ -20,7 +20,7 @@ pub struct Options {
     pub port: usize,
 
     /// test suits to run. Possible values are:
-    /// `set`, `get`, `lpush`, `lpop`, `incr`, `rpop`, `rpush`, `ping`
+    /// `set`, `get`, `lpush`, `lpop`, `incr`, `rpop`, `rpush`, `ping`, `hset`
     #[arg(short, long, default_value = "set")]
     pub test: String,
 

@@ -59,6 +59,10 @@ async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>
             opts.key_range = LIST_KEY_RANGE;
             tests::run_pop(stream, false, opts).await?;
         }
+        "hset" => {
+            opts.key_range = LIST_KEY_RANGE;
+            tests::run_hset(stream, opts).await?;
+        }
         _ => {
             panic!("don't know how to run test: `{}`", opts.test);
         }

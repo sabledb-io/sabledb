@@ -69,6 +69,7 @@ $target/release/sabledb [sabledb.ini]
 - `rpop`
 - `incr`
 - `ping`
+- `hset`
 
 Run `sb --help` to get the full help message.
 
