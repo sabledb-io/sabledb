@@ -25,7 +25,7 @@ crc16 = "0.4.0"
 crossbeam-skiplist = "0.1.2"
 crossbeam = "0.8.3"
 hdrhistogram = "7.5.4"
-sled = "0.34.7"
+sled = { version = "0.34.7", features = ["event_log"] }
 rustls-pemfile = "2.0.0"
 tokio-rustls = "0"
 pki-types = { package = "rustls-pki-types", version = "1" }

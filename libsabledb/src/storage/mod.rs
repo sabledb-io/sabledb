@@ -2,6 +2,7 @@ mod generic_db;
 mod hash_db;
 mod storage_adapter;
 mod storage_rocksdb;
+mod storage_sled;
 mod storage_trait;
 mod string_db;
 mod write_cache;
