@@ -1,10 +1,12 @@
+#[allow(unused_imports)]
 use crate::{
     commands::ErrorStrings,
     iter_next_or_prev, list_md_or_null_string, list_or_size_0,
     metadata::PrimaryKeyMetadata,
     metadata::{CommonValueMetadata, Encoding, ListValueMetadata},
+    storage::DbWriteCache,
     storage::PutFlags,
-    BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, Storable, StorageAdapter, StorageCache,
+    BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, Storable, StorageAdapter,
     U8ArrayBuilder, U8ArrayReader,
 };
 
@@ -14,6 +16,7 @@ use std::rc::Rc;
 
 pub struct List<'a> {
     store: &'a StorageAdapter,
+    cache: Box<DbWriteCache<'a>>,
     db_id: u16,
 }
 
@@ -91,11 +94,13 @@ pub struct ListFlags: u32  {
 }
 }
 
-type ListItemCache = StorageCache<ListItem>;
-
 impl<'a> List<'a> {
     pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
-        List { store, db_id }
+        List {
+            store,
+            db_id,
+            cache: Box::new(DbWriteCache::with_storage(store)),
+        }
     }
 
     /// Return the list size
@@ -179,14 +184,11 @@ impl<'a> List<'a> {
             (pivot.borrow().prev(), Some(pivot.borrow().id()))
         };
 
-        let mut cache = ListItemCache::new();
-        let _ = self.insert_internal(&mut list_md, element, left_id, right_id, &mut cache)?;
+        let _ = self.insert_internal(&mut list_md, element, left_id, right_id)?;
 
         // update the storage
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-        self.put_list_metadata_internal(&list_md, list_name, &mut updates)?;
-        self.store.apply_batch(&updates)?;
+        self.put_list_metadata_internal(&list_md, list_name)?;
+        self.flush_cache()?;
 
         // return the list length after a successful insert operation.
         builder.number_u64(response_buffer, list_md.len());
@@ -223,7 +225,6 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let mut list = list_md_or_null_string!(&self, list_name, response_buffer, builder);
         let mut output_arr = Vec::<ListItem>::with_capacity(count);
-        let mut cache = ListItemCache::new();
         for _ in 0..count {
             let item_to_remove = if flags.intersects(ListFlags::FromLeft) {
                 list.head()
@@ -231,23 +232,18 @@ impl<'a> List<'a> {
                 list.tail()
             };
 
-            if let Some(removed_item) =
-                self.remove_internal(item_to_remove, &mut list, &mut cache)?
-            {
+            if let Some(removed_item) = self.remove_internal(item_to_remove, &mut list)? {
                 output_arr.push(removed_item);
             }
         }
 
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-
         if list.is_empty() {
-            self.delete_list_metadata_internal(list_name, &mut updates)?;
+            self.delete_list_metadata_internal(list_name)?;
         } else {
-            self.put_list_metadata_internal(&list, list_name, &mut updates)?;
+            self.put_list_metadata_internal(&list, list_name)?;
         }
 
-        self.store.apply_batch(&updates)?;
+        self.flush_cache()?;
 
         match output_arr.len() {
             0 => builder.null_string(response_buffer),
@@ -312,7 +308,8 @@ impl<'a> List<'a> {
             IterResult::Some(item) => item,
         };
         item.borrow_mut().user_data = user_value;
-        item.borrow().save(self.store, PutFlags::Override)?;
+        item.borrow().save(&self.cache)?;
+        self.flush_cache()?;
         builder.ok(response_buffer);
         Ok(())
     }
@@ -343,8 +340,6 @@ impl<'a> List<'a> {
         let backward = count < 0;
 
         let mut items_removed = 0u32;
-        let mut cache = ListItemCache::new();
-
         // change the index to absolute value
         let count = count.abs().try_into().unwrap_or(u32::MAX);
 
@@ -359,7 +354,7 @@ impl<'a> List<'a> {
 
             if should_delete {
                 // delete the item
-                self.remove_internal(cur_item.borrow().id(), &mut list_md, &mut cache)?;
+                self.remove_internal(cur_item.borrow().id(), &mut list_md)?;
                 items_removed = items_removed.saturating_add(1);
 
                 // limit the removed items if count is greater than 0
@@ -370,17 +365,13 @@ impl<'a> List<'a> {
             cur_item_opt = iter_next_or_prev!(self, list_md, Some(cur_item), backward);
         }
 
-        // Apply changes to the disk
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-
         if list_md.is_empty() {
-            self.delete_list_metadata_internal(list_name, &mut updates)?;
+            self.delete_list_metadata_internal(list_name)?;
         } else {
-            self.put_list_metadata_internal(&list_md, list_name, &mut updates)?;
+            self.put_list_metadata_internal(&list_md, list_name)?;
         }
 
-        self.store.apply_batch(&updates)?;
+        self.flush_cache()?;
         builder.number::<u32>(response_buffer, items_removed, false);
         Ok(())
     }
@@ -508,7 +499,6 @@ impl<'a> List<'a> {
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
-        let mut cache = ListItemCache::new();
         let mut list = match self.get_list_metadata_with_name(list_name)? {
             GetListMetadataResult::WrongType => {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
@@ -552,22 +542,18 @@ impl<'a> List<'a> {
             };
 
             if state == State::Delete {
-                self.remove_internal(cur_item.borrow().id(), &mut list, &mut cache)?;
+                self.remove_internal(cur_item.borrow().id(), &mut list)?;
             }
             cur_item_opt = Some(cur_item);
             cur_idx = cur_idx.saturating_add(1);
         }
 
-        // Apply changes to the disk
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-
         if list.is_empty() {
-            self.delete_list_metadata_internal(list_name, &mut updates)?;
+            self.delete_list_metadata_internal(list_name)?;
         } else {
-            self.put_list_metadata_internal(&list, list_name, &mut updates)?;
+            self.put_list_metadata_internal(&list, list_name)?;
         }
-        self.store.apply_batch(&updates)?;
+        self.flush_cache()?;
         builder.ok(response_buffer);
         Ok(())
     }
@@ -596,22 +582,15 @@ impl<'a> List<'a> {
             }
         };
 
-        // do all the manipulation in memory and apply it to the disk
-        // as a single batch operation
-        let mut cache = ListItemCache::new();
         for element in elements {
-            self.push_internal(&mut list, element, &mut cache, &flags)?;
+            self.push_internal(&mut list, element, &flags)?;
         }
 
-        // Create a batch update from the cache
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-
         // add the list to the batch update
-        self.put_list_metadata_internal(&list, list_name, &mut updates)?;
+        self.put_list_metadata_internal(&list, list_name)?;
 
         // and apply it
-        self.store.apply_batch(&updates)?;
+        self.flush_cache()?;
         builder.number_u64(response_buffer, list.len());
         Ok(())
     }
@@ -641,8 +620,7 @@ impl<'a> List<'a> {
             }
 
             // md is a list that is not empty
-            let mut cache = ListItemCache::new();
-            let Some(v) = self.pop_internal(&mut list_md, &mut cache, count, &flags)? else {
+            let Some(v) = self.pop_internal(&mut list_md, count, &flags)? else {
                 continue;
             };
 
@@ -650,17 +628,13 @@ impl<'a> List<'a> {
                 continue;
             }
 
-            // Create a batch update from the cache
-            let mut updates = BatchUpdate::default();
-            cache.as_batch_update(&mut updates);
-
             // delete or update source list if needed
             if list_md.is_empty() {
-                self.delete_list_metadata_internal(list_name, &mut updates)?;
+                self.delete_list_metadata_internal(list_name)?;
             } else {
-                self.put_list_metadata_internal(&list_md, list_name, &mut updates)?;
+                self.put_list_metadata_internal(&list_md, list_name)?;
             }
-            self.store.apply_batch(&updates)?;
+            self.flush_cache()?;
 
             // Build RESP response
             return Ok(BlockingPopInternalResult::Some(((*list_name).clone(), v)));
@@ -672,7 +646,6 @@ impl<'a> List<'a> {
     fn pop_internal(
         &self,
         list: &mut ListValueMetadata,
-        cache: &mut ListItemCache,
         mut count: usize,
         flags: &ListFlags,
     ) -> Result<Option<Vec<Rc<ListItem>>>, SableError> {
@@ -689,7 +662,7 @@ impl<'a> List<'a> {
                 list.tail()
             };
 
-            let Some(removed_item) = self.remove_internal(item_to_remove, list, cache)? else {
+            let Some(removed_item) = self.remove_internal(item_to_remove, list)? else {
                 break;
             };
             items_popped.push(Rc::new(removed_item));
@@ -747,8 +720,7 @@ impl<'a> List<'a> {
             GetListMetadataResult::Some(list) => list,
         };
 
-        let mut cache = ListItemCache::new();
-        let Some(v) = self.pop_internal(&mut src_list_md, &mut cache, 1, &src_flags)? else {
+        let Some(v) = self.pop_internal(&mut src_list_md, 1, &src_flags)? else {
             return Ok(MoveResult::None);
         };
 
@@ -757,27 +729,18 @@ impl<'a> List<'a> {
             return Ok(MoveResult::None);
         };
 
-        self.push_internal(
-            &mut target_list_md,
-            &popped_item.user_data,
-            &mut cache,
-            &target_flags,
-        )?;
-
-        // Create a batch update from the cache
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
+        self.push_internal(&mut target_list_md, &popped_item.user_data, &target_flags)?;
 
         // delete or update source list if needed
         if src_list_md.is_empty() {
-            self.delete_list_metadata_internal(src_list_name, &mut updates)?;
+            self.delete_list_metadata_internal(src_list_name)?;
         } else {
-            self.put_list_metadata_internal(&src_list_md, src_list_name, &mut updates)?;
+            self.put_list_metadata_internal(&src_list_md, src_list_name)?;
         }
 
         // update target list
-        self.put_list_metadata_internal(&target_list_md, target_list_name, &mut updates)?;
-        self.store.apply_batch(&updates)?;
+        self.put_list_metadata_internal(&target_list_md, target_list_name)?;
+        self.flush_cache()?;
 
         // the clone below is cheap (done on an Rc)
         Ok(MoveResult::Some(popped_item.clone()))
@@ -984,7 +947,7 @@ impl<'a> List<'a> {
         }
 
         let mut item = ListItem::new(list.id(), item_id);
-        if !item.load(self.store)? {
+        if !item.load(&self.cache)? {
             // we have a pointer to a non existing item in the database
             return Ok(IterResult::None);
         }
@@ -1014,7 +977,6 @@ impl<'a> List<'a> {
         &self,
         list: &mut ListValueMetadata,
         element: &BytesMut,
-        cache: &mut ListItemCache,
         flags: &ListFlags,
     ) -> Result<(), SableError> {
         // do all the manipulation in memory and apply it to the disk
@@ -1025,14 +987,14 @@ impl<'a> List<'a> {
             } else {
                 None
             };
-            self.insert_internal(list, element, None, left_item, cache)?;
+            self.insert_internal(list, element, None, left_item)?;
         } else {
             let right_item = if !list.is_empty() {
                 Some(list.tail())
             } else {
                 None
             };
-            self.insert_internal(list, element, right_item, None, cache)?;
+            self.insert_internal(list, element, right_item, None)?;
         }
         Ok(())
     }
@@ -1042,28 +1004,26 @@ impl<'a> List<'a> {
         &self,
         item_id: u64,
         list: &mut ListValueMetadata,
-        cache: &mut ListItemCache,
     ) -> Result<Option<ListItem>, SableError> {
-        let item_key = ListItem::create_key(list.id(), item_id);
-        let Some(to_be_removed) = cache.get(&item_key, self.store)? else {
+        let Some(to_be_removed) = self.get_list_item_by_key(list.id(), item_id)? else {
             return Ok(None);
         };
 
         if to_be_removed.has_previous() {
-            let left_item_key = ListItem::create_key(list.id(), to_be_removed.prev);
-            let Some(mut left_item) = cache.get(&left_item_key, self.store)? else {
+            let Some(mut left_item) = self.get_list_item_by_key(list.id(), to_be_removed.prev)?
+            else {
                 return Ok(None);
             };
             left_item.set_next(to_be_removed.next);
             if !left_item.has_next() {
                 list.set_tail(left_item.id());
             }
-            cache.put(left_item);
+            left_item.save(&self.cache)?;
         }
 
         if to_be_removed.has_next() {
-            let right_item_key = ListItem::create_key(list.id(), to_be_removed.next);
-            let Some(mut right_item) = cache.get(&right_item_key, self.store)? else {
+            let Some(mut right_item) = self.get_list_item_by_key(list.id(), to_be_removed.next)?
+            else {
                 return Ok(None);
             };
 
@@ -1071,14 +1031,22 @@ impl<'a> List<'a> {
             if !right_item.has_previous() {
                 list.set_head(right_item.id());
             }
-            cache.put(right_item);
+            right_item.save(&self.cache)?;
         }
 
         list.set_len(list.len().saturating_sub(1));
 
         // delete the item
-        cache.delete(&to_be_removed);
+        to_be_removed.delete(&self.cache)?;
         Ok(Some(to_be_removed))
+    }
+
+    fn get_list_item_by_key(
+        &self,
+        list_id: u64,
+        item_id: u64,
+    ) -> Result<Option<ListItem>, SableError> {
+        ListItem::from_storage(list_id, item_id, &self.cache)
     }
 
     /// Create a new `ListItem` and insert it between `left_id` and `right_id`
@@ -1090,7 +1058,6 @@ impl<'a> List<'a> {
         element: &BytesMut,
         left_id: Option<u64>,
         right_id: Option<u64>,
-        cache: &mut ListItemCache,
     ) -> Result<InsertResult, SableError> {
         let mut new_item = ListItem::new(list.id(), self.store.generate_id());
         new_item.user_data = element.clone();
@@ -1098,36 +1065,32 @@ impl<'a> List<'a> {
         match (left_id, right_id) {
             (Some(left_id), Some(right_id)) => {
                 // load the left item from the database
-                let left_key = ListItem::create_key(list.id(), left_id);
-                let right_key = ListItem::create_key(list.id(), right_id);
-                let Some(mut left_item) = cache.get(&left_key, self.store)? else {
+                let Some(mut left_item) = self.get_list_item_by_key(list.id(), left_id)? else {
                     return Ok(InsertResult::NotFound);
                 };
 
-                let Some(mut right_item) = cache.get(&right_key, self.store)? else {
+                let Some(mut right_item) = self.get_list_item_by_key(list.id(), right_id)? else {
                     return Ok(InsertResult::NotFound);
                 };
                 new_item.insert_between(Some(&mut left_item), Some(&mut right_item))?;
-                // update the cache
-                cache.put(left_item);
-                cache.put(right_item);
+                left_item.save(&self.cache)?;
+                right_item.save(&self.cache)?;
             }
             (Some(left_id), None) => {
                 // new list
-                let left_key = ListItem::create_key(list.id(), left_id);
-                let Some(mut left_item) = cache.get(&left_key, self.store)? else {
+                let Some(mut left_item) = self.get_list_item_by_key(list.id(), left_id)? else {
                     return Ok(InsertResult::NotFound);
                 };
                 new_item.insert_between(Some(&mut left_item), None)?;
+
                 // the new item is now the new tail
                 list.set_tail(new_item.id());
 
                 // update the cache
-                cache.put(left_item);
+                left_item.save(&self.cache)?;
             }
             (None, Some(right_id)) => {
-                let right_key = ListItem::create_key(list.id(), right_id);
-                let Some(mut right_item) = cache.get(&right_key, self.store)? else {
+                let Some(mut right_item) = self.get_list_item_by_key(list.id(), right_id)? else {
                     return Ok(InsertResult::NotFound);
                 };
                 new_item.insert_between(None, Some(&mut right_item))?;
@@ -1136,7 +1099,7 @@ impl<'a> List<'a> {
                 list.set_head(new_item.id());
 
                 // update the cache
-                cache.put(right_item);
+                right_item.save(&self.cache)?;
             }
             (None, None) => {
                 // list is empty (probably a new list)
@@ -1149,7 +1112,7 @@ impl<'a> List<'a> {
         list.set_len(list.len().saturating_add(1));
 
         // store the new element
-        cache.put(new_item);
+        new_item.save(&self.cache)?;
         Ok(InsertResult::Some(()))
     }
 
@@ -1162,7 +1125,7 @@ impl<'a> List<'a> {
         list_name: &BytesMut,
     ) -> Result<GetListMetadataResult, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
-        if let Some(mut value) = self.store.get(&internal_key)? {
+        if let Some(mut value) = self.cache.get(&internal_key)? {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let common_md = CommonValueMetadata::from_bytes(&mut reader)?;
 
@@ -1173,7 +1136,7 @@ impl<'a> List<'a> {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let md = ListValueMetadata::from_bytes(&mut reader)?;
             if md.expiration().is_expired()? {
-                self.store.delete(&internal_key)?;
+                self.cache.delete(&internal_key)?;
                 Ok(GetListMetadataResult::None)
             } else {
                 let _ = value.split_to(ListValueMetadata::SIZE);
@@ -1185,13 +1148,9 @@ impl<'a> List<'a> {
     }
 
     /// Delete `ListValueMetadata` from the database
-    fn delete_list_metadata_internal(
-        &self,
-        list_name: &BytesMut,
-        updates: &mut BatchUpdate,
-    ) -> Result<(), SableError> {
+    fn delete_list_metadata_internal(&self, list_name: &BytesMut) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
-        updates.delete(internal_key);
+        self.cache.delete(&internal_key)?;
         Ok(())
     }
 
@@ -1200,13 +1159,12 @@ impl<'a> List<'a> {
         &self,
         metadata: &ListValueMetadata,
         list_name: &BytesMut,
-        updates: &mut BatchUpdate,
     ) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         let mut buf = BytesMut::with_capacity(ListValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut buf);
         metadata.to_bytes(&mut builder);
-        updates.put(internal_key, buf);
+        self.cache.put(&internal_key, buf)?;
         Ok(())
     }
 
@@ -1216,6 +1174,11 @@ impl<'a> List<'a> {
         let list_id = self.store.generate_id();
         md.set_id(list_id);
         md
+    }
+
+    fn flush_cache(&self) -> Result<(), SableError> {
+        let updates = self.cache.to_write_batch();
+        self.store.apply_batch(&updates)
     }
 }
 
@@ -1262,15 +1225,15 @@ impl ListItem {
     }
 
     /// Save the current list item into the database
-    pub fn save(&self, store: &StorageAdapter, put_flags: PutFlags) -> Result<(), SableError> {
+    pub fn save(&self, store: &DbWriteCache) -> Result<(), SableError> {
         let (key, val) = self.serialise();
-        store.put(&key, &val, put_flags)
+        store.put(&key, val)
     }
 
     /// Load list item from the database based on its parent list ID and its own ID
     /// Note: `self.list_id` and `self.item_id` must be set before calling this
     /// function
-    pub fn load(&mut self, store: &StorageAdapter) -> Result<bool, SableError> {
+    pub fn load(&mut self, store: &DbWriteCache) -> Result<bool, SableError> {
         // as the key, we use:
         // `key_type`, `list_id` and `item_id`
         // in as the value:
@@ -1296,7 +1259,7 @@ impl ListItem {
     }
 
     /// Delete the `ListItem` from the database
-    pub fn delete(&self, store: &StorageAdapter) -> Result<(), SableError> {
+    pub fn delete(&self, store: &DbWriteCache) -> Result<(), SableError> {
         // as the key, we use:
         // `key_type`, `list_id` and `item_id`
         // in as the value:
@@ -1438,7 +1401,7 @@ impl ListItem {
     pub fn from_storage(
         list_id: u64,
         item_id: u64,
-        store: &StorageAdapter,
+        store: &DbWriteCache,
     ) -> Result<Option<ListItem>, SableError> {
         let mut list_item = ListItem::new(list_id, item_id);
         if !list_item.load(store)? {
@@ -1524,11 +1487,13 @@ mod tests {
         let mut src = ListItem::new(1975, 42);
         src.prev = 10;
         src.next = 11;
+
+        let cache = DbWriteCache::with_storage(&store);
         src.user_data = BytesMut::from("hello world");
-        src.save(&store, PutFlags::Override)?;
+        src.save(&cache)?;
 
         let mut target = ListItem::new(1975, 42);
-        assert_eq!(target.load(&store)?, true);
+        assert_eq!(target.load(&cache)?, true);
         assert_eq!(target.list_id, src.list_id);
         assert_eq!(target.prev, src.prev);
         assert_eq!(target.next, src.next);

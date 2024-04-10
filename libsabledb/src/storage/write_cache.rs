@@ -1,19 +1,22 @@
-use crate::{storage::BatchUpdate, SableError, StorageAdapter};
+use crate::{storage::BatchUpdate, storage::PutFlags, SableError, StorageAdapter};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use std::rc::Rc;
 
-#[allow(dead_code)]
-#[derive(Default)]
 struct CacheEntry {
     data: BytesMut,
     is_dirty: bool,
+    #[allow(dead_code)]
+    flags: PutFlags,
 }
 
-#[allow(dead_code)]
 impl CacheEntry {
-    pub fn new(data: BytesMut, is_dirty: bool) -> Self {
-        CacheEntry { data, is_dirty }
+    pub fn new(data: BytesMut, is_dirty: bool, flags: PutFlags) -> Self {
+        CacheEntry {
+            data,
+            is_dirty,
+            flags,
+        }
     }
 }
 
@@ -27,13 +30,11 @@ impl CacheEntry {
 ///
 /// The changes accumlated in the cacne can be flushed to disk by
 /// calling to `DbWriteCache::to_write_batch()` followed by `StroageAdapter::apply_batch` call
-#[allow(dead_code)]
 pub struct DbWriteCache<'a> {
     store: &'a StorageAdapter,
     changes: DashMap<BytesMut, Option<Rc<CacheEntry>>>,
 }
 
-#[allow(dead_code)]
 impl<'a> DbWriteCache<'a> {
     pub fn with_storage(store: &'a StorageAdapter) -> Self {
         DbWriteCache {
@@ -43,7 +44,18 @@ impl<'a> DbWriteCache<'a> {
     }
 
     pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
-        let entry = Rc::new(CacheEntry::new(value, true));
+        let entry = Rc::new(CacheEntry::new(value, true, PutFlags::Override));
+        let _ = self.changes.insert(key.clone(), Some(entry));
+        Ok(())
+    }
+
+    pub fn put_flags(
+        &self,
+        key: &BytesMut,
+        value: BytesMut,
+        flags: PutFlags,
+    ) -> Result<(), SableError> {
+        let entry = Rc::new(CacheEntry::new(value, true, flags));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
@@ -61,7 +73,7 @@ impl<'a> DbWriteCache<'a> {
         if let Some(value) = self.changes.get(key) {
             Ok(value.is_some())
         } else {
-            self.store.contains(&key)
+            self.store.contains(key)
         }
     }
 
@@ -73,7 +85,7 @@ impl<'a> DbWriteCache<'a> {
             // No such entry
             if let Some(value) = self.store.get(key)? {
                 // update the cache
-                let entry = Rc::new(CacheEntry::new(value, false));
+                let entry = Rc::new(CacheEntry::new(value, false, PutFlags::Override));
                 self.changes.insert(key.clone(), Some(entry.clone()));
                 return Ok(Some(entry.data.clone()));
             }

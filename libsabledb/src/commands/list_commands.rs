@@ -1126,6 +1126,9 @@ mod tests {
                 {
                     ClientNextAction::TerminateConnection(_) => {}
                     ClientNextAction::SendResponse(response_buffer) => {
+                        if BytesMutUtils::to_string(&response_buffer).as_str() != expected_value {
+                            println!("Command: {:?}", cmd);
+                        }
                         assert_eq!(
                             BytesMutUtils::to_string(&response_buffer).as_str(),
                             expected_value
