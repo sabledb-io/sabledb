@@ -15,11 +15,15 @@ pub struct TempFile {
 impl TempFile {
     pub fn with_name(name: &str) -> Self {
         let full_path = format!(
-            "{}{}.{}.txt",
+            "{}/{}.{}.txt",
             std::env::temp_dir().to_path_buf().display(),
             name,
             COUNTER.load(Ordering::Relaxed)
         );
+
+        let full_path = full_path.replace('\\', "/");
+        let full_path = full_path.replace("//", "/");
+
         TempFile {
             full_path: PathBuf::from(full_path),
         }
