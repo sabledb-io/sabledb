@@ -1,7 +1,11 @@
 [![ubuntu-latest-build-and-test](https://github.com/sabledb-io/sabledb/actions/workflows/rust.yml/badge.svg)](https://github.com/sabledb-io/sabledb/actions/workflows/rust.yml)
 [![macOS-latest](https://github.com/sabledb-io/sabledb/actions/workflows/macos-latest.yml/badge.svg)](https://github.com/sabledb-io/sabledb/actions/workflows/macos-latest.yml)
 
+
+
 # What is `SableDb`?
+
+<img src="/docs/images/sabledb.svg" width="200" height="200" align="right" />
 
 `SableDb` is a key-value NoSQL database that utilizes [`RocksDb`][3] as its storage engine and is compatible with the Redis protocol.
 It aims to reduce memory costs and increase capacity compared to Redis. `SableDb` features include Redis-compatible access via 
