@@ -128,6 +128,10 @@ impl<'a> HashDb<'a> {
 
         hash.incr_len_by(items_added as u64);
         self.put_hash_metadata(user_key, &hash)?;
+
+        // flush the changes
+        self.flush_cache()?;
+
         Ok(HashPutResult::Some(items_added))
     }
 
@@ -188,6 +192,10 @@ impl<'a> HashDb<'a> {
         // update the hash metadata
         hash.decr_len_by(items_deleted as u64);
         self.put_hash_metadata(user_key, &hash)?;
+
+        // flush the changes
+        self.flush_cache()?;
+
         Ok(HashDeleteResult::Some(items_deleted))
     }
 
@@ -209,10 +217,20 @@ impl<'a> HashDb<'a> {
     /// Internal API for this class
     ///=======================================================
 
+    /// Apply the changes to the store and clear the cache
+    fn flush_cache(&self) -> Result<(), SableError> {
+        let batch = self.cache.to_write_batch();
+        if batch.is_empty() {
+            return Ok(());
+        }
+        self.cache.clear();
+        self.store.apply_batch(&batch)
+    }
+
     /// Load hash value metadata from the store
     fn get_hash_metadata(&self, user_key: &BytesMut) -> Result<GetHashMetadataResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        let Some(value) = self.store.get(&encoded_key)? else {
+        let Some(value) = self.cache.get(&encoded_key)? else {
             return Ok(GetHashMetadataResult::None);
         };
 
@@ -235,7 +253,7 @@ impl<'a> HashDb<'a> {
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
         hash_md.to_bytes(&mut builder);
 
-        self.store.put(&encoded_key, &buffer, PutFlags::Override)?;
+        self.cache.put(&encoded_key, buffer)?;
         Ok(())
     }
 
@@ -251,7 +269,7 @@ impl<'a> HashDb<'a> {
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
         hash_md.to_bytes(&mut builder);
 
-        self.store.put(&encoded_key, &buffer, PutFlags::Override)?;
+        self.cache.put(&encoded_key, buffer)?;
         Ok(hash_md)
     }
 
@@ -261,14 +279,14 @@ impl<'a> HashDb<'a> {
         user_key: &BytesMut,
     ) -> Result<DeleteHashMetadataResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        let Some(value) = self.store.get(&encoded_key)? else {
+        let Some(value) = self.cache.get(&encoded_key)? else {
             return Ok(DeleteHashMetadataResult::NotFound);
         };
 
         match self.try_decode_hash_value_metadata(&value)? {
             None => Ok(DeleteHashMetadataResult::WrongType),
             Some(_) => {
-                self.store.delete(&encoded_key)?;
+                self.cache.delete(&encoded_key)?;
                 Ok(DeleteHashMetadataResult::Ok)
             }
         }
@@ -290,7 +308,7 @@ impl<'a> HashDb<'a> {
     /// Delete hash field from the database
     fn delete_hash_field_key(&self, hash_id: u64, user_field: &BytesMut) -> Result<(), SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        self.store.delete(&key)?;
+        self.cache.delete(&key)?;
         Ok(())
     }
 
@@ -301,13 +319,13 @@ impl<'a> HashDb<'a> {
         user_field: &BytesMut,
     ) -> Result<Option<BytesMut>, SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        self.store.get(&key)
+        self.cache.get(&key)
     }
 
     /// Return the value of hash field
     fn contains_hash_field(&self, hash_id: u64, user_field: &BytesMut) -> Result<bool, SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        self.store.contains(&key)
+        self.cache.contains(&key)
     }
 
     /// Put the value for a hash field
@@ -318,10 +336,10 @@ impl<'a> HashDb<'a> {
         user_value: &BytesMut,
     ) -> Result<PutFieldResult, SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        if self.store.contains(&key)? {
+        if self.cache.contains(&key)? {
             return Ok(PutFieldResult::AlreadyExists);
         }
-        self.store.put(&key, user_value, PutFlags::Override)?;
+        self.cache.put(&key, user_value.clone())?;
         Ok(PutFieldResult::Ok)
     }
 

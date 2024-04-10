@@ -42,23 +42,23 @@ impl<'a> DbWriteCache<'a> {
         }
     }
 
-    pub fn put(&self, key: BytesMut, value: BytesMut) -> Result<(), SableError> {
+    pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
         let entry = Rc::new(CacheEntry::new(value, true));
-        let _ = self.changes.insert(key, Some(entry));
+        let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
 
     /// Note that we do not remove the entry from the `changes` hash,
     /// instead we use a `None` marker to indicate that this entry
     /// should be converted into a `delete` operation
-    pub fn delete(&self, key: BytesMut) -> Result<(), SableError> {
-        let _ = self.changes.insert(key, None);
+    pub fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
+        let _ = self.changes.insert(key.clone(), None);
         Ok(())
     }
 
     /// Return true if `key` exists in the cache or in the underlying storage
-    pub fn contains(&self, key: BytesMut) -> Result<bool, SableError> {
-        if let Some(value) = self.changes.get(&key) {
+    pub fn contains(&self, key: &BytesMut) -> Result<bool, SableError> {
+        if let Some(value) = self.changes.get(key) {
             Ok(value.is_some())
         } else {
             self.store.contains(&key)
@@ -68,13 +68,13 @@ impl<'a> DbWriteCache<'a> {
     /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
     /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
     /// this means that it was deleted, so return a `None` as well
-    pub fn get(&self, key: BytesMut) -> Result<Option<BytesMut>, SableError> {
-        let Some(value) = self.changes.get(&key) else {
+    pub fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
+        let Some(value) = self.changes.get(key) else {
             // No such entry
-            if let Some(value) = self.store.get(&key)? {
+            if let Some(value) = self.store.get(key)? {
                 // update the cache
                 let entry = Rc::new(CacheEntry::new(value, false));
-                self.changes.insert(key, Some(entry.clone()));
+                self.changes.insert(key.clone(), Some(entry.clone()));
                 return Ok(Some(entry.data.clone()));
             }
             return Ok(None);
@@ -103,6 +103,10 @@ impl<'a> DbWriteCache<'a> {
             }
         }
         batch_update
+    }
+
+    pub fn clear(&self) {
+        self.changes.clear()
     }
 }
 
@@ -143,7 +147,7 @@ mod tests {
         let db_cache = DbWriteCache::with_storage(&store);
         for i in 0..100 {
             let key = BytesMut::from(format!("k{}", i).as_str());
-            let value = db_cache.get(key).unwrap().unwrap();
+            let value = db_cache.get(&key).unwrap().unwrap();
             let expected_value = BytesMut::from(format!("v{}", i).as_str());
             assert_eq!(value, expected_value);
         }
@@ -170,7 +174,7 @@ mod tests {
         for i in 0..10 {
             let key = BytesMut::from(format!("new_k{}", i).as_str());
             let value = BytesMut::from(format!("v{}", i).as_str());
-            db_cache.put(key, value).unwrap();
+            db_cache.put(&key, value).unwrap();
         }
 
         // get a write batch from the cache
@@ -191,10 +195,10 @@ mod tests {
         store.put(&key, &value, PutFlags::Override).unwrap();
 
         let db_cache = DbWriteCache::with_storage(&store);
-        assert!(db_cache.contains(key).unwrap());
+        assert!(db_cache.contains(&key).unwrap());
 
         let no_such_key = BytesMut::from("no_such_key");
-        assert!(!db_cache.contains(no_such_key).unwrap());
+        assert!(!db_cache.contains(&no_such_key).unwrap());
     }
 
     #[test]
@@ -214,7 +218,7 @@ mod tests {
         for i in 0..50 {
             let key = BytesMut::from(format!("k{}", i).as_str());
             expected_keys.insert(key.clone());
-            db_cache.delete(key).unwrap();
+            db_cache.delete(&key).unwrap();
         }
 
         // get a write batch from the cache
