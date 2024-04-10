@@ -142,59 +142,6 @@ impl<'a> List<'a> {
         }
     }
 
-    /// pop `count` items from the first non empty list
-    /// If this function could not find a list with items,
-    /// return `BlockingCommandResult::WouldBlock` to the caller
-    pub fn blocking_pop_internal(
-        &self,
-        lists: &[&BytesMut],
-        count: usize,
-        flags: ListFlags,
-    ) -> Result<BlockingPopInternalResult, SableError> {
-        if count == 0 {
-            return Ok(BlockingPopInternalResult::InvalidArguments);
-        }
-
-        for list_name in lists {
-            let GetListMetadataResult::Some(mut list_md) =
-                self.get_list_metadata_with_name(list_name)?
-            else {
-                continue;
-            };
-
-            if list_md.is_empty() {
-                continue;
-            }
-
-            // md is a list that is not empty
-            let mut cache = ListItemCache::new();
-            let Some(v) = self.pop_internal(&mut list_md, &mut cache, count, &flags)? else {
-                continue;
-            };
-
-            if v.is_empty() {
-                continue;
-            }
-
-            // Create a batch update from the cache
-            let mut updates = BatchUpdate::default();
-            cache.as_batch_update(&mut updates);
-
-            // delete or update source list if needed
-            if list_md.is_empty() {
-                self.delete_list_metadata_internal(list_name, &mut updates)?;
-            } else {
-                self.put_list_metadata_internal(&list_md, list_name, &mut updates)?;
-            }
-            self.store.apply_batch(&updates)?;
-
-            // Build RESP response
-            return Ok(BlockingPopInternalResult::Some(((*list_name).clone(), v)));
-        }
-
-        Ok(BlockingPopInternalResult::WouldBlock)
-    }
-
     /// Insert `element` after or before `pivot` element
     pub fn linsert(
         &self,
@@ -315,36 +262,6 @@ impl<'a> List<'a> {
             }
         }
         Ok(())
-    }
-
-    fn pop_internal(
-        &self,
-        list: &mut ListValueMetadata,
-        cache: &mut ListItemCache,
-        mut count: usize,
-        flags: &ListFlags,
-    ) -> Result<Option<Vec<Rc<ListItem>>>, SableError> {
-        count = std::cmp::min(count, list.len() as usize);
-        if count == 0 {
-            return Ok(None);
-        }
-
-        let mut items_popped = Vec::<Rc<ListItem>>::with_capacity(count);
-        while count > 0 {
-            let item_to_remove = if flags.intersects(ListFlags::FromLeft) {
-                list.head()
-            } else {
-                list.tail()
-            };
-
-            let Some(removed_item) = self.remove_internal(item_to_remove, list, cache)? else {
-                break;
-            };
-            items_popped.push(Rc::new(removed_item));
-            count = count.saturating_sub(1);
-        }
-
-        Ok(Some(items_popped))
     }
 
     /// Returns the element at index `index` in the list stored at key. The `index` is zero-based
@@ -655,6 +572,133 @@ impl<'a> List<'a> {
         Ok(())
     }
 
+    pub fn push(
+        &self,
+        list_name: &BytesMut,
+        elements: &[&BytesMut],
+        response_buffer: &mut BytesMut,
+        flags: ListFlags,
+    ) -> Result<(), SableError> {
+        let builder = RespBuilderV2::default();
+        let mut list = match self.get_list_metadata_with_name(list_name)? {
+            GetListMetadataResult::None => {
+                if flags.intersects(ListFlags::ListMustExist) {
+                    builder.number_usize(response_buffer, 0);
+                    return Ok(());
+                } else {
+                    self.new_list_internal()
+                }
+            }
+            GetListMetadataResult::Some(list) => list,
+            GetListMetadataResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+        };
+
+        // do all the manipulation in memory and apply it to the disk
+        // as a single batch operation
+        let mut cache = ListItemCache::new();
+        for element in elements {
+            self.push_internal(&mut list, element, &mut cache, &flags)?;
+        }
+
+        // Create a batch update from the cache
+        let mut updates = BatchUpdate::default();
+        cache.as_batch_update(&mut updates);
+
+        // add the list to the batch update
+        self.put_list_metadata_internal(&list, list_name, &mut updates)?;
+
+        // and apply it
+        self.store.apply_batch(&updates)?;
+        builder.number_u64(response_buffer, list.len());
+        Ok(())
+    }
+
+    /// pop `count` items from the first non empty list
+    /// If this function could not find a list with items,
+    /// return `BlockingCommandResult::WouldBlock` to the caller
+    fn blocking_pop_internal(
+        &self,
+        lists: &[&BytesMut],
+        count: usize,
+        flags: ListFlags,
+    ) -> Result<BlockingPopInternalResult, SableError> {
+        if count == 0 {
+            return Ok(BlockingPopInternalResult::InvalidArguments);
+        }
+
+        for list_name in lists {
+            let GetListMetadataResult::Some(mut list_md) =
+                self.get_list_metadata_with_name(list_name)?
+            else {
+                continue;
+            };
+
+            if list_md.is_empty() {
+                continue;
+            }
+
+            // md is a list that is not empty
+            let mut cache = ListItemCache::new();
+            let Some(v) = self.pop_internal(&mut list_md, &mut cache, count, &flags)? else {
+                continue;
+            };
+
+            if v.is_empty() {
+                continue;
+            }
+
+            // Create a batch update from the cache
+            let mut updates = BatchUpdate::default();
+            cache.as_batch_update(&mut updates);
+
+            // delete or update source list if needed
+            if list_md.is_empty() {
+                self.delete_list_metadata_internal(list_name, &mut updates)?;
+            } else {
+                self.put_list_metadata_internal(&list_md, list_name, &mut updates)?;
+            }
+            self.store.apply_batch(&updates)?;
+
+            // Build RESP response
+            return Ok(BlockingPopInternalResult::Some(((*list_name).clone(), v)));
+        }
+
+        Ok(BlockingPopInternalResult::WouldBlock)
+    }
+
+    fn pop_internal(
+        &self,
+        list: &mut ListValueMetadata,
+        cache: &mut ListItemCache,
+        mut count: usize,
+        flags: &ListFlags,
+    ) -> Result<Option<Vec<Rc<ListItem>>>, SableError> {
+        count = std::cmp::min(count, list.len() as usize);
+        if count == 0 {
+            return Ok(None);
+        }
+
+        let mut items_popped = Vec::<Rc<ListItem>>::with_capacity(count);
+        while count > 0 {
+            let item_to_remove = if flags.intersects(ListFlags::FromLeft) {
+                list.head()
+            } else {
+                list.tail()
+            };
+
+            let Some(removed_item) = self.remove_internal(item_to_remove, list, cache)? else {
+                break;
+            };
+            items_popped.push(Rc::new(removed_item));
+            count = count.saturating_sub(1);
+        }
+
+        Ok(Some(items_popped))
+    }
+
     /// Convert range `start,end` into positive indices
     fn convert_trim_indices(&self, start_i32: i32, end_i32: i32, llen: i32) -> (u32, u32) {
         /* convert negative indexes */
@@ -738,6 +782,10 @@ impl<'a> List<'a> {
         // the clone below is cheap (done on an Rc)
         Ok(MoveResult::Some(popped_item.clone()))
     }
+
+    ///--------------------------------------------
+    /// Privae methods
+    ///--------------------------------------------
 
     /// Find an item, by value in the list
     fn find_by_value(
@@ -986,50 +1034,6 @@ impl<'a> List<'a> {
             };
             self.insert_internal(list, element, right_item, None, cache)?;
         }
-        Ok(())
-    }
-
-    pub fn push(
-        &self,
-        list_name: &BytesMut,
-        elements: &[&BytesMut],
-        response_buffer: &mut BytesMut,
-        flags: ListFlags,
-    ) -> Result<(), SableError> {
-        let builder = RespBuilderV2::default();
-        let mut list = match self.get_list_metadata_with_name(list_name)? {
-            GetListMetadataResult::None => {
-                if flags.intersects(ListFlags::ListMustExist) {
-                    builder.number_usize(response_buffer, 0);
-                    return Ok(());
-                } else {
-                    self.new_list_internal()
-                }
-            }
-            GetListMetadataResult::Some(list) => list,
-            GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
-                return Ok(());
-            }
-        };
-
-        // do all the manipulation in memory and apply it to the disk
-        // as a single batch operation
-        let mut cache = ListItemCache::new();
-        for element in elements {
-            self.push_internal(&mut list, element, &mut cache, &flags)?;
-        }
-
-        // Create a batch update from the cache
-        let mut updates = BatchUpdate::default();
-        cache.as_batch_update(&mut updates);
-
-        // add the list to the batch update
-        self.put_list_metadata_internal(&list, list_name, &mut updates)?;
-
-        // and apply it
-        self.store.apply_batch(&updates)?;
-        builder.number_u64(response_buffer, list.len());
         Ok(())
     }
 
