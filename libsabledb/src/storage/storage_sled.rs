@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use sled::{pin, IVec, LogKind, LogRead, Lsn, PageId, SEG_HEADER_LEN};
+use sled::{pin, IVec, LogKind, PageId};
 
 const PID: PageId = 4;
 const REPLACE: LogKind = LogKind::Replace;
@@ -236,37 +236,27 @@ impl StorageTrait for StorageSledDb {
         memory_limit: Option<u64>,
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError> {
-        // let page = &self.store.context.pagecache;
-        // let log = &self.store.context.pagecache.log;
-        // let mut changes_iter = log.iter_from(sequence_number as i64);
+        let log = &self.store.context.pagecache.log;
+        let mut changes_iter = log.iter_from(sequence_number as i64);
 
         let mut myiter = UpdateBatchIterator::new(sequence_number);
 
-        // for (_, pid, _, change, seq) in changes_iter {
-        //     let (seq, write_batch) = match change {
-        //         Err(e) => {
-        //             return Err(SableError::RocksDbError(e));
-        //         }
-        //         Ok((seq, update)) => (seq, update),
-        //     };
+        while let Some(t) = changes_iter.next() {
+            // update the counters
+            myiter.update(t.2 as u64);
 
-        //     write_batch.iterate(&mut myiter);
+            if let Some(memory_limit) = memory_limit {
+                if myiter.storage_updates.len() >= memory_limit {
+                    break;
+                }
+            }
 
-        //     // update the counters
-        //     myiter.update(seq);
-
-        //     if let Some(memory_limit) = memory_limit {
-        //         if myiter.storage_updates.len() >= memory_limit {
-        //             break;
-        //         }
-        //     }
-
-        //     if let Some(changes_count_limit) = changes_count_limit {
-        //         if myiter.storage_updates.changes_count >= changes_count_limit {
-        //             break;
-        //         }
-        //     }
-        // }
+            if let Some(changes_count_limit) = changes_count_limit {
+                if myiter.storage_updates.changes_count >= changes_count_limit {
+                    break;
+                }
+            }
+        }
         Ok(myiter.storage_updates)
     }
 
@@ -275,34 +265,23 @@ impl StorageTrait for StorageSledDb {
         prefix: Rc<BytesMut>,
         callback: Box<IterateCallback>,
     ) -> Result<(), SableError> {
-        // let mut iter = self.store.into_iter();
-
         // // search our prefix
-        // iter.seek(prefix.as_ref());
+        let mut iter = self.store.scan_prefix(prefix.as_ref());
 
-        // loop {
-        //     if !iter.valid() {
-        //         break;
-        //     }
+        loop {
+            let Some(result) = iter.next() else {
+                break;
+            };
 
-        //     // get the key & value
-        //     let Some(key) = iter.key() else {
-        //         break;
-        //     };
-
-        //     if !key.starts_with(&prefix) {
-        //         break;
-        //     }
-
-        //     let Some(value) = iter.value() else {
-        //         break;
-        //     };
-
-        //     if !callback(key, value) {
-        //         break;
-        //     }
-        //     iter.next();
-        // }
+            match result {
+                Ok((k, v)) => {
+                    if !callback(&k.to_vec(), &v.to_vec()) {
+                        break;
+                    }
+                }
+                Err(_e) => break,
+            }
+        }
         Ok(())
     }
 }
