@@ -15,6 +15,8 @@ use std::sync::{
     Mutex, RwLock,
 };
 
+const PONG: &[u8] = b"+PONG\r\n";
+
 #[allow(unused_imports)]
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -448,9 +450,8 @@ impl Client {
         let kind = command.metadata().name();
         let client_action = match kind {
             RedisCommandName::Ping => {
-                let mut buffer = BytesMut::with_capacity(32);
-                builder.pong(&mut buffer);
-                Self::send_response(tx, &buffer, client_state.client_id).await?;
+                tx.write_all(&PONG).await?;
+                Telemetry::inc_net_bytes_written(PONG.len() as u128);
                 ClientNextAction::NoAction
             }
             RedisCommandName::Cmd => {
