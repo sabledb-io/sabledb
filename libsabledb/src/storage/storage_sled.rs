@@ -43,7 +43,7 @@ pub struct StorageSledDb {
 impl StorageSledDb {
     /// Open the storage
     pub fn open(open_params: StorageOpenParams) -> Result<Self, SableError> {
-        let store = sled::open(open_params.db_path)?;
+        let store = sled::open(open_params.db_path.clone())?;
         Ok(StorageSledDb {
             store: Arc::new(store),
             path: open_params.db_path.clone(),
@@ -236,37 +236,37 @@ impl StorageTrait for StorageSledDb {
         memory_limit: Option<u64>,
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError> {
-        let page = &self.store.context.pagecache;
-        let log = &self.store.context.pagecache.log;
-        let mut changes_iter = log.iter_from(sequence_number as i64);
+        // let page = &self.store.context.pagecache;
+        // let log = &self.store.context.pagecache.log;
+        // let mut changes_iter = log.iter_from(sequence_number as i64);
 
         let mut myiter = UpdateBatchIterator::new(sequence_number);
 
-        for (_, pid, _, change, seq) in changes_iter {
-            let (seq, write_batch) = match change {
-                Err(e) => {
-                    return Err(SableError::RocksDbError(e));
-                }
-                Ok((seq, update)) => (seq, update),
-            };
+        // for (_, pid, _, change, seq) in changes_iter {
+        //     let (seq, write_batch) = match change {
+        //         Err(e) => {
+        //             return Err(SableError::RocksDbError(e));
+        //         }
+        //         Ok((seq, update)) => (seq, update),
+        //     };
 
-            write_batch.iterate(&mut myiter);
+        //     write_batch.iterate(&mut myiter);
 
-            // update the counters
-            myiter.update(seq);
+        //     // update the counters
+        //     myiter.update(seq);
 
-            if let Some(memory_limit) = memory_limit {
-                if myiter.storage_updates.len() >= memory_limit {
-                    break;
-                }
-            }
+        //     if let Some(memory_limit) = memory_limit {
+        //         if myiter.storage_updates.len() >= memory_limit {
+        //             break;
+        //         }
+        //     }
 
-            if let Some(changes_count_limit) = changes_count_limit {
-                if myiter.storage_updates.changes_count >= changes_count_limit {
-                    break;
-                }
-            }
-        }
+        //     if let Some(changes_count_limit) = changes_count_limit {
+        //         if myiter.storage_updates.changes_count >= changes_count_limit {
+        //             break;
+        //         }
+        //     }
+        // }
         Ok(myiter.storage_updates)
     }
 
@@ -275,37 +275,112 @@ impl StorageTrait for StorageSledDb {
         prefix: Rc<BytesMut>,
         callback: Box<IterateCallback>,
     ) -> Result<(), SableError> {
-        let mut iter = self.store.into_iter();
+        // let mut iter = self.store.into_iter();
 
-        // search our prefix
-        iter.seek(prefix.as_ref());
+        // // search our prefix
+        // iter.seek(prefix.as_ref());
 
-        loop {
-            if !iter.valid() {
-                break;
-            }
+        // loop {
+        //     if !iter.valid() {
+        //         break;
+        //     }
 
-            // get the key & value
-            let Some(key) = iter.key() else {
-                break;
-            };
+        //     // get the key & value
+        //     let Some(key) = iter.key() else {
+        //         break;
+        //     };
 
-            if !key.starts_with(&prefix) {
-                break;
-            }
+        //     if !key.starts_with(&prefix) {
+        //         break;
+        //     }
 
-            let Some(value) = iter.value() else {
-                break;
-            };
+        //     let Some(value) = iter.value() else {
+        //         break;
+        //     };
 
-            if !callback(key, value) {
-                break;
-            }
-            iter.next();
-        }
+        //     if !callback(key, value) {
+        //         break;
+        //     }
+        //     iter.next();
+        // }
         Ok(())
     }
 }
 
 #[allow(unsafe_code)]
 unsafe impl Send for StorageSledDb {}
+
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
+#[cfg(test)]
+// #[cfg(feature = "sled_db")]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_get_updates_since() -> Result<(), SableError> {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_get_updates_since.db");
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let sled = crate::StorageSledDb::open(open_params.clone()).expect("sleddb open");
+        // put some items
+        println!("Populating db...");
+        let mut all_keys = std::collections::HashSet::<String>::new();
+        for i in 0..20 {
+            let mut batch = BatchUpdate::default();
+            let key = format!("key_{}", i);
+            let value = format!("value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            all_keys.insert(key);
+
+            let key = format!("2nd_key_{}", i);
+            let value = format!("2nd_value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            all_keys.insert(key);
+            sled.apply_batch(&batch)?;
+        }
+
+        // read 10 changes, starting 0
+        let changes = sled.storage_updates_since(0, None, Some(10))?;
+        assert_eq!(changes.changes_count, 10);
+
+        let next_batch_seq = changes.end_seq_number;
+        let mut counter = 0;
+        let mut reader = crate::U8ArrayReader::with_buffer(&changes.serialised_data);
+        while let Some(item) = changes.next(&mut reader) {
+            let StorageUpdatesIterItem::Put(put_record) = item else {
+                return Err(SableError::OtherError("Expected put record".to_string()));
+            };
+            let key_to_remove = String::from_utf8_lossy(&put_record.key).to_string();
+            assert!(all_keys.remove(&key_to_remove));
+            counter += 1;
+        }
+        assert_eq!(counter, 20);
+
+        let changes = sled.storage_updates_since(next_batch_seq, None, Some(10))?;
+        assert_eq!(changes.changes_count, 10);
+        let mut counter = 0;
+        let mut reader = crate::U8ArrayReader::with_buffer(&changes.serialised_data);
+        while let Some(item) = changes.next(&mut reader) {
+            let StorageUpdatesIterItem::Put(put_record) = item else {
+                return Err(SableError::OtherError("Expected put record".to_string()));
+            };
+            let key_to_remove = String::from_utf8_lossy(&put_record.key).to_string();
+            assert!(all_keys.remove(&key_to_remove));
+            counter += 1;
+        }
+        assert_eq!(counter, 20);
+
+        // verify that all keys have been visited and removed
+        assert!(all_keys.is_empty());
+        Ok(())
+    }
+}

@@ -43,3 +43,4 @@ affinity = "0"
 [features]
 default = ["rocks_db"]
 rocks_db = []
+sled_db = []

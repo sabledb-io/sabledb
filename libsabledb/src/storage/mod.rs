@@ -16,6 +16,7 @@ pub use hash_db::{
     HashDb, HashDeleteResult, HashExistsResult, HashGetResult, HashLenResult, HashPutResult,
 };
 pub use storage_rocksdb::StorageRocksDb;
+pub use storage_sled::StorageSledDb;
 pub use storage_trait::{IterateCallback, StorageTrait};
 pub use string_db::StringsDb;
 pub use write_cache::DbWriteCache;

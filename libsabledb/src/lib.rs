@@ -32,7 +32,9 @@ pub use server::{Server, ServerState};
 pub use server_options::ServerOptions;
 pub use shard_locker::LockManager;
 pub use stopwatch::IoDurationStopWatch;
-pub use storage::{BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb};
+pub use storage::{
+    BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb, StorageSledDb,
+};
 pub use telemetry::Telemetry;
 pub use transport::Transport;
 pub use utils::{BytesMutUtils, StringUtils, TimeUtils, U8ArrayBuilder, U8ArrayReader};
