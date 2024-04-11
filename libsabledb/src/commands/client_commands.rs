@@ -15,6 +15,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::rc::Rc;
+use tokio::io::AsyncWriteExt;
 
 pub struct ClientCommands {}
 
@@ -22,14 +23,15 @@ impl ClientCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Client => {
-                Self::client(client_state, command, response_buffer).await?;
+                Self::client(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Select => {
-                Self::select(client_state, command, response_buffer).await?;
+                Self::select(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -38,7 +40,7 @@ impl ClientCommands {
                 )));
             }
         }
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Execute the `client` command
@@ -142,45 +144,9 @@ impl ClientCommands {
 mod tests {
     use super::*;
     #[allow(unused_imports)]
-    use crate::{
-        commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
-        StorageOpenParams, Telemetry,
-    };
-    use std::path::PathBuf;
+    use crate::{commands::ClientNextAction, test_assert, Client, ServerState, Telemetry};
     use std::sync::Arc;
-    use std::sync::Once;
     use test_case::test_case;
-
-    lazy_static::lazy_static! {
-        static ref INIT: Once = Once::new();
-    }
-
-    async fn initialise_test() {
-        INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/list_commands");
-            let _ = std::fs::create_dir_all("tests/list_commands");
-        });
-    }
-
-    /// Initialise the database
-    async fn open_database(command_name: &str) -> StorageAdapter {
-        // Cleanup the previous test folder
-        initialise_test().await;
-
-        // create random file name
-        let db_file = format!("tests/client_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/client_commands");
-        let db_path = PathBuf::from(&db_file);
-        let _ = std::fs::remove_dir_all(&db_file);
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-        let mut store = StorageAdapter::default();
-        let _ = store.open(open_params);
-        store
-    }
 
     #[test_case(vec![
         (vec!["select", "abc"], "-ERR value is not an integer or out of range\r\n"),
@@ -210,8 +176,7 @@ mod tests {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            println!("opening db");
-            let store = open_database(test_name).await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -235,8 +200,7 @@ mod tests {
     fn test_client_kill() -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            println!("opening db");
-            let store = open_database("test_client_kill").await;
+            let (store, _guard) = crate::tests::open_store();
 
             let client1 = Client::new(Arc::<ServerState>::default(), store.clone(), None);
             let client2 = Client::new(Arc::<ServerState>::default(), store, None);

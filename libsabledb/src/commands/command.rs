@@ -72,6 +72,7 @@ pub enum RedisCommandName {
     Hdel,
     Hlen,
     Hexists,
+    Hgetall,
     NotSupported(String),
 }
 
@@ -189,6 +190,7 @@ lazy_static::lazy_static! {
         ("hdel", CommandMetadata::new(RedisCommandName::Hdel, RedisCommandFlags::Write)),
         ("hlen", CommandMetadata::new(RedisCommandName::Hlen, RedisCommandFlags::Read)),
         ("hexists", CommandMetadata::new(RedisCommandName::Hexists, RedisCommandFlags::Read)),
+        ("Hgetall", CommandMetadata::new(RedisCommandName::Hgetall, RedisCommandFlags::Read)),
     ]);
 }
 

@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::rc::Rc;
 use std::str::FromStr;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone)]
 pub enum SetInternalReturnValue {
@@ -34,74 +35,75 @@ impl StringCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Append => {
-                Self::append(client_state, command, response_buffer).await?;
+                Self::append(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Set => {
-                Self::set(client_state, command, response_buffer).await?;
+                Self::set(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Get => {
-                Self::get(client_state, command, response_buffer).await?;
+                Self::get(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::GetDel => {
-                Self::getdel(client_state, command, response_buffer).await?;
+                Self::getdel(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::GetSet => {
-                Self::getset(client_state, command, response_buffer).await?;
+                Self::getset(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Incr => {
-                Self::incr(client_state, command, response_buffer).await?;
+                Self::incr(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::DecrBy => {
-                Self::decrby(client_state, command, response_buffer).await?;
+                Self::decrby(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::IncrBy => {
-                Self::incrby(client_state, command, response_buffer).await?;
+                Self::incrby(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::IncrByFloat => {
-                Self::incrbyfloat(client_state, command, response_buffer).await?;
+                Self::incrbyfloat(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Decr => {
-                Self::decr(client_state, command, response_buffer).await?;
+                Self::decr(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::GetEx => {
-                Self::getex(client_state, command, response_buffer).await?;
+                Self::getex(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::GetRange => {
-                Self::getrange(client_state, command, response_buffer).await?;
+                Self::getrange(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Lcs => {
-                Self::lcs(client_state, command, response_buffer).await?;
+                Self::lcs(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Mget => {
-                Self::mget(client_state, command, response_buffer).await?;
+                Self::mget(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Mset => {
-                Self::mset(client_state, command, response_buffer).await?;
+                Self::mset(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Msetnx => {
-                Self::msetnx(client_state, command, response_buffer).await?;
+                Self::msetnx(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Psetex => {
-                Self::psetex(client_state, command, response_buffer).await?;
+                Self::psetex(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Setex => {
-                Self::setex(client_state, command, response_buffer).await?;
+                Self::setex(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Setnx => {
-                Self::setnx(client_state, command, response_buffer).await?;
+                Self::setnx(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::SetRange => {
-                Self::setrange(client_state, command, response_buffer).await?;
+                Self::setrange(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Strlen => {
-                Self::strlen(client_state, command, response_buffer).await?;
+                Self::strlen(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Substr => {
-                Self::substr(client_state, command, response_buffer).await?;
+                Self::substr(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -110,7 +112,7 @@ impl StringCommands {
                 )));
             }
         }
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Set key to hold the string value. If key already holds a value,
@@ -1220,44 +1222,10 @@ impl StringCommands {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        commands::ClientNextAction, storage::StorageAdapter, Client, GenericCommands, ServerState,
-        StorageOpenParams,
-    };
-    use std::path::PathBuf;
+    use crate::{commands::ClientNextAction, Client, ServerState};
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::Once;
     use test_case::test_case;
-
-    lazy_static::lazy_static! {
-        static ref INIT: Once = Once::new();
-    }
-
-    async fn initialise_test() {
-        INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/string_commands");
-            let _ = std::fs::create_dir_all("tests/string_commands");
-        });
-    }
-
-    /// Initialise the database
-    async fn open_database(command_name: &str) -> StorageAdapter {
-        // Cleanup the previous test folder
-        initialise_test().await;
-
-        // create random file name
-        let db_file = format!("tests/string_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/string_commands");
-        let db_path = PathBuf::from(&db_file);
-        let _ = std::fs::remove_dir_all(&db_file);
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-        crate::storage_rocksdb!(open_params)
-    }
 
     // The commands below are executed in serialised manner. So each command
     // "remembers" the outcome of the previous command
@@ -1401,7 +1369,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database(test_name).await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -1425,29 +1393,29 @@ mod test {
     fn test_getex() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database("test_getex").await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            let mut response_buffer = BytesMut::new();
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "set",
                 "test_getex_k1",
                 "value",
             ]));
-            let _ = StringCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                "+OK\r\n"
-            );
+
+            let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
+            Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                .await
+                .unwrap();
+            assert_eq!(sink.read_all().await.as_str(), "+OK\r\n");
 
             // the key has no TTL associated, report -1
             let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
-            let _ =
-                GenericCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                ":-1\r\n"
-            );
+
+            let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
+            Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                .await
+                .unwrap();
+            assert_eq!(sink.read_all().await.as_str(), ":-1\r\n");
 
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "getex",
@@ -1455,30 +1423,31 @@ mod test {
                 "EX",
                 "3",
             ]));
-            let _ = StringCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                "$5\r\nvalue\r\n"
-            );
+
+            let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
+            Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                .await
+                .unwrap();
+
+            assert_eq!(sink.read_all().await.as_str(), "$5\r\nvalue\r\n");
 
             std::thread::sleep(std::time::Duration::from_millis(1500)); // we round UP, so we are left with 1500 ms -> 2 seconds
             let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
-            let _ =
-                GenericCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                ":2\r\n"
-            );
+
+            let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
+            Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                .await
+                .unwrap();
+            assert_eq!(sink.read_all().await.as_str(), ":2\r\n");
             std::thread::sleep(std::time::Duration::from_millis(2000)); // Sleep for another 2 seconds, to expire the item
 
             // the key now does not exist
             let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
-            let _ =
-                GenericCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                ":-2\r\n"
-            )
+            let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
+            Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                .await
+                .unwrap();
+            assert_eq!(sink.read_all().await.as_str(), ":-2\r\n")
         });
     }
 
@@ -1487,7 +1456,7 @@ mod test {
         // create a WRITE command and try to execute it against replica server
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database("test_write_on_replica").await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
             client.inner().server_inner_state().set_replica();
             let cmd = Rc::new(RedisCommand::for_test(vec![
@@ -1515,45 +1484,38 @@ mod test {
     fn test_key_with_timeout() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database("key_with_timeout").await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            let mut response_buffer = BytesMut::new();
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "psetex",
                 "test_key_with_timeout_k",
-                "10",
+                "100",
                 "value",
             ]));
-            let _ = StringCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                "+OK\r\n"
-            );
+            let mut sink1 = crate::tests::ResponseSink::with_name("test_key_with_timeout").await;
+            let _ = Client::handle_command(client.inner(), cmd, &mut sink1.fp).await;
+            assert_eq!(sink1.read_all().await.as_str(), "+OK\r\n");
 
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "get",
                 "test_key_with_timeout_k",
             ]));
-            let _ = StringCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                "$5\r\nvalue\r\n"
-            );
+            let mut sink2 = crate::tests::ResponseSink::with_name("test_key_with_timeout").await;
+            let _ = Client::handle_command(client.inner(), cmd, &mut sink2.fp).await;
+            assert_eq!(sink2.read_all().await.as_str(), "$5\r\nvalue\r\n");
 
             // sleep until the key expires
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(std::time::Duration::from_millis(100));
 
             // the key should now be expired
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "get",
                 "test_key_with_timeout_k",
             ]));
-            let _ = StringCommands::handle_command(client.inner(), cmd, &mut response_buffer).await;
-            assert_eq!(
-                BytesMutUtils::to_string(&response_buffer).as_str(),
-                "$-1\r\n"
-            );
+            let mut sink3 = crate::tests::ResponseSink::with_name("test_key_with_timeout").await;
+            let _ = Client::handle_command(client.inner(), cmd, &mut sink3.fp).await;
+            assert_eq!(sink3.read_all().await.as_str(), "$-1\r\n");
         });
     }
 }

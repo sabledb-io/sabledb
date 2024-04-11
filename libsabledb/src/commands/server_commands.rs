@@ -14,6 +14,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::rc::Rc;
+use tokio::io::AsyncWriteExt;
 
 pub struct ServerCommands {}
 
@@ -21,11 +22,12 @@ impl ServerCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
-                Self::replica_of(client_state, command, response_buffer).await?;
+                Self::replica_of(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -34,7 +36,7 @@ impl ServerCommands {
                 )));
             }
         }
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// REPLICAOF <IP PORT | NO ONE>

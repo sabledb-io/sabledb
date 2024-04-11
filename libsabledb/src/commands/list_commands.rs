@@ -7,6 +7,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::rc::Rc;
+use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
 
 #[allow(dead_code)]
@@ -18,8 +19,9 @@ impl ListCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Lpush => {
                 Self::push(client_state, command, response_buffer, ListFlags::FromLeft).await
@@ -98,10 +100,15 @@ impl ListCommands {
     pub async fn push(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            3,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
 
@@ -118,13 +125,13 @@ impl ListCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.push(key, &values, response_buffer, flags)?;
+        list.push(key, &values, &mut response_buffer, flags)?;
 
         client_state
             .server_inner_state()
             .wakeup_clients(key, values.len())
             .await;
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Atomically returns and removes the last element (tail) of the list stored at source, and
@@ -132,9 +139,14 @@ impl ListCommands {
     pub async fn rpoplpush(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            3,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let src_list_name = command_arg_at!(command, 1);
         let target_list_name = command_arg_at!(command, 2);
@@ -158,9 +170,14 @@ impl ListCommands {
     pub async fn blocking_rpoplpush(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            4,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let src_list_name = command_arg_at!(command, 1);
         let target_list_name = command_arg_at!(command, 2);
@@ -168,10 +185,10 @@ impl ListCommands {
         let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
             let builder = RespBuilderV2::default();
             builder.error_string(
-                response_buffer,
+                &mut response_buffer,
                 "ERR timeout is not a float or out of range",
             );
-            return Ok(HandleCommandResult::Completed);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
         let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
@@ -196,9 +213,14 @@ impl ListCommands {
     pub async fn lmove(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 5, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            5,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let src_list_name = command_arg_at!(command, 1);
         let target_list_name = command_arg_at!(command, 2);
@@ -223,9 +245,14 @@ impl ListCommands {
     pub async fn blocking_move(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 6, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            6,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let src_list_name = command_arg_at!(command, 1);
         let target_list_name = command_arg_at!(command, 2);
@@ -235,10 +262,10 @@ impl ListCommands {
         let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
             let builder = RespBuilderV2::default();
             builder.error_string(
-                response_buffer,
+                &mut response_buffer,
                 "ERR timeout is not a float or out of range",
             );
-            return Ok(HandleCommandResult::Completed);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
         let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
@@ -261,7 +288,7 @@ impl ListCommands {
         target_list_name: &BytesMut,
         src_left_or_right: &str,
         target_left_or_right: &str,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
         blocking_duration: Option<Duration>,
     ) -> Result<HandleCommandResult, SableError> {
         let (src_flags, target_flags) = match (src_left_or_right, target_left_or_right) {
@@ -271,8 +298,8 @@ impl ListCommands {
             ("right", "left") => (ListFlags::FromRight, ListFlags::FromLeft),
             (_, _) => {
                 let builder = RespBuilderV2::default();
-                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                return Ok(HandleCommandResult::Completed);
+                builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
         };
 
@@ -288,16 +315,16 @@ impl ListCommands {
         let builder = RespBuilderV2::default();
         match res {
             MoveResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
-                Ok(HandleCommandResult::Completed)
+                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MoveResult::Some(popped_item) => {
                 client_state
                     .server_inner_state()
                     .wakeup_clients(target_list_name, 1)
                     .await;
-                builder.bulk_string(response_buffer, &popped_item.user_data);
-                Ok(HandleCommandResult::Completed)
+                builder.bulk_string(&mut response_buffer, &popped_item.user_data);
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MoveResult::None => {
                 if let Some(blocking_duration) = blocking_duration {
@@ -309,8 +336,8 @@ impl ListCommands {
                         .await;
                     Ok(HandleCommandResult::Blocked((rx, blocking_duration)))
                 } else {
-                    builder.null_string(response_buffer);
-                    Ok(HandleCommandResult::Completed)
+                    builder.null_string(&mut response_buffer);
+                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                 }
             }
         }
@@ -322,13 +349,13 @@ impl ListCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         allow_blocking: bool,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(
             command,
             if allow_blocking { 4 } else { 3 },
-            response_buffer,
-            HandleCommandResult::Completed
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
         );
 
         let builder = RespBuilderV2::default();
@@ -336,29 +363,29 @@ impl ListCommands {
         iter.next(); // skip the command
         let (numkeys, timeout_ms) = if allow_blocking {
             let Some(timeout_secs) = command.arg_as_number::<f64>(1) else {
-                builder.error_string(response_buffer, "ERR numkeys should be greater than 0");
-                return Ok(HandleCommandResult::Completed);
+                builder.error_string(&mut response_buffer, "ERR numkeys should be greater than 0");
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             };
 
             let Some(numkeys) = command.arg_as_number::<usize>(2) else {
-                builder.error_string(response_buffer, "ERR numkeys should be greater than 0");
-                return Ok(HandleCommandResult::Completed);
+                builder.error_string(&mut response_buffer, "ERR numkeys should be greater than 0");
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             };
             iter.next(); // timeout
             iter.next(); // numkeys
             (numkeys, (timeout_secs * 1000.0) as usize)
         } else {
             let Some(numkeys) = command.arg_as_number::<usize>(1) else {
-                builder.error_string(response_buffer, "ERR numkeys should be greater than 0");
-                return Ok(HandleCommandResult::Completed);
+                builder.error_string(&mut response_buffer, "ERR numkeys should be greater than 0");
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             };
             iter.next(); // numkeys
             (numkeys, 0)
         };
 
         if numkeys == 0 {
-            builder.error_string(response_buffer, "ERR numkeys should be greater than 0");
-            return Ok(HandleCommandResult::Completed);
+            builder.error_string(&mut response_buffer, "ERR numkeys should be greater than 0");
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
 
         let mut keys = Vec::<&BytesMut>::with_capacity(numkeys);
@@ -389,8 +416,8 @@ impl ListCommands {
                             list_flags = Some(ListFlags::FromRight);
                         }
                         _ => {
-                            builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                            return Ok(HandleCommandResult::Completed);
+                            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                         }
                     }
                     state = State::Count;
@@ -400,30 +427,38 @@ impl ListCommands {
                     match argstr.as_str() {
                         "count" => {
                             let Some(elements_to_pop) = iter.next() else {
-                                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                                return Ok(HandleCommandResult::Completed);
+                                builder
+                                    .error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                                return Ok(HandleCommandResult::ResponseBufferUpdated(
+                                    response_buffer,
+                                ));
                             };
 
                             let Some(elements_to_pop) =
                                 BytesMutUtils::parse::<usize>(elements_to_pop)
                             else {
-                                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                                return Ok(HandleCommandResult::Completed);
+                                builder
+                                    .error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                                return Ok(HandleCommandResult::ResponseBufferUpdated(
+                                    response_buffer,
+                                ));
                             };
 
                             if elements_to_pop == 0 {
                                 builder.error_string(
-                                    response_buffer,
+                                    &mut response_buffer,
                                     "ERR count should be greater than 0",
                                 );
-                                return Ok(HandleCommandResult::Completed);
+                                return Ok(HandleCommandResult::ResponseBufferUpdated(
+                                    response_buffer,
+                                ));
                             }
                             count = elements_to_pop;
                             break; // Parsing is completed
                         }
                         _ => {
-                            builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                            return Ok(HandleCommandResult::Completed);
+                            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                         }
                     }
                 }
@@ -431,30 +466,30 @@ impl ListCommands {
         }
 
         if keys.len() != numkeys {
-            builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-            return Ok(HandleCommandResult::Completed);
+            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
 
         let Some(list_flags) = list_flags else {
-            builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-            return Ok(HandleCommandResult::Completed);
+            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
         let _unused = LockManager::lock_user_keys_exclusive(&keys, client_state.database_id());
         let list = List::with_storage(client_state.database(), client_state.database_id());
         match list.multi_pop(&keys, count, list_flags)? {
             MultiPopResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
-                Ok(HandleCommandResult::Completed)
+                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MultiPopResult::Some((list_name, values)) => {
-                builder.add_array_len(response_buffer, 2);
-                builder.add_bulk_string(response_buffer, &list_name);
-                builder.add_array_len(response_buffer, values.len());
+                builder.add_array_len(&mut response_buffer, 2);
+                builder.add_bulk_string(&mut response_buffer, &list_name);
+                builder.add_array_len(&mut response_buffer, values.len());
                 for v in values {
-                    builder.add_bulk_string(response_buffer, &v.user_data);
+                    builder.add_bulk_string(&mut response_buffer, &v.user_data);
                 }
-                Ok(HandleCommandResult::Completed)
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MultiPopResult::None => {
                 // block the client here
@@ -466,8 +501,8 @@ impl ListCommands {
                         Duration::from_millis(timeout_ms as u64),
                     )))
                 } else {
-                    builder.null_string(response_buffer);
-                    Ok(HandleCommandResult::Completed)
+                    builder.null_string(&mut response_buffer);
+                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                 }
             }
         }
@@ -480,18 +515,23 @@ impl ListCommands {
     pub async fn pop(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 2, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            2,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let count = if command.arg_count() == 3 {
             to_number!(
                 command_arg_at!(command, 2),
                 usize,
-                response_buffer,
-                Ok(HandleCommandResult::Completed)
+                &mut response_buffer,
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             )
         } else {
             1usize
@@ -500,17 +540,22 @@ impl ListCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.pop(key, count, response_buffer, flags)?;
-        Ok(HandleCommandResult::Completed)
+        list.pop(key, count, &mut response_buffer, flags)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     pub async fn blocking_pop(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            3,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let mut iter = command.args_vec().iter().peekable(); // points to the command
         iter.next(); // blpop
@@ -535,27 +580,29 @@ impl ListCommands {
         let Some(timeout) = timeout else {
             let builder = RespBuilderV2::default();
             builder.error_string(
-                response_buffer,
+                &mut response_buffer,
                 "ERR wrong number of arguments for 'blpop' command",
             );
-            return Ok(HandleCommandResult::Completed);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
         if lists.is_empty() {
             let builder = RespBuilderV2::default();
             builder.error_string(
-                response_buffer,
+                &mut response_buffer,
                 "ERR wrong number of arguments for 'blpop' command",
             );
-            return Ok(HandleCommandResult::Completed);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
 
         // Try to pop an element from one of the lists
         // if all the lists are empty, block the client
         let _unused = LockManager::lock_user_keys_exclusive(&lists, client_state.database_id());
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        if let BlockingCommandResult::Ok = list.blocking_pop(&lists, 1, response_buffer, flags)? {
-            Ok(HandleCommandResult::Completed)
+        if let BlockingCommandResult::Ok =
+            list.blocking_pop(&lists, 1, &mut response_buffer, flags)?
+        {
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         } else {
             // Block the client
             let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
@@ -565,10 +612,10 @@ impl ListCommands {
             let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
                 let builder = RespBuilderV2::default();
                 builder.error_string(
-                    response_buffer,
+                    &mut response_buffer,
                     "ERR timeout is not a float or out of range",
                 );
-                return Ok(HandleCommandResult::Completed);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             };
             let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
             Ok(HandleCommandResult::Blocked((
@@ -584,28 +631,33 @@ impl ListCommands {
     pub async fn ltrim(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            4,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let start = to_number!(
             command_arg_at!(command, 2),
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
         let end = to_number!(
             command_arg_at!(command, 3),
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
 
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.ltrim(key, start, end, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.ltrim(key, start, end, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Returns the specified elements of the list stored at key. The offsets start and stop are zero-based indexes,
@@ -615,28 +667,33 @@ impl ListCommands {
     pub async fn lrange(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            4,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let start = to_number!(
             command_arg_at!(command, 2),
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
         let end = to_number!(
             command_arg_at!(command, 3),
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.lrange(key, start, end, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.lrange(key, start, end, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Returns the length of the list stored at key. If key does not exist, it is interpreted
@@ -645,16 +702,21 @@ impl ListCommands {
     pub async fn llen(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 2, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            2,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.len(key, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.len(key, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Inserts element in the list stored at key either before or after the reference value pivot.
@@ -664,9 +726,14 @@ impl ListCommands {
     pub async fn linsert(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 5, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            5,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
         let key = command_arg_at!(command, 1);
         let orientation = command_arg_at_as_str!(command, 2);
         let pivot = command_arg_at!(command, 3);
@@ -677,14 +744,14 @@ impl ListCommands {
             "before" => ListFlags::InsertBefore,
             _ => {
                 let builder = RespBuilderV2::default();
-                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                return Ok(HandleCommandResult::Completed);
+                builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
         };
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.linsert(key, element, pivot, response_buffer, flags)?;
-        Ok(HandleCommandResult::Completed)
+        list.linsert(key, element, pivot, &mut response_buffer, flags)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Returns the element at index index in the list stored at key.
@@ -695,9 +762,14 @@ impl ListCommands {
     pub async fn lindex(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            3,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
@@ -706,13 +778,13 @@ impl ListCommands {
         let index = to_number!(
             index,
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
-        list.index(key, index, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.index(key, index, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// The command returns the index of matching elements inside a Redis list.
@@ -723,9 +795,14 @@ impl ListCommands {
     pub async fn lpos(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 3, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            3,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
 
         let key = command_arg_at!(command, 1);
         let value = command_arg_at!(command, 2);
@@ -748,14 +825,14 @@ impl ListCommands {
                     let value = to_number!(
                         value,
                         i32,
-                        response_buffer,
-                        Ok(HandleCommandResult::Completed)
+                        &mut response_buffer,
+                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                     );
 
                     // rank can not be 0
                     if value == 0 {
-                        builder.error_string(response_buffer, ErrorStrings::LIST_RANK_INVALID);
-                        return Ok(HandleCommandResult::Completed);
+                        builder.error_string(&mut response_buffer, ErrorStrings::LIST_RANK_INVALID);
+                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     rank = Some(value);
                 }
@@ -763,12 +840,15 @@ impl ListCommands {
                     let value = to_number!(
                         value,
                         i64,
-                        response_buffer,
-                        Ok(HandleCommandResult::Completed)
+                        &mut response_buffer,
+                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                     );
                     if value < 0 {
-                        builder.error_string(response_buffer, ErrorStrings::COUNT_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::Completed);
+                        builder.error_string(
+                            &mut response_buffer,
+                            ErrorStrings::COUNT_CANT_BE_NEGATIVE,
+                        );
+                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     count = Some(value.try_into().unwrap_or(1));
                 }
@@ -776,20 +856,22 @@ impl ListCommands {
                     let value = to_number!(
                         value,
                         i64,
-                        response_buffer,
-                        Ok(HandleCommandResult::Completed)
+                        &mut response_buffer,
+                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                     );
 
                     if value < 0 {
-                        builder
-                            .error_string(response_buffer, ErrorStrings::MAXLNE_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::Completed);
+                        builder.error_string(
+                            &mut response_buffer,
+                            ErrorStrings::MAXLNE_CANT_BE_NEGATIVE,
+                        );
+                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     maxlen = Some(value.try_into().unwrap_or(0));
                 }
                 _ => {
-                    builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
-                    return Ok(HandleCommandResult::Completed);
+                    builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
             }
         }
@@ -797,8 +879,8 @@ impl ListCommands {
         let list = List::with_storage(client_state.database(), client_state.database_id());
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
 
-        list.lpos(key, value, rank, count, maxlen, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.lpos(key, value, rank, count, maxlen, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
@@ -806,9 +888,14 @@ impl ListCommands {
     pub async fn lset(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            4,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
         // extract variables from the command
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
@@ -817,15 +904,15 @@ impl ListCommands {
         let index = to_number!(
             index,
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
 
         // Lock and set
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.set(key, index, value.clone(), response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.set(key, index, value.clone(), &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
@@ -833,24 +920,29 @@ impl ListCommands {
     pub async fn lrem(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(command, 4, response_buffer, HandleCommandResult::Completed);
+        expect_args_count!(
+            command,
+            4,
+            &mut response_buffer,
+            HandleCommandResult::ResponseBufferUpdated(response_buffer)
+        );
         // extract variables from the command
         let key = command_arg_at!(command, 1);
         let count = to_number!(
             command_arg_at!(command, 2),
             i32,
-            response_buffer,
-            Ok(HandleCommandResult::Completed)
+            &mut response_buffer,
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         );
         let element = command_arg_at!(command, 3);
 
         // Lock and set
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let list = List::with_storage(client_state.database(), client_state.database_id());
-        list.remove(key, Some(element), count, response_buffer)?;
-        Ok(HandleCommandResult::Completed)
+        list.remove(key, Some(element), count, &mut response_buffer)?;
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 }
 
@@ -869,27 +961,11 @@ mod tests {
         commands::ClientNextAction, test_assert, Client, ServerState, StorageAdapter,
         StorageOpenParams, Telemetry,
     };
-    use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::Arc;
     use test_case::test_case;
     use tokio::sync::mpsc::Receiver;
     use tokio::time::Duration;
-
-    fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
-        let _ = std::fs::create_dir_all("tests/list_commands/");
-        let db_path = PathBuf::from(format!("tests/list_commands/{}.db", name));
-        let _ = std::fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-
-        let mut store = StorageAdapter::default();
-        store.open(open_params)?;
-        Ok(store)
-    }
 
     #[test_case(vec![
         (vec!["lpush", "lpush_mykey", "foo", "bar", "baz"], ":3\r\n"),
@@ -1115,7 +1191,7 @@ mod tests {
     fn test_list_commands(args_vec: Vec<(Vec<&'static str>, &'static str)>, test_name: &str) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_store(test_name).unwrap();
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -1202,7 +1278,7 @@ mod tests {
     fn test_blocking_pop() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_store("test_blocking_pop_2").unwrap();
+            let (store, _guard) = crate::tests::open_store();
 
             let server = Arc::<ServerState>::default();
             let reader = Client::new(server.clone(), store.clone(), None);

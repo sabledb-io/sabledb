@@ -3,7 +3,7 @@ use std::sync::{atomic, atomic::Ordering};
 
 lazy_static::lazy_static! {
     static ref COUNTER: atomic::AtomicU64
-        = atomic::AtomicU64::new(crate::TimeUtils::epoch_ms().unwrap_or(0));
+        = atomic::AtomicU64::new(crate::TimeUtils::epoch_micros().unwrap_or(0));
 }
 
 /// Create a unique file for the process
@@ -18,7 +18,7 @@ impl TempFile {
             "{}/{}.{}.txt",
             std::env::temp_dir().to_path_buf().display(),
             name,
-            COUNTER.load(Ordering::Relaxed)
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         );
 
         let full_path = full_path.replace('\\', "/");

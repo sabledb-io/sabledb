@@ -18,6 +18,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::rc::Rc;
+use tokio::io::AsyncWriteExt;
 
 pub struct HashCommands {}
 
@@ -25,23 +26,27 @@ impl HashCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Hset => {
-                Self::hset(client_state, command, response_buffer).await?;
+                Self::hset(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hget => {
-                Self::hget(client_state, command, response_buffer).await?;
+                Self::hget(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hdel => {
-                Self::hdel(client_state, command, response_buffer).await?;
+                Self::hdel(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hlen => {
-                Self::hlen(client_state, command, response_buffer).await?;
+                Self::hlen(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hexists => {
-                Self::hexists(client_state, command, response_buffer).await?;
+                Self::hexists(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Hgetall => {
+                Self::hgetall(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -50,7 +55,7 @@ impl HashCommands {
                 )));
             }
         }
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Sets the specified fields to their respective values in the hash stored at key.
@@ -250,6 +255,18 @@ impl HashCommands {
         };
         Ok(())
     }
+
+    /// Returns the number of fields contained in the hash stored at key
+    async fn hgetall(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        let key = command_arg_at!(command, 1);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -262,43 +279,11 @@ impl HashCommands {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        commands::ClientNextAction, storage::StorageAdapter, Client, ServerState, StorageOpenParams,
-    };
-    use std::path::PathBuf;
+    use crate::{commands::ClientNextAction, Client, ServerState};
+
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::sync::Once;
     use test_case::test_case;
-
-    lazy_static::lazy_static! {
-        static ref INIT: Once = Once::new();
-    }
-
-    async fn initialise_test() {
-        INIT.call_once(|| {
-            let _ = std::fs::remove_dir_all("tests/hash_commands");
-            let _ = std::fs::create_dir_all("tests/hash_commands");
-        });
-    }
-
-    /// Initialise the database
-    async fn open_database(command_name: &str) -> StorageAdapter {
-        // Cleanup the previous test folder
-        initialise_test().await;
-
-        // create random file name
-        let db_file = format!("tests/hash_commands/{}.db", command_name,);
-        let _ = std::fs::create_dir_all("tests/hash_commands");
-        let db_path = PathBuf::from(&db_file);
-        let _ = std::fs::remove_dir_all(&db_file);
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-        crate::storage_rocksdb!(open_params)
-    }
 
     #[test_case(vec![
         (vec!["hset", "myhash", "field1", "value1"], ":1\r\n"),
@@ -344,7 +329,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_database(test_name).await;
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {

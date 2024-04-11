@@ -160,6 +160,17 @@ impl TimeUtils {
         };
         Ok(u64::try_from(timestamp_ms.as_millis()).unwrap_or(u64::MAX))
     }
+
+    /// Return milliseconds elapsed since EPOCH
+    pub fn epoch_micros() -> Result<u64, SableError> {
+        let Ok(timestamp_ms) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        else {
+            return Err(SableError::OtherError(
+                "failed to retrieve std::time::UNIX_EPOCH".to_string(),
+            ));
+        };
+        Ok(u64::try_from(timestamp_ms.as_micros()).unwrap_or(u64::MAX))
+    }
 }
 
 #[allow(dead_code)]

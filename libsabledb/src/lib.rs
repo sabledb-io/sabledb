@@ -135,11 +135,20 @@ macro_rules! error_with_throttling {
 //
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::{atomic, atomic::Ordering};
     use tokio::io::AsyncReadExt;
+
     #[allow(dead_code)]
     pub struct ResponseSink {
         temp_file: crate::io::TempFile,
         pub fp: tokio::fs::File,
+    }
+
+    lazy_static::lazy_static! {
+        static ref COUNTER: atomic::AtomicU64
+            = atomic::AtomicU64::new(crate::TimeUtils::epoch_micros().unwrap_or(0));
     }
 
     impl ResponseSink {
@@ -152,18 +161,69 @@ mod tests {
         }
 
         pub async fn read_all(&mut self) -> String {
-            self.fp.sync_data().await.unwrap();
+            self.fp.sync_all().await.unwrap();
             let mut fp = tokio::fs::File::open(&self.temp_file.fullpath())
                 .await
                 .unwrap();
 
-            let mut buffer = bytes::BytesMut::with_capacity(1024);
+            let mut buffer = bytes::BytesMut::with_capacity(4096);
             fp.read_buf(&mut buffer).await.unwrap();
             crate::BytesMutUtils::to_string(&buffer)
         }
     }
 
-    use super::*;
+    /// Deleter directory when dropped
+    pub struct DirDeleter {
+        dirpath: String,
+    }
+
+    impl DirDeleter {
+        pub fn with_path(dirpath: String) -> Self {
+            DirDeleter { dirpath }
+        }
+    }
+
+    impl Drop for DirDeleter {
+        fn drop(&mut self) {
+            if let Ok(md) = std::fs::metadata(self.dirpath.clone()) {
+                if md.is_dir() {
+                    std::fs::remove_dir_all(self.dirpath.clone()).unwrap();
+                }
+            }
+        }
+    }
+
+    // Provide a convenient API for opening a unique database
+    pub fn open_store() -> (StorageAdapter, DirDeleter) {
+        let database_base_dir = format!(
+            "{}/sabledb_tests",
+            std::env::temp_dir().to_path_buf().display()
+        );
+
+        let database_base_dir = database_base_dir.replace('\\', "/");
+        let database_base_dir = database_base_dir.replace("//", "/");
+
+        // make sure we don't creat a folder at the root directory
+        assert_ne!(database_base_dir, "/sabledb_tests");
+
+        let database_fullpath = format!(
+            "{}/testdb_{}.db",
+            database_base_dir,
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+
+        let _ = std::fs::create_dir_all(database_base_dir.as_str());
+        let db_path = PathBuf::from(database_fullpath.as_str());
+        let open_params = StorageOpenParams::default()
+            .set_compression(false)
+            .set_cache_size(64)
+            .set_path(&db_path)
+            .set_wal_disabled(true);
+
+        let mut store = StorageAdapter::default();
+        store.open(open_params).unwrap();
+        (store, DirDeleter::with_path(database_fullpath))
+    }
 
     #[test]
     fn test_error_with_throttling() {

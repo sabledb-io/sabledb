@@ -137,12 +137,12 @@ pub struct SetFlags: u32  {
 }
 
 /// Possible return value for a "process_command" function
-#[derive(Default, Debug)]
+#[derive(Debug)]
 #[allow(dead_code)]
 pub enum HandleCommandResult {
-    #[default]
-    Completed,
+    ResponseBufferUpdated(bytes::BytesMut),
     Blocked((Receiver<u8>, Duration)),
+    ResponseSent,
 }
 
 #[derive(Debug)]

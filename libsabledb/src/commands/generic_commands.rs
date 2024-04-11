@@ -16,6 +16,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::rc::Rc;
+use tokio::io::AsyncWriteExt;
 
 pub struct GenericCommands {}
 
@@ -23,20 +24,21 @@ impl GenericCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Ttl => {
-                Self::ttl(client_state, command, response_buffer).await?;
+                Self::ttl(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Del => {
-                Self::del(client_state, command, response_buffer).await?;
+                Self::del(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Exists => {
-                Self::exists(client_state, command, response_buffer).await?;
+                Self::exists(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Expire => {
-                Self::expire(client_state, command, response_buffer).await?;
+                Self::expire(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -45,7 +47,7 @@ impl GenericCommands {
                 )));
             }
         }
-        Ok(HandleCommandResult::Completed)
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string,
@@ -280,28 +282,10 @@ impl GenericCommands {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        commands::ClientNextAction, storage::StorageAdapter, Client, ServerState, StorageOpenParams,
-    };
-    use std::path::PathBuf;
+    use crate::{commands::ClientNextAction, Client, ServerState};
     use std::rc::Rc;
     use std::sync::Arc;
     use test_case::test_case;
-
-    fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
-        let _ = std::fs::create_dir_all("tests/generic_commands/");
-        let db_path = PathBuf::from(format!("tests/generic_commands/{}.db", name));
-        let _ = std::fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(false)
-            .set_cache_size(64)
-            .set_path(&db_path)
-            .set_wal_disabled(true);
-
-        let mut store = StorageAdapter::default();
-        store.open(open_params)?;
-        Ok(store)
-    }
 
     #[test_case(vec![
         (vec!["set", "mystr", "myvalue"], "+OK\r\n"),
@@ -347,7 +331,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let store = open_store(test_name).unwrap();
+            let (store, _guard) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
