@@ -369,7 +369,7 @@ impl Client {
                         }
                     },
                     Err(e) => {
-                        client_state.error(&format!(
+                        client_state.warn(&format!(
                             "failed to process command: {:?} error: {:?}",
                             command, e
                         ));

@@ -5,18 +5,13 @@ use std::rc::Rc;
 
 struct CacheEntry {
     data: BytesMut,
-    is_dirty: bool,
     #[allow(dead_code)]
     flags: PutFlags,
 }
 
 impl CacheEntry {
-    pub fn new(data: BytesMut, is_dirty: bool, flags: PutFlags) -> Self {
-        CacheEntry {
-            data,
-            is_dirty,
-            flags,
-        }
+    pub fn new(data: BytesMut, flags: PutFlags) -> Self {
+        CacheEntry { data, flags }
     }
 }
 
@@ -44,7 +39,7 @@ impl<'a> DbWriteCache<'a> {
     }
 
     pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
-        let entry = Rc::new(CacheEntry::new(value, true, PutFlags::Override));
+        let entry = Rc::new(CacheEntry::new(value, PutFlags::Override));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
@@ -55,7 +50,7 @@ impl<'a> DbWriteCache<'a> {
         value: BytesMut,
         flags: PutFlags,
     ) -> Result<(), SableError> {
-        let entry = Rc::new(CacheEntry::new(value, true, flags));
+        let entry = Rc::new(CacheEntry::new(value, flags));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
@@ -82,14 +77,7 @@ impl<'a> DbWriteCache<'a> {
     /// this means that it was deleted, so return a `None` as well
     pub fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
         let Some(value) = self.changes.get(key) else {
-            // No such entry
-            if let Some(value) = self.store.get(key)? {
-                // update the cache
-                let entry = Rc::new(CacheEntry::new(value, false, PutFlags::Override));
-                self.changes.insert(key.clone(), Some(entry.clone()));
-                return Ok(Some(entry.data.clone()));
-            }
-            return Ok(None);
+            return self.store.get(key);
         };
 
         // found an match in cache
@@ -107,11 +95,7 @@ impl<'a> DbWriteCache<'a> {
         for entry in &self.changes {
             match entry.value() {
                 None => batch_update.delete(entry.key().clone()),
-                Some(value) => {
-                    if value.is_dirty {
-                        batch_update.put(entry.key().clone(), value.data.clone());
-                    }
-                }
+                Some(value) => batch_update.put(entry.key().clone(), value.data.clone()),
             }
         }
         batch_update

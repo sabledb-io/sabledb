@@ -93,7 +93,6 @@ pub struct HashDb<'a> {
     /// This class handles String command database access
     store: &'a StorageAdapter,
     db_id: u16,
-    #[allow(dead_code)]
     cache: Box<DbWriteCache<'a>>,
 }
 
