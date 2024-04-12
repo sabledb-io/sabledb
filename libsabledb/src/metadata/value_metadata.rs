@@ -1,7 +1,7 @@
 use crate::{metadata::Encoding, Expiration, SableError, U8ArrayBuilder, U8ArrayReader};
 
 /// Contains information regarding the String type metadata
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommonValueMetadata {
     value_encoding: u8,
     /// Value ttl information

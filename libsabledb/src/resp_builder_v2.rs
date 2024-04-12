@@ -22,7 +22,7 @@ impl RespBuilderV2 {
         buffer.extend_from_slice(s.as_bytes());
     }
 
-    fn append_bytes(&self, buffer: &mut BytesMut, bytes: &BytesMut) {
+    fn append_bytes(&self, buffer: &mut BytesMut, bytes: &[u8]) {
         buffer.extend_from_slice(bytes);
     }
 
@@ -133,6 +133,19 @@ impl RespBuilderV2 {
     /// NOTE: this function does not clear the buffer
     pub fn add_bulk_string(&self, buffer: &mut BytesMut, content: &BytesMut) {
         self.add_bulk_string_internal(buffer, content);
+    }
+
+    /// Append bulk string to the buffer.
+    /// NOTE: this function does not clear the buffer
+    pub fn add_bulk_string_u8_arr(&self, buffer: &mut BytesMut, content: &[u8]) {
+        let str_len = format!("{}", content.len());
+        // extend the buffer as needed
+        buffer.reserve(DOLLAR_LEN + str_len.len() + content.len() + (2 * CRLF_LEN));
+        self.append_str(buffer, DOLLAR);
+        buffer.extend_from_slice(str_len.as_bytes());
+        self.append_str(buffer, CRLF);
+        self.append_bytes(buffer, content);
+        self.append_str(buffer, CRLF);
     }
 
     /// Append number

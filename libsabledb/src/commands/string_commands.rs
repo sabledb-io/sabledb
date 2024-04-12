@@ -1369,7 +1369,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -1393,7 +1393,7 @@ mod test {
     fn test_getex() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             let cmd = Rc::new(RedisCommand::for_test(vec![
@@ -1456,7 +1456,7 @@ mod test {
         // create a WRITE command and try to execute it against replica server
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
             client.inner().server_inner_state().set_replica();
             let cmd = Rc::new(RedisCommand::for_test(vec![
@@ -1484,7 +1484,7 @@ mod test {
     fn test_key_with_timeout() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             let cmd = Rc::new(RedisCommand::for_test(vec![

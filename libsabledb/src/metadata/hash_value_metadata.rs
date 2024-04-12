@@ -6,7 +6,7 @@ use bytes::BytesMut;
 
 /// Contains information about the hash item
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashValueMetadata {
     common: CommonValueMetadata,
     hash_id: u64,
@@ -81,6 +81,16 @@ impl HashValueMetadata {
             hash_size,
         })
     }
+
+    /// Create a prefix for iterating all items belonged to this hash
+    pub fn prefix(&self) -> BytesMut {
+        let mut buffer =
+            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+        builder.write_u8(Encoding::KEY_HASH_ITEM);
+        builder.write_u64(self.id());
+        buffer
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,7 +121,7 @@ impl<'a> HashFieldKey<'a> {
         builder.write_bytes(self.user_key);
     }
 
-    pub fn from_bytes(buff: &'a BytesMut) -> Result<Self, SableError> {
+    pub fn from_bytes(buff: &'a [u8]) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buff);
         let kind = reader.read_u8().ok_or(SableError::SerialisationError)?;
         let hash_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
@@ -129,6 +139,10 @@ impl<'a> HashFieldKey<'a> {
 
     pub fn hash_id(&self) -> u64 {
         self.hash_id
+    }
+
+    pub fn key(&self) -> &[u8] {
+        self.user_key
     }
 }
 

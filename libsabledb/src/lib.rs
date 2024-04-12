@@ -187,6 +187,7 @@ mod tests {
         fn drop(&mut self) {
             if let Ok(md) = std::fs::metadata(self.dirpath.clone()) {
                 if md.is_dir() {
+                    println!("deleting {}", self.dirpath.as_str());
                     std::fs::remove_dir_all(self.dirpath.clone()).unwrap();
                 }
             }
@@ -194,7 +195,7 @@ mod tests {
     }
 
     // Provide a convenient API for opening a unique database
-    pub fn open_store() -> (StorageAdapter, DirDeleter) {
+    pub fn open_store() -> (DirDeleter, StorageAdapter) {
         let database_base_dir = format!(
             "{}/sabledb_tests",
             std::env::temp_dir().to_path_buf().display()
@@ -222,7 +223,7 @@ mod tests {
 
         let mut store = StorageAdapter::default();
         store.open(open_params).unwrap();
-        (store, DirDeleter::with_path(database_fullpath))
+        (DirDeleter::with_path(database_fullpath), store)
     }
 
     #[test]

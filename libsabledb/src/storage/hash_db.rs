@@ -9,7 +9,8 @@ use crate::{
 use bytes::BytesMut;
 
 // Internal enum
-enum GetHashMetadataResult {
+#[derive(Debug, PartialEq, Eq)]
+pub enum GetHashMetadataResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// A match was found
@@ -118,7 +119,7 @@ impl<'a> HashDb<'a> {
         }
 
         // locate the hash
-        let mut hash = match self.get_hash_metadata(user_key)? {
+        let mut hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => return Ok(HashPutResult::WrongType),
             GetHashMetadataResult::None => {
                 // Create a entry
@@ -156,7 +157,7 @@ impl<'a> HashDb<'a> {
         }
 
         // locate the hash
-        let hash = match self.get_hash_metadata(user_key)? {
+        let hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashGetResult::WrongType);
             }
@@ -181,7 +182,7 @@ impl<'a> HashDb<'a> {
         fields: &[&BytesMut],
     ) -> Result<HashDeleteResult, SableError> {
         // locate the hash
-        let mut hash = match self.get_hash_metadata(user_key)? {
+        let mut hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashDeleteResult::WrongType);
             }
@@ -211,7 +212,7 @@ impl<'a> HashDb<'a> {
 
     /// Return the size of the hash
     pub fn len(&self, user_key: &BytesMut) -> Result<HashLenResult, SableError> {
-        let hash = match self.get_hash_metadata(user_key)? {
+        let hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashLenResult::WrongType);
             }
@@ -230,7 +231,7 @@ impl<'a> HashDb<'a> {
         user_field: &BytesMut,
     ) -> Result<HashExistsResult, SableError> {
         // locate the hash
-        let hash = match self.get_hash_metadata(user_key)? {
+        let hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashExistsResult::WrongType);
             }
@@ -247,6 +248,19 @@ impl<'a> HashDb<'a> {
         }
     }
 
+    /// Load hash value metadata from the store
+    pub fn hash_metadata(&self, user_key: &BytesMut) -> Result<GetHashMetadataResult, SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        let Some(value) = self.cache.get(&encoded_key)? else {
+            return Ok(GetHashMetadataResult::None);
+        };
+
+        match self.try_decode_hash_value_metadata(&value)? {
+            None => Ok(GetHashMetadataResult::WrongType),
+            Some(hash_md) => Ok(GetHashMetadataResult::Some(hash_md)),
+        }
+    }
+
     ///=======================================================
     /// Internal API for this class
     ///=======================================================
@@ -259,19 +273,6 @@ impl<'a> HashDb<'a> {
         }
         self.cache.clear();
         self.store.apply_batch(&batch)
-    }
-
-    /// Load hash value metadata from the store
-    fn get_hash_metadata(&self, user_key: &BytesMut) -> Result<GetHashMetadataResult, SableError> {
-        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(GetHashMetadataResult::None);
-        };
-
-        match self.try_decode_hash_value_metadata(&value)? {
-            None => Ok(GetHashMetadataResult::WrongType),
-            Some(hash_md) => Ok(GetHashMetadataResult::Some(hash_md)),
-        }
     }
 
     /// Put a hash entry in the database

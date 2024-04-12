@@ -450,7 +450,7 @@ impl Client {
         let kind = command.metadata().name();
         let client_action = match kind {
             RedisCommandName::Ping => {
-                tx.write_all(&PONG).await?;
+                tx.write_all(PONG).await?;
                 Telemetry::inc_net_bytes_written(PONG.len() as u128);
                 ClientNextAction::NoAction
             }

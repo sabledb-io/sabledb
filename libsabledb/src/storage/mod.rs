@@ -12,10 +12,11 @@ pub use crate::storage::storage_adapter::{
 };
 pub use generic_db::GenericDb;
 pub use hash_db::{
-    HashDb, HashDeleteResult, HashExistsResult, HashGetResult, HashLenResult, HashPutResult,
+    GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetResult,
+    HashLenResult, HashPutResult,
 };
 pub use storage_rocksdb::StorageRocksDb;
-pub use storage_trait::{IterateCallback, StorageTrait};
+pub use storage_trait::{IterateCallback, StorageIterator, StorageTrait};
 pub use string_db::StringsDb;
 pub use write_cache::DbWriteCache;
 

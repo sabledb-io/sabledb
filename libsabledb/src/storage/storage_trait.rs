@@ -6,7 +6,11 @@ use bytes::BytesMut;
 use std::path::Path;
 use std::rc::Rc;
 
-pub type IterateCallback = dyn Fn(&[u8], &[u8]) -> bool;
+pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
+
+pub enum StorageIterator<'a> {
+    RocksDb(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
+}
 
 /// Define the database interface
 pub trait StorageTrait {
@@ -61,4 +65,6 @@ pub trait StorageTrait {
         prefix: Rc<BytesMut>,
         callback: Box<IterateCallback>,
     ) -> Result<(), SableError>;
+
+    fn create_iterator(&self, prefix: Rc<BytesMut>) -> Result<StorageIterator, SableError>;
 }

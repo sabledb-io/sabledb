@@ -1191,7 +1191,7 @@ mod tests {
     fn test_list_commands(args_vec: Vec<(Vec<&'static str>, &'static str)>, test_name: &str) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
@@ -1278,7 +1278,7 @@ mod tests {
     fn test_blocking_pop() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
 
             let server = Arc::<ServerState>::default();
             let reader = Client::new(server.clone(), store.clone(), None);

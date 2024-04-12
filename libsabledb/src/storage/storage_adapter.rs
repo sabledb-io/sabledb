@@ -1,6 +1,6 @@
 use crate::{
     replication::StorageUpdates,
-    storage::{IterateCallback, StorageTrait},
+    storage::{storage_trait::StorageIterator, IterateCallback, StorageTrait},
     utils, StorageRocksDb,
 };
 
@@ -378,6 +378,13 @@ impl StorageAdapter {
         };
         db.iterate(prefix, callback)
     }
+
+    pub fn create_iterator(&self, prefix: Rc<BytesMut>) -> Result<StorageIterator, SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.create_iterator(prefix)
+    }
 }
 
 #[allow(unsafe_code)]
@@ -393,6 +400,7 @@ unsafe impl Send for StorageAdapter {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::storage_trait::StorageIterator;
     #[allow(unused_imports)]
     use crate::BytesMutUtils;
     use std::cell::RefCell;
@@ -476,6 +484,47 @@ mod tests {
     }
 
     #[test]
+    fn test_create_iterator() {
+        let (_guard, store) = crate::tests::open_store();
+        let seek_me = Rc::new(BytesMut::from("1"));
+        let value = BytesMut::from("string_value");
+
+        let keys = vec![
+            BytesMut::from("1_k1"),
+            BytesMut::from("2_k2"),
+            BytesMut::from("2_k3"),
+            BytesMut::from("1_k4"),
+        ];
+
+        for key in keys.iter() {
+            store.put(key, &value, PutFlags::Override).unwrap();
+        }
+
+        let mut matches = 0u32;
+        match store.create_iterator(seek_me.clone()).unwrap() {
+            StorageIterator::RocksDb(mut rocksdb_iter) => {
+                while rocksdb_iter.valid() {
+                    // get the key & value
+                    let Some(key) = rocksdb_iter.key() else {
+                        break;
+                    };
+
+                    if !key.starts_with(seek_me.as_ref()) {
+                        break;
+                    }
+                    matches = matches.saturating_add(1);
+                    let Some(_value) = rocksdb_iter.value() else {
+                        break;
+                    };
+                    rocksdb_iter.next();
+                }
+            }
+        };
+
+        assert_eq!(matches, 2);
+    }
+
+    #[test]
     fn test_prefix_iteration() -> Result<(), SableError> {
         let _ = std::fs::create_dir_all("tests");
         let db_path = PathBuf::from("tests/test_prefix.db");
@@ -510,8 +559,8 @@ mod tests {
 
         let _ = store.iterate(
             seek_me.clone(),
-            Box::new(move |k, _v| {
-                if !k.starts_with(seek_me.as_ref()) {
+            Box::new(move |prefix, k, _v| {
+                if !k.starts_with(prefix) {
                     false
                 } else {
                     result_clone.borrow_mut().push(BytesMut::from(k));

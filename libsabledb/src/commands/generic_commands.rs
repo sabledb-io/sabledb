@@ -331,7 +331,7 @@ mod test {
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {

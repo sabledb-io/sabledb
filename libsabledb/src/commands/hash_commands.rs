@@ -4,18 +4,19 @@ use crate::{
     client::ClientState,
     command_arg_at,
     commands::{ErrorStrings, HandleCommandResult, StringCommands},
-    metadata::CommonValueMetadata,
     metadata::Encoding,
+    metadata::{CommonValueMetadata, HashFieldKey, HashValueMetadata},
     parse_string_to_number,
     storage::{
-        GenericDb, HashDb, HashDeleteResult, HashExistsResult, HashGetResult, HashLenResult,
-        HashPutResult,
+        GenericDb, GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult,
+        HashGetResult, HashLenResult, HashPutResult,
     },
     types::List,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
 
+use crate::storage::StorageIterator;
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
@@ -26,7 +27,7 @@ impl HashCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
@@ -46,7 +47,9 @@ impl HashCommands {
                 Self::hexists(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hgetall => {
-                Self::hgetall(client_state, command, &mut response_buffer).await?;
+                // HGETALL writes the response directly to the client
+                Self::hgetall(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -260,11 +263,94 @@ impl HashCommands {
     async fn hgetall(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
-        check_args_count!(command, 2, response_buffer);
+        let builder = RespBuilderV2::default();
+        let mut response_buffer = BytesMut::with_capacity(128);
+        if !command.expect_args_count(2) {
+            builder.error_string(
+                &mut response_buffer,
+                "ERR wrong number of arguments for 'hgetall' command",
+            );
+            tx.write_all(response_buffer.as_ref()).await?;
+            return Ok(());
+        }
+
         let key = command_arg_at!(command, 1);
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let hash_md = match hash_db.hash_metadata(key)? {
+            GetHashMetadataResult::WrongType => {
+                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                tx.write_all(&response_buffer).await?;
+                return Ok(());
+            }
+            GetHashMetadataResult::None => {
+                builder.empty_array(&mut response_buffer);
+                tx.write_all(&response_buffer).await?;
+                return Ok(());
+            }
+            GetHashMetadataResult::Some(hash_md) => hash_md,
+        };
+
+        // empty hash? empty array
+        if hash_md.is_empty() {
+            builder.empty_array(&mut response_buffer);
+            tx.write_all(&response_buffer).await?;
+            return Ok(());
+        }
+
+        // Write the length
+        let mut response_buffer = BytesMut::with_capacity(4096);
+        builder.add_array_len(
+            &mut response_buffer,
+            hash_md
+                .len()
+                .saturating_mul(2)
+                .try_into()
+                .unwrap_or(usize::MAX),
+        );
+
+        let prefix = Rc::new(hash_md.prefix());
+        let mut fields_added = 0usize;
+        match client_state.database().create_iterator(prefix.clone())? {
+            StorageIterator::RocksDb(mut rocksdb_iter) => {
+                while rocksdb_iter.valid() {
+                    // get the key & value
+                    let Some(key) = rocksdb_iter.key() else {
+                        break;
+                    };
+
+                    if !key.starts_with(prefix.as_ref()) {
+                        break;
+                    }
+
+                    let Some(value) = rocksdb_iter.value() else {
+                        break;
+                    };
+
+                    // extract the key from the row data
+                    let hash_field_key = HashFieldKey::from_bytes(key)?;
+                    builder.add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                    builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+
+                    // If the buffer len is greater than 1MB, write it
+                    if response_buffer.len() > (1 << 20) {
+                        tx.write_all(&response_buffer).await?;
+                        response_buffer.clear();
+                    }
+
+                    fields_added = fields_added.saturating_add(1);
+                    rocksdb_iter.next();
+                }
+            }
+        };
+
+        // Send the remainders
+        if !response_buffer.is_empty() {
+            tx.write_all(&response_buffer).await?;
+        }
+
         Ok(())
     }
 }
@@ -323,13 +409,21 @@ mod test {
         (vec!["hexists", "no_such_hash", "field1"], ":0\r\n"),
         (vec!["hexists", "myhash", "field1", ], ":1\r\n"),
     ], "test_hexists"; "test_hexists")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "1", "2", "a", "b", "c", "d"], ":3\r\n"),
+        (vec!["hgetall", "myhash"], "*6\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n"),
+        (vec!["hgetall", "no_such_hash"], "*0\r\n"),
+        (vec!["set", "not_a_hash", "value"], "+OK\r\n"),
+        (vec!["hgetall", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hgetall"], "-ERR wrong number of arguments for 'hgetall' command\r\n"),
+    ], "test_hgetall"; "test_hgetall")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let (store, _guard) = crate::tests::open_store();
+            let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
             for (args, expected_value) in args_vec {
