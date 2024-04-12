@@ -1,9 +1,10 @@
+use crate::commands::{CommandMetadata, CommandsManager};
 use crate::{BytesMutUtils, SableError};
 use bytes::BytesMut;
-use std::collections::HashMap;
 use std::str::FromStr;
+use strum_macros::EnumString;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, EnumString)]
 pub enum RedisCommandName {
     Append,
     Decr,
@@ -23,9 +24,7 @@ pub enum RedisCommandName {
     GetRange,
     Lcs,
     Ping,
-    Cmd,
     Config,
-    Info,
     Psetex,
     Setex,
     Setnx,
@@ -61,6 +60,8 @@ pub enum RedisCommandName {
     // Server commands
     ReplicaOf,
     SlaveOf,
+    Info,
+    Command,
     // Generic commands
     Ttl,
     Del,
@@ -76,122 +77,13 @@ pub enum RedisCommandName {
     NotSupported(String),
 }
 
-bitflags::bitflags! {
-#[derive(Default, Debug, Clone)]
-pub struct RedisCommandFlags: u32  {
-    const None = 0;
-    /// A read command
-    const Read = 1 << 0;
-    /// A write command
-    const Write = 1 << 1;
-    /// Administration command
-    const Admin = 1 << 2;
-    /// @connection command
-    const Connection = 1 << 3;
-}
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct CommandMetadata {
-    cmd_name: RedisCommandName,
-    cmd_flags: RedisCommandFlags,
-}
-
-impl CommandMetadata {
-    pub fn new(cmd_name: RedisCommandName, cmd_flags: RedisCommandFlags) -> Self {
-        CommandMetadata {
-            cmd_name,
-            cmd_flags,
-        }
-    }
-
-    pub fn name(&self) -> &RedisCommandName {
-        &self.cmd_name
-    }
-
-    #[allow(dead_code)]
-    pub fn flags(&self) -> &RedisCommandFlags {
-        &self.cmd_flags
-    }
-
-    /// Is this command a "Write" command?
-    pub fn is_write_command(&self) -> bool {
-        self.cmd_flags.intersects(RedisCommandFlags::Write)
-    }
-}
-
-// READONLY You can't write against a read only replica.
 lazy_static::lazy_static! {
-    static ref COMMAND_TABLE: HashMap<&'static str, CommandMetadata> = HashMap::from([
-        ("ping", CommandMetadata::new(RedisCommandName::Ping, RedisCommandFlags::Read)),
-        ("command", CommandMetadata::new(RedisCommandName::Cmd, RedisCommandFlags::Read)),
-        ("config", CommandMetadata::new(RedisCommandName::Config, RedisCommandFlags::Read)),
-        ("info", CommandMetadata::new(RedisCommandName::Info, RedisCommandFlags::Read)),
-        // string commands
-        ("append", CommandMetadata::new(RedisCommandName::Append, RedisCommandFlags::Write)),
-        ("decr", CommandMetadata::new(RedisCommandName::Decr, RedisCommandFlags::Write)),
-        ("decrby", CommandMetadata::new(RedisCommandName::DecrBy, RedisCommandFlags::Write)),
-        ("incr", CommandMetadata::new(RedisCommandName::Incr, RedisCommandFlags::Write)),
-        ("incrby", CommandMetadata::new(RedisCommandName::IncrBy, RedisCommandFlags::Write)),
-        ("incrbyfloat", CommandMetadata::new(RedisCommandName::IncrByFloat, RedisCommandFlags::Write)),
-    ("set", CommandMetadata::new(RedisCommandName::Set, RedisCommandFlags::Write)),
-        ("get", CommandMetadata::new(RedisCommandName::Get, RedisCommandFlags::Read)),
-        ("getdel", CommandMetadata::new(RedisCommandName::GetDel, RedisCommandFlags::Write)),
-        ("getset", CommandMetadata::new(RedisCommandName::GetSet, RedisCommandFlags::Write)),
-        ("getex", CommandMetadata::new(RedisCommandName::GetEx, RedisCommandFlags::Write)),
-        ("getrange", CommandMetadata::new(RedisCommandName::GetRange, RedisCommandFlags::Read)),
-        ("lcs", CommandMetadata::new(RedisCommandName::Lcs, RedisCommandFlags::Read)),
-        ("mget", CommandMetadata::new(RedisCommandName::Mget, RedisCommandFlags::Read)),
-        ("mset", CommandMetadata::new(RedisCommandName::Mset, RedisCommandFlags::Write)),
-        ("msetnx", CommandMetadata::new(RedisCommandName::Msetnx, RedisCommandFlags::Read)),
-        ("psetex", CommandMetadata::new(RedisCommandName::Psetex, RedisCommandFlags::Write)),
-        ("setex", CommandMetadata::new(RedisCommandName::Setex, RedisCommandFlags::Write)),
-        ("setnx", CommandMetadata::new(RedisCommandName::Setnx, RedisCommandFlags::Write)),
-        ("setrange", CommandMetadata::new(RedisCommandName::SetRange, RedisCommandFlags::Write)),
-        ("strlen", CommandMetadata::new(RedisCommandName::Strlen, RedisCommandFlags::Read)),
-        ("substr", CommandMetadata::new(RedisCommandName::Substr, RedisCommandFlags::Read)),
-        // list commands
-        ("lpush", CommandMetadata::new(RedisCommandName::Lpush, RedisCommandFlags::Write)),
-        ("lpushx", CommandMetadata::new(RedisCommandName::Lpushx, RedisCommandFlags::Write)),
-        ("rpush", CommandMetadata::new(RedisCommandName::Rpush, RedisCommandFlags::Write)),
-        ("rpushx", CommandMetadata::new(RedisCommandName::Rpushx, RedisCommandFlags::Write)),
-        ("lpop", CommandMetadata::new(RedisCommandName::Lpop, RedisCommandFlags::Write)),
-        ("rpop", CommandMetadata::new(RedisCommandName::Rpop, RedisCommandFlags::Write)),
-        ("llen", CommandMetadata::new(RedisCommandName::Llen, RedisCommandFlags::Read)),
-        ("lindex", CommandMetadata::new(RedisCommandName::Lindex, RedisCommandFlags::Read)),
-        ("linsert", CommandMetadata::new(RedisCommandName::Linsert, RedisCommandFlags::Write)),
-        ("lset", CommandMetadata::new(RedisCommandName::Lset, RedisCommandFlags::Write)),
-        ("lpos", CommandMetadata::new(RedisCommandName::Lpos, RedisCommandFlags::Read)),
-        ("ltrim", CommandMetadata::new(RedisCommandName::Ltrim, RedisCommandFlags::Write)),
-        ("lrange", CommandMetadata::new(RedisCommandName::Lrange, RedisCommandFlags::Read)),
-        ("lrem", CommandMetadata::new(RedisCommandName::Lrem, RedisCommandFlags::Write)),
-        ("lmove", CommandMetadata::new(RedisCommandName::Lmove, RedisCommandFlags::Write)),
-        ("rpoplpush", CommandMetadata::new(RedisCommandName::Rpoplpush, RedisCommandFlags::Write)),
-        ("brpoplpush", CommandMetadata::new(RedisCommandName::Brpoplpush, RedisCommandFlags::Write)),
-        ("blpop", CommandMetadata::new(RedisCommandName::Blpop, RedisCommandFlags::Write)),
-        ("lmpop", CommandMetadata::new(RedisCommandName::Lmpop, RedisCommandFlags::Write)),
-        ("blmove", CommandMetadata::new(RedisCommandName::Blmove, RedisCommandFlags::Write)),
-        ("blmpop", CommandMetadata::new(RedisCommandName::Blmpop, RedisCommandFlags::Write)),
-        ("brpop", CommandMetadata::new(RedisCommandName::Brpop, RedisCommandFlags::Write)),
-        // Client commands
-        ("client", CommandMetadata::new(RedisCommandName::Client, RedisCommandFlags::Connection)),
-        ("select", CommandMetadata::new(RedisCommandName::Select, RedisCommandFlags::Connection)),
-        // Server commands
-        ("replicaof", CommandMetadata::new(RedisCommandName::ReplicaOf, RedisCommandFlags::Admin)),
-        ("slaveof", CommandMetadata::new(RedisCommandName::SlaveOf, RedisCommandFlags::Admin)),
-        // generic commands
-        ("ttl", CommandMetadata::new(RedisCommandName::Ttl, RedisCommandFlags::Read)),
-        ("del", CommandMetadata::new(RedisCommandName::Del, RedisCommandFlags::Write)),
-        ("exists", CommandMetadata::new(RedisCommandName::Exists, RedisCommandFlags::Read)),
-        ("expire", CommandMetadata::new(RedisCommandName::Expire, RedisCommandFlags::Write)),
-        // Hash commands
-        ("hset", CommandMetadata::new(RedisCommandName::Hset, RedisCommandFlags::Write)),
-        ("hget", CommandMetadata::new(RedisCommandName::Hget, RedisCommandFlags::Read)),
-        ("hdel", CommandMetadata::new(RedisCommandName::Hdel, RedisCommandFlags::Write)),
-        ("hlen", CommandMetadata::new(RedisCommandName::Hlen, RedisCommandFlags::Read)),
-        ("hexists", CommandMetadata::new(RedisCommandName::Hexists, RedisCommandFlags::Read)),
-        ("hgetall", CommandMetadata::new(RedisCommandName::Hgetall, RedisCommandFlags::Read)),
-    ]);
+    static ref COMMANDS_MGR: CommandsManager = CommandsManager::default();
+}
+
+/// Generate a RESPv2 output from the command table. Used by the `command` command
+pub fn commands_manager() -> &'static CommandsManager {
+    &COMMANDS_MGR
 }
 
 #[derive(Default, Debug, Clone)]
@@ -221,13 +113,7 @@ impl RedisCommand {
         };
 
         let command_name = String::from_utf8_lossy(command_name).to_lowercase();
-        let metadata = match COMMAND_TABLE.get(command_name.as_str()) {
-            Some(t) => t.clone(),
-            None => CommandMetadata::new(
-                RedisCommandName::NotSupported(format!("unsupported command {}", &command_name)),
-                RedisCommandFlags::None,
-            ),
-        };
+        let metadata = COMMANDS_MGR.metadata(command_name.as_str());
 
         Ok(RedisCommand {
             args,

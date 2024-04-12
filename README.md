@@ -168,6 +168,8 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | ping | ✓ |✓ |   |
 | replicaof | ✓ |✓ |   |
 | slaveof | ✓ |✓ |   |
+| command | ✓ |✓ |   |
+| command docs | ✓ | x |   |
 
 ### Connection management commands
 

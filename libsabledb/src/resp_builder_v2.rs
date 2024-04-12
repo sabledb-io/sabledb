@@ -135,6 +135,21 @@ impl RespBuilderV2 {
         self.add_bulk_string_internal(buffer, content);
     }
 
+    /// Convert vector of strings into Resp array of strings
+    /// and append it to the buffer
+    /// NOTE: this function does not clear the buffer
+    pub fn add_strings(&self, buffer: &mut BytesMut, strings: &[&str]) {
+        self.add_array_len(buffer, strings.len());
+        for s in strings {
+            self.add_bulk_string_u8_arr(buffer, s.as_bytes());
+        }
+    }
+
+    /// Append `resp` into the current buffer
+    pub fn add_resp_string(&self, buffer: &mut BytesMut, resp: &[u8]) {
+        buffer.extend_from_slice(resp);
+    }
+
     /// Append bulk string to the buffer.
     /// NOTE: this function does not clear the buffer
     pub fn add_bulk_string_u8_arr(&self, buffer: &mut BytesMut, content: &[u8]) {
@@ -168,5 +183,11 @@ impl RespBuilderV2 {
     /// NOTE: this function does not clear the buffer
     pub fn add_null_string(&self, buffer: &mut BytesMut) {
         self.add_null_string_internal(buffer);
+    }
+
+    /// Append an empty array
+    /// NOTE: this function does not clear the buffer
+    pub fn add_empty_array(&self, buffer: &mut BytesMut) {
+        buffer.extend_from_slice(EMPTY_ARRAY.as_bytes());
     }
 }

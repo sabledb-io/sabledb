@@ -158,6 +158,7 @@ pub enum ClientNextAction {
 mod base_commands;
 mod client_commands;
 mod command;
+mod commander;
 mod error_strings;
 mod generic_commands;
 mod hash_commands;
@@ -168,7 +169,9 @@ mod string_commands;
 pub use crate::commands::error_strings::ErrorStrings;
 pub use base_commands::BaseCommands;
 pub use client_commands::ClientCommands;
+pub use command::commands_manager;
 pub use command::{RedisCommand, RedisCommandName};
+pub use commander::{CommandMetadata, CommandsManager};
 pub use generic_commands::GenericCommands;
 pub use hash_commands::HashCommands;
 pub use list_commands::ListCommands;

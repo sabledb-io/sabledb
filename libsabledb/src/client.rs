@@ -454,12 +454,6 @@ impl Client {
                 Telemetry::inc_net_bytes_written(PONG.len() as u128);
                 ClientNextAction::NoAction
             }
-            RedisCommandName::Cmd => {
-                let mut buffer = BytesMut::with_capacity(32);
-                builder.empty_array(&mut buffer);
-                Self::send_response(tx, &buffer, client_state.client_id).await?;
-                ClientNextAction::NoAction
-            }
             RedisCommandName::Set
             | RedisCommandName::Append
             | RedisCommandName::Get
@@ -580,7 +574,7 @@ impl Client {
                 }
                 ClientNextAction::NoAction
             }
-            RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
+            RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf | RedisCommandName::Command => {
                 match ServerCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.client_id).await?;

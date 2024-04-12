@@ -36,6 +36,8 @@ rclite = "0.2.4"
 flate2 = "1"
 tar = "0"
 num-format = "0"
+strum = "0.26.2"
+strum_macros = "0.26.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 affinity = "0"
