@@ -67,11 +67,27 @@ impl Default for ReplicationLimits {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ClientLimits {
+    /// Build up to `response_buffer_size` bytes in memory before flushing
+    /// to the network
+    pub client_response_buffer_size: usize,
+}
+
+impl Default for ClientLimits {
+    fn default() -> Self {
+        ClientLimits {
+            client_response_buffer_size: 1 << 20, // 1mb
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct ServerOptions {
     pub general_settings: GeneralSettings,
     pub open_params: StorageOpenParams,
     pub replication_limits: ReplicationLimits,
+    pub client_limits: ClientLimits,
 }
 
 impl ServerOptions {
@@ -184,6 +200,14 @@ impl ServerOptions {
                             parse_number!(value, usize);
                     }
                     _ => {}
+                }
+            }
+        }
+
+        if let Some(properties) = ini_file.section(Some("client_limits")) {
+            for (key, value) in properties.iter() {
+                if key == "client_response_buffer_size" {
+                    options.client_limits.client_response_buffer_size = parse_number!(value, usize);
                 }
             }
         }

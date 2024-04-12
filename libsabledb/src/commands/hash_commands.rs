@@ -311,6 +311,12 @@ impl HashCommands {
                 .unwrap_or(usize::MAX),
         );
 
+        let max_response_buffer = client_state
+            .server_inner_state()
+            .options()
+            .client_limits
+            .client_response_buffer_size;
+
         let prefix = Rc::new(hash_md.prefix());
         let mut fields_added = 0usize;
         match client_state.database().create_iterator(prefix.clone())? {
@@ -334,8 +340,8 @@ impl HashCommands {
                     builder.add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
                     builder.add_bulk_string_u8_arr(&mut response_buffer, value);
 
-                    // If the buffer len is greater than 1MB, write it
-                    if response_buffer.len() > (1 << 20) {
+                    // If the buffer len is greater than the limit, flush it now
+                    if response_buffer.len() >= max_response_buffer {
                         tx.write_all(&response_buffer).await?;
                         response_buffer.clear();
                     }
