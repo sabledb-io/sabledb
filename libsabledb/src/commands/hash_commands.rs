@@ -23,6 +23,13 @@ use tokio::io::AsyncWriteExt;
 
 pub struct HashCommands {}
 
+#[derive(Eq, PartialEq)]
+enum HGetAllOutput {
+    Keys,
+    Values,
+    Both,
+}
+
 impl HashCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
@@ -53,8 +60,18 @@ impl HashCommands {
                 Self::hincrby(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hgetall => {
-                // HGETALL writes the response directly to the client
-                Self::hgetall(client_state, command, tx).await?;
+                // write directly to the client
+                Self::hgetall(client_state, command, tx, HGetAllOutput::Both).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Hkeys => {
+                // write directly to the client
+                Self::hgetall(client_state, command, tx, HGetAllOutput::Keys).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Hvals => {
+                // write directly to the client
+                Self::hgetall(client_state, command, tx, HGetAllOutput::Values).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
@@ -270,6 +287,7 @@ impl HashCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        output_type: HGetAllOutput,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::with_capacity(128);
@@ -306,22 +324,26 @@ impl HashCommands {
             return Ok(());
         }
 
-        // Write the length
-        let mut response_buffer = BytesMut::with_capacity(4096);
-        builder.add_array_len(
-            &mut response_buffer,
-            hash_md
-                .len()
-                .saturating_mul(2)
-                .try_into()
-                .unwrap_or(usize::MAX),
-        );
-
         let max_response_buffer = client_state
             .server_inner_state()
             .options()
             .client_limits
             .client_response_buffer_size;
+
+        // Write the length
+        let mut response_buffer = BytesMut::with_capacity(128 << 10);
+        builder.add_array_len(
+            &mut response_buffer,
+            hash_md
+                .len()
+                .saturating_mul(if output_type == HGetAllOutput::Both {
+                    2
+                } else {
+                    1
+                })
+                .try_into()
+                .unwrap_or(usize::MAX),
+        );
 
         let prefix = Rc::new(hash_md.prefix());
         let mut fields_added = 0usize;
@@ -343,8 +365,20 @@ impl HashCommands {
 
                     // extract the key from the row data
                     let hash_field_key = HashFieldKey::from_bytes(key)?;
-                    builder.add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
-                    builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                    match output_type {
+                        HGetAllOutput::Keys => {
+                            builder
+                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                        }
+                        HGetAllOutput::Values => {
+                            builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                        }
+                        HGetAllOutput::Both => {
+                            builder
+                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                            builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                        }
+                    }
 
                     // If the buffer len is greater than the limit, flush it now
                     if response_buffer.len() >= max_response_buffer {
@@ -555,6 +589,21 @@ mod test {
         (vec!["set", "string", "field"], "+OK\r\n"),
         (vec!["hincrbyfloat", "string", "field", "1"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
     ], "test_hincrbyfloat"; "test_hincrbyfloat")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "1", "2", "a", "b", "c", "d"], ":3\r\n"),
+        (vec!["hkeys", "myhash"], "*3\r\n$1\r\n1\r\n$1\r\na\r\n$1\r\nc\r\n"),
+        (vec!["hkeys", "no_such_hash"], "*0\r\n"),
+        (vec!["set", "not_a_hash", "value"], "+OK\r\n"),
+        (vec!["hkeys", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hkeys"], "-ERR wrong number of arguments for 'hgetall' command\r\n"),
+    ], "test_hkeys"; "test_hkeys")]
+    #[test_case(vec![
+        (vec!["hset", "myhash", "1", "2", "a", "b", "c", "d"], ":3\r\n"),
+        (vec!["hvals", "myhash"], "*3\r\n$1\r\n2\r\n$1\r\nb\r\n$1\r\nd\r\n"),
+        (vec!["hvals", "no_such_hash"], "*0\r\n"),
+        (vec!["set", "not_a_hash", "value"], "+OK\r\n"),
+        (vec!["hvals", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+    ], "test_hvals"; "test_hvals")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

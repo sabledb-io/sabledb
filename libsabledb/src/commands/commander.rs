@@ -1,4 +1,3 @@
-use crate::commands::RedisCommandName;
 use bytes::BytesMut;
 use std::collections::HashMap;
 use strum_macros::EnumString;
@@ -22,6 +21,83 @@ pub enum RedisCommandFlags {
     /// Command might block the client
     #[strum(serialize = "blocking")]
     Blocking = 1 << 4,
+}
+
+#[derive(Clone, Debug, Default, EnumString)]
+pub enum RedisCommandName {
+    Append,
+    Decr,
+    DecrBy,
+    IncrBy,
+    IncrByFloat,
+    Incr,
+    #[default]
+    Set,
+    Get,
+    Mget,
+    Mset,
+    Msetnx,
+    GetDel,
+    GetSet,
+    GetEx,
+    GetRange,
+    Lcs,
+    Ping,
+    Config,
+    Psetex,
+    Setex,
+    Setnx,
+    SetRange,
+    Strlen,
+    Substr,
+    // List commands
+    Lpush,
+    Lpushx,
+    Rpush,
+    Rpushx,
+    Lpop,
+    Rpop,
+    Llen,
+    Lindex,
+    Linsert,
+    Lset,
+    Lpos,
+    Ltrim,
+    Lrange,
+    Lrem,
+    Lmove,
+    Rpoplpush,
+    Brpoplpush,
+    Blpop,
+    Brpop,
+    Lmpop,
+    Blmpop,
+    Blmove,
+    // Client commands
+    Client,
+    Select,
+    // Server commands
+    ReplicaOf,
+    SlaveOf,
+    Info,
+    Command,
+    // Generic commands
+    Ttl,
+    Del,
+    Exists,
+    Expire,
+    // Hash commands
+    Hset,
+    Hget,
+    Hdel,
+    Hlen,
+    Hexists,
+    Hgetall,
+    Hincrby,
+    Hincrbyfloat,
+    Hkeys,
+    Hvals,
+    NotSupported(String),
 }
 
 pub struct CommandsManager {
@@ -651,6 +727,18 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hincrby)
                         .write()
                         .with_arity(4),
+                ),
+                (
+                    "hkeys",
+                    CommandMetadata::new(RedisCommandName::Hkeys)
+                        .read_only()
+                        .with_arity(2),
+                ),
+                (
+                    "hvals",
+                    CommandMetadata::new(RedisCommandName::Hvals)
+                        .read_only()
+                        .with_arity(2),
                 ),
             ]),
         }
