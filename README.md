@@ -150,6 +150,8 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | hlen | ✓ |✓ |   |
 | hexists | ✓ |✓ |   |
 | hgetall | ✓ |✓ |   |
+| hincrby | ✓ |✓ |   |
+| hincrbyfloat | ✓ |✓ |   |
 
 ### Generic commands
 

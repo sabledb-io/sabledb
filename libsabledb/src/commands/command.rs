@@ -74,6 +74,8 @@ pub enum RedisCommandName {
     Hlen,
     Hexists,
     Hgetall,
+    Hincrby,
+    Hincrbyfloat,
     NotSupported(String),
 }
 

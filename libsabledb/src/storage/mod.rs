@@ -12,8 +12,8 @@ pub use crate::storage::storage_adapter::{
 };
 pub use generic_db::GenericDb;
 pub use hash_db::{
-    GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetResult,
-    HashLenResult, HashPutResult,
+    GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
+    HashGetResult, HashLenResult, HashPutResult,
 };
 pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{IterateCallback, StorageIterator, StorageTrait};

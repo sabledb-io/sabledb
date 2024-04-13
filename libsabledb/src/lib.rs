@@ -161,12 +161,16 @@ mod tests {
         }
 
         pub async fn read_all(&mut self) -> String {
+            self.read_all_with_size(4096).await
+        }
+
+        pub async fn read_all_with_size(&mut self, size: usize) -> String {
             self.fp.sync_all().await.unwrap();
             let mut fp = tokio::fs::File::open(&self.temp_file.fullpath())
                 .await
                 .unwrap();
 
-            let mut buffer = bytes::BytesMut::with_capacity(4096);
+            let mut buffer = bytes::BytesMut::with_capacity(size);
             fp.read_buf(&mut buffer).await.unwrap();
             crate::BytesMutUtils::to_string(&buffer)
         }
@@ -187,7 +191,6 @@ mod tests {
         fn drop(&mut self) {
             if let Ok(md) = std::fs::metadata(self.dirpath.clone()) {
                 if md.is_dir() {
-                    println!("deleting {}", self.dirpath.as_str());
                     std::fs::remove_dir_all(self.dirpath.clone()).unwrap();
                 }
             }

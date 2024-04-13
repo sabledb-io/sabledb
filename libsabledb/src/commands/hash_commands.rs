@@ -9,7 +9,7 @@ use crate::{
     parse_string_to_number,
     storage::{
         GenericDb, GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult,
-        HashGetResult, HashLenResult, HashPutResult,
+        HashGetMultiResult, HashGetResult, HashLenResult, HashPutResult,
     },
     types::List,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
@@ -45,6 +45,12 @@ impl HashCommands {
             }
             RedisCommandName::Hexists => {
                 Self::hexists(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Hincrbyfloat => {
+                Self::hincrbyfloat(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Hincrby => {
+                Self::hincrby(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Hgetall => {
                 // HGETALL writes the response directly to the client
@@ -109,7 +115,7 @@ impl HashCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let items_put = match hash_db.put(key, &field_values)? {
+        let items_put = match hash_db.put_multi(key, &field_values)? {
             HashPutResult::Some(count) => count,
             HashPutResult::WrongType => {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
@@ -137,17 +143,17 @@ impl HashCommands {
         let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let items = match hash_db.get(key, &[&field])? {
-            HashGetResult::WrongType => {
+        let items = match hash_db.get_multi(key, &[&field])? {
+            HashGetMultiResult::WrongType => {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
                 return Ok(());
             }
-            HashGetResult::Some(items) => {
+            HashGetMultiResult::Some(items) => {
                 // update telemetries
                 Telemetry::inc_db_hit();
                 items
             }
-            HashGetResult::None => {
+            HashGetMultiResult::None => {
                 // update telemetries
                 Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
@@ -285,7 +291,7 @@ impl HashCommands {
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
             }
-            GetHashMetadataResult::None => {
+            GetHashMetadataResult::NotFound => {
                 builder.empty_array(&mut response_buffer);
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
@@ -359,6 +365,108 @@ impl HashCommands {
 
         Ok(())
     }
+
+    /// Increments the number stored at field in the hash stored at key by increment.
+    /// If key does not exist, a new key holding a hash is created. If field does not exist the value is set to 0
+    /// before the operation is performed.
+    /// The range of values supported by HINCRBY is limited to 64 bit signed integers.
+    async fn hincrby(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+        let field = command_arg_at!(command, 2);
+        let increment = command_arg_at!(command, 3);
+
+        let Some(increment) = BytesMutUtils::parse::<i64>(increment) else {
+            builder.error_string(
+                response_buffer,
+                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+            );
+            return Ok(());
+        };
+
+        // Lock and delete
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let prev_value = match hash_db.get(key, field)? {
+            HashGetResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+            HashGetResult::NotFound | HashGetResult::FieldNotFound => 0i64,
+            HashGetResult::Some(value) => {
+                let Some(value) = BytesMutUtils::parse::<i64>(&value) else {
+                    builder.error_string(response_buffer, "ERR hash value is not an integer");
+                    return Ok(());
+                };
+                value
+            }
+        };
+
+        let new_value = prev_value + increment;
+        builder.number::<i64>(response_buffer, new_value, false);
+
+        // store the new value
+        let new_value = BytesMutUtils::from::<i64>(&new_value);
+        let _ = hash_db.put_multi(key, &[(field, &new_value)])?;
+        Ok(())
+    }
+
+    /// Increments the number stored at field in the hash stored at key by increment.
+    /// If key does not exist, a new key holding a hash is created. If field does not exist the value is set to 0
+    /// before the operation is performed.
+    /// The range of values supported by HINCRBY is limited to 64 bit signed integers.
+    async fn hincrbyfloat(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+        let field = command_arg_at!(command, 2);
+        let increment = command_arg_at!(command, 3);
+
+        let Some(increment) = BytesMutUtils::parse::<f64>(increment) else {
+            builder.error_string(
+                response_buffer,
+                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+            );
+            return Ok(());
+        };
+
+        // Lock and delete
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let prev_value = match hash_db.get(key, field)? {
+            HashGetResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+            HashGetResult::NotFound | HashGetResult::FieldNotFound => 0f64,
+            HashGetResult::Some(value) => {
+                let Some(value) = BytesMutUtils::parse::<f64>(&value) else {
+                    builder.error_string(response_buffer, "ERR hash value is not an integer");
+                    return Ok(());
+                };
+                value
+            }
+        };
+
+        let new_value = prev_value + increment;
+        builder.number::<f64>(response_buffer, new_value, true);
+
+        // store the new value
+        let new_value = BytesMutUtils::from::<f64>(&new_value);
+        let _ = hash_db.put_multi(key, &[(field, &new_value)])?;
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -383,6 +491,10 @@ mod test {
         (vec!["hset", "myhash", "field1", "value1", "field1", "value1"], ":0\r\n"),
         (vec!["hset", "myhash", "field1", "value1", "field2"], "-ERR wrong number of arguments for 'hset' command\r\n"),
         (vec!["hset", "myhash", "field2", "value2"], ":1\r\n"),
+        (vec!["hset", "myhash", "f3", "v1"], ":1\r\n"),
+        (vec!["hset", "myhash", "f3", "v2"], ":0\r\n"),
+        (vec!["hset", "myhash", "f3", "v3"], ":0\r\n"),
+        (vec!["hget", "myhash", "f3"], "$2\r\nv3\r\n"), // expect the last update
         (vec!["hset", "myhash"], "-ERR wrong number of arguments for 'hset' command\r\n"),
     ], "test_hset"; "test_hset")]
     #[test_case(vec![
@@ -423,6 +535,26 @@ mod test {
         (vec!["hgetall", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         (vec!["hgetall"], "-ERR wrong number of arguments for 'hgetall' command\r\n"),
     ], "test_hgetall"; "test_hgetall")]
+    #[test_case(vec![
+        (vec!["hincrby"], "-ERR wrong number of arguments for 'hincrby' command\r\n"),
+        (vec!["hincrby", "myhash"], "-ERR wrong number of arguments for 'hincrby' command\r\n"),
+        (vec!["hincrby", "myhash", "field"], "-ERR wrong number of arguments for 'hincrby' command\r\n"),
+        (vec!["hincrby", "myhash", "field", "1"], ":1\r\n"),
+        (vec!["hincrby", "myhash", "field", "1"], ":2\r\n"),
+        (vec!["hincrby", "myhash", "field", "1.0"], "-ERR value is not an integer or out of range\r\n"),
+        (vec!["set", "string", "field"], "+OK\r\n"),
+        (vec!["hincrby", "string", "field", "1"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+    ], "test_hincrby"; "test_hincrby")]
+    #[test_case(vec![
+        (vec!["hincrbyfloat"], "-ERR wrong number of arguments for 'hincrbyfloat' command\r\n"),
+        (vec!["hincrbyfloat", "myhash"], "-ERR wrong number of arguments for 'hincrbyfloat' command\r\n"),
+        (vec!["hincrbyfloat", "myhash", "field"], "-ERR wrong number of arguments for 'hincrbyfloat' command\r\n"),
+        (vec!["hincrbyfloat", "myhash", "field", "1"], ",1\r\n"),
+        (vec!["hincrbyfloat", "myhash", "field", "1"], ",2\r\n"),
+        (vec!["hincrbyfloat", "myhash", "field", "1.0"], ",3\r\n"),
+        (vec!["set", "string", "field"], "+OK\r\n"),
+        (vec!["hincrbyfloat", "string", "field", "1"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+    ], "test_hincrbyfloat"; "test_hincrbyfloat")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

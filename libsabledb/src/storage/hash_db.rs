@@ -16,7 +16,7 @@ pub enum GetHashMetadataResult {
     /// A match was found
     Some(HashValueMetadata),
     /// No entry exist
-    None,
+    NotFound,
 }
 
 /// `HashDb::put` result
@@ -28,15 +28,28 @@ pub enum HashPutResult {
     Some(usize),
 }
 
-/// `HashDb::get` result
+/// `HashDb::get_multi` result
 #[derive(PartialEq, Eq, Debug)]
-pub enum HashGetResult {
+pub enum HashGetMultiResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// The results
     Some(Vec<Option<BytesMut>>),
     /// No fields were found
     None,
+}
+
+/// `HashDb::get` result
+#[derive(PartialEq, Eq, Debug)]
+pub enum HashGetResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// The results
+    Some(BytesMut),
+    /// No fields were found
+    NotFound,
+    /// Field does not exist in hash
+    FieldNotFound,
 }
 
 /// `HashDb::delete` result
@@ -80,9 +93,9 @@ enum DeleteHashMetadataResult {
 
 enum PutFieldResult {
     /// Ok...
-    Ok,
+    Inserted,
     /// Already exists in hash
-    AlreadyExists,
+    Updated,
 }
 
 /// Hash DB wrapper. This class is specialized in reading/writing hash
@@ -109,7 +122,7 @@ impl<'a> HashDb<'a> {
     }
 
     /// Sets the specified fields to their respective values in the hash stored at `user_key`
-    pub fn put(
+    pub fn put_multi(
         &self,
         user_key: &BytesMut,
         field_vals: &[(&BytesMut, &BytesMut)],
@@ -121,7 +134,7 @@ impl<'a> HashDb<'a> {
         // locate the hash
         let mut hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => return Ok(HashPutResult::WrongType),
-            GetHashMetadataResult::None => {
+            GetHashMetadataResult::NotFound => {
                 // Create a entry
                 self.create_hash_metadata(user_key)?
             }
@@ -132,8 +145,8 @@ impl<'a> HashDb<'a> {
         for (key, value) in field_vals {
             // we overide the field's value
             match self.put_hash_field_value(hash.id(), key, value)? {
-                PutFieldResult::AlreadyExists => {}
-                PutFieldResult::Ok => items_added = items_added.saturating_add(1),
+                PutFieldResult::Updated => {}
+                PutFieldResult::Inserted => items_added = items_added.saturating_add(1),
             }
         }
 
@@ -147,22 +160,22 @@ impl<'a> HashDb<'a> {
     }
 
     /// Return the values associated with the provided fields.
-    pub fn get(
+    pub fn get_multi(
         &self,
         user_key: &BytesMut,
         fields: &[&BytesMut],
-    ) -> Result<HashGetResult, SableError> {
+    ) -> Result<HashGetMultiResult, SableError> {
         if fields.is_empty() {
-            return Ok(HashGetResult::None);
+            return Ok(HashGetMultiResult::None);
         }
 
         // locate the hash
         let hash = match self.hash_metadata(user_key)? {
             GetHashMetadataResult::WrongType => {
-                return Ok(HashGetResult::WrongType);
+                return Ok(HashGetMultiResult::WrongType);
             }
-            GetHashMetadataResult::None => {
-                return Ok(HashGetResult::None);
+            GetHashMetadataResult::NotFound => {
+                return Ok(HashGetMultiResult::None);
             }
             GetHashMetadataResult::Some(hash) => hash,
         };
@@ -172,7 +185,27 @@ impl<'a> HashDb<'a> {
             values.push(self.get_hash_field_value(hash.id(), field)?);
         }
 
-        Ok(HashGetResult::Some(values))
+        Ok(HashGetMultiResult::Some(values))
+    }
+
+    /// Return the value of a hash field
+    pub fn get(&self, user_key: &BytesMut, field: &BytesMut) -> Result<HashGetResult, SableError> {
+        // locate the hash
+        let hash = match self.hash_metadata(user_key)? {
+            GetHashMetadataResult::WrongType => {
+                return Ok(HashGetResult::WrongType);
+            }
+            GetHashMetadataResult::NotFound => {
+                return Ok(HashGetResult::NotFound);
+            }
+            GetHashMetadataResult::Some(hash) => hash,
+        };
+
+        let Some(value) = self.get_hash_field_value(hash.id(), field)? else {
+            return Ok(HashGetResult::FieldNotFound);
+        };
+
+        Ok(HashGetResult::Some(value))
     }
 
     /// Removes the specified fields from the hash stored at `user_key`
@@ -186,7 +219,7 @@ impl<'a> HashDb<'a> {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashDeleteResult::WrongType);
             }
-            GetHashMetadataResult::None => {
+            GetHashMetadataResult::NotFound => {
                 return Ok(HashDeleteResult::Some(0));
             }
             GetHashMetadataResult::Some(hash) => hash,
@@ -216,7 +249,7 @@ impl<'a> HashDb<'a> {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashLenResult::WrongType);
             }
-            GetHashMetadataResult::None => {
+            GetHashMetadataResult::NotFound => {
                 return Ok(HashLenResult::Some(0));
             }
             GetHashMetadataResult::Some(hash) => hash,
@@ -235,7 +268,7 @@ impl<'a> HashDb<'a> {
             GetHashMetadataResult::WrongType => {
                 return Ok(HashExistsResult::WrongType);
             }
-            GetHashMetadataResult::None => {
+            GetHashMetadataResult::NotFound => {
                 return Ok(HashExistsResult::NotExists);
             }
             GetHashMetadataResult::Some(hash) => hash,
@@ -252,7 +285,7 @@ impl<'a> HashDb<'a> {
     pub fn hash_metadata(&self, user_key: &BytesMut) -> Result<GetHashMetadataResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(GetHashMetadataResult::None);
+            return Ok(GetHashMetadataResult::NotFound);
         };
 
         match self.try_decode_hash_value_metadata(&value)? {
@@ -371,11 +404,13 @@ impl<'a> HashDb<'a> {
         user_value: &BytesMut,
     ) -> Result<PutFieldResult, SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
-        if self.cache.contains(&key)? {
-            return Ok(PutFieldResult::AlreadyExists);
-        }
+        let updating = self.cache.contains(&key)?;
         self.cache.put(&key, user_value.clone())?;
-        Ok(PutFieldResult::Ok)
+        Ok(if updating {
+            PutFieldResult::Updated
+        } else {
+            PutFieldResult::Inserted
+        })
     }
 
     /// Given raw bytes (read from the db) return whether it represents a `HashValueMetadata`
@@ -434,15 +469,15 @@ mod tests {
         // run a hash operation on a string key
         assert_eq!(hash_db.len(&key).unwrap(), HashLenResult::WrongType);
         assert_eq!(
-            hash_db.get(&key, &[&key]).unwrap(),
-            HashGetResult::WrongType
+            hash_db.get_multi(&key, &[&key]).unwrap(),
+            HashGetMultiResult::WrongType
         );
         assert_eq!(
             hash_db.delete(&key, &[&key]).unwrap(),
             HashDeleteResult::WrongType
         );
         assert_eq!(
-            hash_db.put(&key, &[(&key, &key)]).unwrap(),
+            hash_db.put_multi(&key, &[(&key, &key)]).unwrap(),
             HashPutResult::WrongType
         );
         Ok(())
@@ -462,7 +497,7 @@ mod tests {
         let no_such_field = BytesMut::from("nosuchfield");
 
         assert_eq!(
-            hash_db.put(
+            hash_db.put_multi(
                 &hash_name,
                 &[(&field1, &field1), (&field2, &field2), (&field3, &field3)]
             )?,
@@ -470,7 +505,7 @@ mod tests {
         );
 
         assert_eq!(
-            hash_db.put(
+            hash_db.put_multi(
                 &hash_name_2,
                 &[(&field1, &field1), (&field2, &field2), (&field3, &field3)]
             )?,
@@ -490,8 +525,8 @@ mod tests {
         {
             // Check the first hash
 
-            let HashGetResult::Some(results_vec) = hash_db
-                .get(&hash_name, &[&field1, &no_such_field, &field2, &field3])
+            let HashGetMultiResult::Some(results_vec) = hash_db
+                .get_multi(&hash_name, &[&field1, &no_such_field, &field2, &field3])
                 .unwrap()
             else {
                 panic!("get failed");
@@ -509,8 +544,8 @@ mod tests {
         }
         {
             // Confirm that the manipulations on the first hash did not impact the second one
-            let HashGetResult::Some(results_vec) = hash_db
-                .get(&hash_name_2, &[&field1, &no_such_field, &field2, &field3])
+            let HashGetMultiResult::Some(results_vec) = hash_db
+                .get_multi(&hash_name_2, &[&field1, &no_such_field, &field2, &field3])
                 .unwrap()
             else {
                 panic!("get failed");

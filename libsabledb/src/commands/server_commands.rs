@@ -157,7 +157,8 @@ mod test {
                 .await
                 .unwrap();
 
-            let raw_response = sink.read_all().await;
+            // the output might be large, use a large buffer
+            let raw_response = sink.read_all_with_size(128 << 10).await;
             let manager = crate::commands::commands_manager();
 
             // the response should starts with "*<commands-count>\r\n"
@@ -186,7 +187,8 @@ mod test {
                 .await
                 .unwrap();
 
-            let raw_response = sink.read_all().await;
+            // the output might be large, use a large buffer
+            let raw_response = sink.read_all_with_size(128 << 10).await;
             let manager = crate::commands::commands_manager();
 
             // the response should starts with "*<2 x commands-count>\r\n"

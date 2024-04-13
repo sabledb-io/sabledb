@@ -72,7 +72,6 @@ impl CommandsManager {
 }
 
 #[derive(Default, Debug, Clone)]
-#[allow(dead_code)]
 pub struct CommandMetadata {
     cmd_name: RedisCommandName,
     cmd_flags: u64,
@@ -640,6 +639,18 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hgetall)
                         .read_only()
                         .with_arity(2),
+                ),
+                (
+                    "hincrbyfloat",
+                    CommandMetadata::new(RedisCommandName::Hincrbyfloat)
+                        .write()
+                        .with_arity(4),
+                ),
+                (
+                    "hincrby",
+                    CommandMetadata::new(RedisCommandName::Hincrby)
+                        .write()
+                        .with_arity(4),
                 ),
             ]),
         }
