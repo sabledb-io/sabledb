@@ -629,7 +629,7 @@ impl HashCommands {
         let hash_md = match hash_db.hash_metadata(key)? {
             GetHashMetadataResult::Some(hash_md) => hash_md,
             GetHashMetadataResult::NotFound => {
-                builder.empty_array(&mut response_buffer);
+                builder.null_string(&mut response_buffer);
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
             }
@@ -659,15 +659,17 @@ impl HashCommands {
         // select the indices we want to pick
         let mut indices = choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
 
-        // sort the indices so we can do this in one pass
-        builder.add_array_len(
-            &mut response_buffer,
-            if with_values {
-                indices.len() * 2
-            } else {
-                indices.len()
-            },
-        );
+        // When returning multiple items, we return an array
+        if indices.len() > 1 || with_values {
+            builder.add_array_len(
+                &mut response_buffer,
+                if with_values {
+                    indices.len() * 2
+                } else {
+                    indices.len()
+                },
+            );
+        }
 
         // create an iterator and place at at the start of the hash fields
         let mut curidx = 0usize;
@@ -897,12 +899,17 @@ mod test {
     #[test_case(vec![
         (vec!["set", "str_key", "value"], "+OK\r\n"),
         (vec!["hrandfield", "str_key"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hrandfield", "nosuchhash"], "$-1\r\n"),
         (vec!["hset", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"], ":3\r\n"),
         // since we have hash with 3 fields and we want 3 fields, we will get them
         (vec!["hrandfield", "myhash", "3"], "*3\r\n$2\r\nf1\r\n$2\r\nf2\r\n$2\r\nf3\r\n"),
         (vec!["hrandfield", "myhash", "15"], "*3\r\n$2\r\nf1\r\n$2\r\nf2\r\n$2\r\nf3\r\n"),
         (vec!["hrandfield", "myhash", "3", "withvalues"], "*6\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf2\r\n$2\r\nv2\r\n$2\r\nf3\r\n$2\r\nv3\r\n"),
         (vec!["hrandfield", "myhash", "8", "withvalues"], "*6\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf2\r\n$2\r\nv2\r\n$2\r\nf3\r\n$2\r\nv3\r\n"),
+        // Different type of responses
+        (vec!["hset", "myhash_1_item", "f1", "v1"], ":1\r\n"),
+        (vec!["hrandfield", "myhash_1_item", "1", "withvalues"], "*2\r\n$2\r\nf1\r\n$2\r\nv1\r\n"),
+        (vec!["hrandfield", "myhash_1_item"], "$2\r\nf1\r\n"),
     ], "test_hrandfield"; "test_hrandfield")]
     fn test_hash_commands(
         args: Vec<(Vec<&'static str>, &'static str)>,
