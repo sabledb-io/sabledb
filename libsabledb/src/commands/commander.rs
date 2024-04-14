@@ -97,6 +97,8 @@ pub enum RedisCommandName {
     Hincrbyfloat,
     Hkeys,
     Hvals,
+    Hmget,
+    Hmset,
     NotSupported(String),
 }
 
@@ -687,6 +689,12 @@ impl Default for CommandsManager {
                         .with_arity(-4),
                 ),
                 (
+                    "hmset",
+                    CommandMetadata::new(RedisCommandName::Hmset)
+                        .write()
+                        .with_arity(-4),
+                ),
+                (
                     "hget",
                     CommandMetadata::new(RedisCommandName::Hget)
                         .read_only()
@@ -739,6 +747,12 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hvals)
                         .read_only()
                         .with_arity(2),
+                ),
+                (
+                    "hmget",
+                    CommandMetadata::new(RedisCommandName::Hmget)
+                        .read_only()
+                        .with_arity(-3),
                 ),
             ]),
         }

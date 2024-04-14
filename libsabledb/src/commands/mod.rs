@@ -21,6 +21,26 @@ macro_rules! check_args_count {
 }
 
 #[macro_export]
+macro_rules! expect_args_count_tx {
+    ($cmd:expr, $expected_args_count:expr, $tx:expr) => {{
+        let builder = RespBuilderV2::default();
+        let mut response_buffer = BytesMut::with_capacity(128);
+        if !$cmd.expect_args_count($expected_args_count) {
+            builder.error_string(
+                &mut response_buffer,
+                format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    $cmd.main_command()
+                )
+                .as_str(),
+            );
+            $tx.write_all(response_buffer.as_ref()).await?;
+            return Ok(());
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! check_value_type {
     ($key_md:expr, $expected_type:expr, $response_buffer:expr) => {
         if !$key_md.is_type($expected_type) {

@@ -146,10 +146,12 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | hset | ✓ |✓ |   |
 | hget | ✓ |✓ |   |
+| hmget | ✓ |✓ |   |
+| hmset | ✓ |✓ |   |
+| hgetall | ✓ |✓ |   |
 | hdel | ✓ |✓ |   |
 | hlen | ✓ |✓ |   |
 | hexists | ✓ |✓ |   |
-| hgetall | ✓ |✓ |   |
 | hincrby | ✓ |✓ |   |
 | hincrbyfloat | ✓ |✓ |   |
 | hkeys | ✓ |✓ |   |

@@ -594,7 +594,9 @@ impl Client {
             | RedisCommandName::Hincrbyfloat
             | RedisCommandName::Hincrby
             | RedisCommandName::Hkeys
-            | RedisCommandName::Hvals => {
+            | RedisCommandName::Hvals
+            | RedisCommandName::Hmget
+            | RedisCommandName::Hmset => {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

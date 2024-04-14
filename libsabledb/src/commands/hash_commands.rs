@@ -41,6 +41,15 @@ impl HashCommands {
             RedisCommandName::Hset => {
                 Self::hset(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Hmset => {
+                // HMSET is identical to HSET with different response (it responds with OK)
+                Self::hset(client_state, command, &mut response_buffer).await?;
+                if response_buffer.starts_with(b":") {
+                    // incase of a success, change the response into "+OK\r\n"
+                    let builder = RespBuilderV2::default();
+                    builder.ok(&mut response_buffer);
+                }
+            }
             RedisCommandName::Hget => {
                 Self::hget(client_state, command, &mut response_buffer).await?;
             }
@@ -72,6 +81,11 @@ impl HashCommands {
             RedisCommandName::Hvals => {
                 // write directly to the client
                 Self::hgetall(client_state, command, tx, HGetAllOutput::Values).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Hmget => {
+                // write directly to the client
+                Self::hmget(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
@@ -156,34 +170,25 @@ impl HashCommands {
         let key = command_arg_at!(command, 1);
         let field = command_arg_at!(command, 2);
 
-        // this is a read command, lock shared here
-        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+        // Multiple db calls: exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let items = match hash_db.get_multi(key, &[&field])? {
-            HashGetMultiResult::WrongType => {
+        match hash_db.get(key, field)? {
+            HashGetResult::WrongType => {
                 builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
-                return Ok(());
             }
-            HashGetMultiResult::Some(items) => {
+            HashGetResult::Some(value) => {
                 // update telemetries
                 Telemetry::inc_db_hit();
-                items
+                builder.bulk_string(response_buffer, &value);
             }
-            HashGetMultiResult::None => {
+            HashGetResult::NotFound | HashGetResult::FieldNotFound => {
                 // update telemetries
                 Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
-                return Ok(());
             }
         };
-
-        // we expect exactly 1 item, return it
-        if let Some(Some(v)) = items.first() {
-            builder.bulk_string(response_buffer, v);
-        } else {
-            builder.null_string(response_buffer);
-        }
         Ok(())
     }
 
@@ -216,7 +221,7 @@ impl HashCommands {
             return Ok(());
         }
 
-        // Lock and delete
+        // Multiple db calls: exclusive lock
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -289,19 +294,14 @@ impl HashCommands {
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
         output_type: HGetAllOutput,
     ) -> Result<(), SableError> {
+        expect_args_count_tx!(command, 2, tx);
+
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::with_capacity(128);
-        if !command.expect_args_count(2) {
-            builder.error_string(
-                &mut response_buffer,
-                "ERR wrong number of arguments for 'hgetall' command",
-            );
-            tx.write_all(response_buffer.as_ref()).await?;
-            return Ok(());
-        }
-
         let key = command_arg_at!(command, 1);
-        let _unused = LockManager::lock_user_key_shared(key, client_state.database_id());
+
+        // multiple db access -> use exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
         let hash_md = match hash_db.hash_metadata(key)? {
             GetHashMetadataResult::WrongType => {
@@ -501,6 +501,63 @@ impl HashCommands {
         let _ = hash_db.put_multi(key, &[(field, &new_value)])?;
         Ok(())
     }
+
+    /// Returns the values associated with the specified fields in the hash stored at key.
+    /// For every field that does not exist in the hash, a nil value is returned. Because non-existing keys
+    /// are treated as empty hashes, running HMGET against a non-existing key will return a list of nil values.
+    async fn hmget(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        expect_args_count_tx!(command, 3, tx);
+        let key = command_arg_at!(command, 1);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // skip the command name
+        iter.next(); // skip the hash key
+
+        let max_response_buffer = client_state
+            .server_inner_state()
+            .options()
+            .client_limits
+            .client_response_buffer_size;
+
+        // multi db access requires an exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let mut response_buffer = BytesMut::with_capacity(1024);
+        let builder = RespBuilderV2::default();
+        let array_len = command.arg_count().saturating_sub(2); // reduce the command name + the hash key
+
+        builder.add_array_len(&mut response_buffer, array_len);
+        for field in iter {
+            match hash_db.get(key, field)? {
+                HashGetResult::Some(field_value) => {
+                    builder.add_bulk_string(&mut response_buffer, &field_value);
+                }
+                HashGetResult::FieldNotFound | HashGetResult::NotFound => {
+                    builder.add_null_string(&mut response_buffer);
+                }
+                HashGetResult::WrongType => {
+                    builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                    break;
+                }
+            }
+
+            if response_buffer.len() > max_response_buffer {
+                tx.write_all(&response_buffer).await?;
+                response_buffer.clear();
+            }
+        }
+
+        if !response_buffer.is_empty() {
+            tx.write_all(&response_buffer).await?;
+            response_buffer.clear();
+        }
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -595,7 +652,7 @@ mod test {
         (vec!["hkeys", "no_such_hash"], "*0\r\n"),
         (vec!["set", "not_a_hash", "value"], "+OK\r\n"),
         (vec!["hkeys", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
-        (vec!["hkeys"], "-ERR wrong number of arguments for 'hgetall' command\r\n"),
+        (vec!["hkeys"], "-ERR wrong number of arguments for 'hkeys' command\r\n"),
     ], "test_hkeys"; "test_hkeys")]
     #[test_case(vec![
         (vec!["hset", "myhash", "1", "2", "a", "b", "c", "d"], ":3\r\n"),
@@ -604,6 +661,20 @@ mod test {
         (vec!["set", "not_a_hash", "value"], "+OK\r\n"),
         (vec!["hvals", "not_a_hash"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
     ], "test_hvals"; "test_hvals")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hmset", "str_key", "field", "value"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hmset", "myhash", "field1", "value", "field2", "value"], "+OK\r\n"),
+        (vec!["hmset", "myhash", "field1"], "-ERR wrong number of arguments for 'hmset' command\r\n"),
+    ], "test_hmset"; "test_hmset")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hmget", "str_key", "field"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hmset", "myhash", "field1", "value1", "field2", "value2"], "+OK\r\n"),
+        (vec!["hmget", "myhash"], "-ERR wrong number of arguments for 'hmget' command\r\n"),
+        (vec!["hmget", "myhash", "field1", "field2"], "*2\r\n$6\r\nvalue1\r\n$6\r\nvalue2\r\n"),
+        (vec!["hmget", "myhash", "field1"], "*1\r\n$6\r\nvalue1\r\n"),
+    ], "test_hmget"; "test_hmget")]
     fn test_hash_commands(
         args_vec: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
