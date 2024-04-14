@@ -18,6 +18,8 @@ use crate::{
 
 use crate::storage::StorageIterator;
 use bytes::BytesMut;
+use rand::prelude::*;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -86,6 +88,11 @@ impl HashCommands {
             RedisCommandName::Hmget => {
                 // write directly to the client
                 Self::hmget(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Hrandfield => {
+                // write directly to the client
+                Self::hrandfield(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
@@ -294,7 +301,7 @@ impl HashCommands {
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
         output_type: HGetAllOutput,
     ) -> Result<(), SableError> {
-        expect_args_count_tx!(command, 2, tx);
+        check_args_count_tx!(command, 2, tx);
 
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::with_capacity(128);
@@ -510,7 +517,7 @@ impl HashCommands {
         command: Rc<RedisCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
-        expect_args_count_tx!(command, 3, tx);
+        check_args_count_tx!(command, 3, tx);
         let key = command_arg_at!(command, 1);
 
         let mut iter = command.args_vec().iter();
@@ -558,6 +565,218 @@ impl HashCommands {
         }
         Ok(())
     }
+
+    #[allow(unused_variables)]
+    /// `HRANDFIELD key [count [WITHVALUES]]`
+    /// When called with just the key argument, return a random field from the hash value stored at key.
+    /// If the provided count argument is positive, return an array of distinct fields. The array's length is either
+    /// count or the hash's number of fields (HLEN), whichever is lower.
+    /// If called with a negative count, the behavior changes and the command is allowed to return the same field
+    /// multiple times. In this case, the number of returned fields is the absolute value of the specified count.
+    /// The optional WITHVALUES modifier changes the reply so it includes the respective values of the randomly selected
+    /// hash fields.
+    async fn hrandfield(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let key = command_arg_at!(command, 1);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // skip "hrandfield"
+        iter.next(); // skips the key
+
+        // Parse the arguments
+        let builder = RespBuilderV2::default();
+        let mut response_buffer = BytesMut::with_capacity(4096);
+        let (count, with_values, allow_dups) = match (iter.next(), iter.next()) {
+            (Some(count), None) => {
+                let Some(count) = BytesMutUtils::parse::<i64>(count) else {
+                    builder.error_string(
+                        &mut response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    tx.write_all(&response_buffer).await?;
+                    return Ok(());
+                };
+                (count.abs(), false, count < 0)
+            }
+            (Some(count), Some(with_values)) => {
+                let Some(count) = BytesMutUtils::parse::<i64>(count) else {
+                    builder.error_string(
+                        &mut response_buffer,
+                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                    );
+                    tx.write_all(&response_buffer).await?;
+                    return Ok(());
+                };
+                if BytesMutUtils::to_string(with_values).to_lowercase() != "withvalues" {
+                    builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                    tx.write_all(&response_buffer).await?;
+                    return Ok(());
+                }
+                (count.abs(), true, count < 0)
+            }
+            (_, _) => (1i64, false, false),
+        };
+
+        // multiple db calls, requires exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        // determine the array length
+        let hash_md = match hash_db.hash_metadata(key)? {
+            GetHashMetadataResult::Some(hash_md) => hash_md,
+            GetHashMetadataResult::NotFound => {
+                builder.empty_array(&mut response_buffer);
+                tx.write_all(&response_buffer).await?;
+                return Ok(());
+            }
+            GetHashMetadataResult::WrongType => {
+                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                tx.write_all(&response_buffer).await?;
+                return Ok(());
+            }
+        };
+
+        // Adjust the "count"
+        let count = if allow_dups {
+            count
+        } else {
+            std::cmp::min(count, hash_md.len() as i64)
+        };
+
+        // fast bail out
+        if count.eq(&0) {
+            builder.empty_array(&mut response_buffer);
+            tx.write_all(&response_buffer).await?;
+            return Ok(());
+        }
+
+        let possible_indexes = (0..hash_md.len() as usize).collect::<Vec<usize>>();
+
+        // select the indices we want to pick
+        let mut indices = choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
+
+        // sort the indices so we can do this in one pass
+        builder.add_array_len(
+            &mut response_buffer,
+            if with_values {
+                indices.len() * 2
+            } else {
+                indices.len()
+            },
+        );
+
+        // create an iterator and place at at the start of the hash fields
+        let mut curidx = 0usize;
+        let prefix = Rc::new(hash_md.prefix());
+
+        let max_response_buffer = client_state
+            .server_inner_state()
+            .options()
+            .client_limits
+            .client_response_buffer_size;
+
+        // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
+        // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
+        // chosen indices
+        match client_state.database().create_iterator(prefix.clone())? {
+            StorageIterator::RocksDb(mut rocksdb_iter) => {
+                while rocksdb_iter.valid() && !indices.is_empty() {
+                    // get the key & value
+                    let Some(key) = rocksdb_iter.key() else {
+                        break;
+                    };
+
+                    if !key.starts_with(prefix.as_ref()) {
+                        break;
+                    }
+
+                    let Some(value) = rocksdb_iter.value() else {
+                        break;
+                    };
+
+                    // extract the key from the row data
+                    while let Some(wanted_index) = indices.front() {
+                        if curidx.eq(wanted_index) {
+                            let hash_field_key = HashFieldKey::from_bytes(key)?;
+                            builder
+                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                            if with_values {
+                                builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                            }
+                            // pop the first element
+                            indices.pop_front();
+
+                            // Don't progress the iterator here,  we might have another item with the same index
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if response_buffer.len() > max_response_buffer {
+                        tx.write_all(&response_buffer).await?;
+                        response_buffer.clear();
+                    }
+                    curidx = curidx.saturating_add(1);
+                    rocksdb_iter.next();
+                }
+            }
+        };
+
+        // flush the remainder
+        if !response_buffer.is_empty() {
+            tx.write_all(&response_buffer).await?;
+            response_buffer.clear();
+        }
+        Ok(())
+    }
+}
+
+/// Given list of values `options`, return up to `count` values.
+/// The output is sorted.
+fn choose_multiple_values(
+    count: usize,
+    options: &Vec<usize>,
+    allow_dups: bool,
+) -> Result<VecDeque<usize>, SableError> {
+    let mut rng = rand::thread_rng();
+    let mut chosen = Vec::<usize>::new();
+    if allow_dups {
+        for _ in 0..count {
+            chosen.push(*options.choose(&mut rng).unwrap_or(&0));
+        }
+    } else {
+        let mut unique_values = options.clone();
+        unique_values.sort();
+        unique_values.dedup();
+        loop {
+            if unique_values.is_empty() {
+                break;
+            }
+
+            if chosen.len() == count {
+                break;
+            }
+
+            let pos = rng.gen_range(0..unique_values.len());
+            let Some(val) = unique_values.get(pos) else {
+                return Err(SableError::OtherError(format!(
+                    "Internal error: failed to read from vector (len: {}, pos: {})",
+                    unique_values.len(),
+                    pos
+                )));
+            };
+            chosen.push(*val);
+            unique_values.remove(pos);
+        }
+    }
+
+    chosen.sort();
+    let chosen: VecDeque<usize> = chosen.iter().copied().collect();
+    Ok(chosen)
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -675,8 +894,18 @@ mod test {
         (vec!["hmget", "myhash", "field1", "field2"], "*2\r\n$6\r\nvalue1\r\n$6\r\nvalue2\r\n"),
         (vec!["hmget", "myhash", "field1"], "*1\r\n$6\r\nvalue1\r\n"),
     ], "test_hmget"; "test_hmget")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hrandfield", "str_key"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hset", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"], ":3\r\n"),
+        // since we have hash with 3 fields and we want 3 fields, we will get them
+        (vec!["hrandfield", "myhash", "3"], "*3\r\n$2\r\nf1\r\n$2\r\nf2\r\n$2\r\nf3\r\n"),
+        (vec!["hrandfield", "myhash", "15"], "*3\r\n$2\r\nf1\r\n$2\r\nf2\r\n$2\r\nf3\r\n"),
+        (vec!["hrandfield", "myhash", "3", "withvalues"], "*6\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf2\r\n$2\r\nv2\r\n$2\r\nf3\r\n$2\r\nv3\r\n"),
+        (vec!["hrandfield", "myhash", "8", "withvalues"], "*6\r\n$2\r\nf1\r\n$2\r\nv1\r\n$2\r\nf2\r\n$2\r\nv2\r\n$2\r\nf3\r\n$2\r\nv3\r\n"),
+    ], "test_hrandfield"; "test_hrandfield")]
     fn test_hash_commands(
-        args_vec: Vec<(Vec<&'static str>, &'static str)>,
+        args: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
     ) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -684,7 +913,7 @@ mod test {
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            for (args, expected_value) in args_vec {
+            for (args, expected_value) in args {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
                 let cmd = Rc::new(RedisCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
@@ -699,5 +928,15 @@ mod test {
             }
         });
         Ok(())
+    }
+
+    #[test]
+    fn test_rng_selection() {
+        let options = vec![1, 2, 2, 2, 3, 4, 5, 6, 7, 7, 7];
+        let selections = choose_multiple_values(8, &options, false).unwrap();
+        assert_eq!(selections.len(), 7);
+
+        let selections = choose_multiple_values(8, &options, true).unwrap();
+        assert_eq!(selections.len(), 8);
     }
 }

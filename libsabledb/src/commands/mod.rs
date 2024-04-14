@@ -21,7 +21,7 @@ macro_rules! check_args_count {
 }
 
 #[macro_export]
-macro_rules! expect_args_count_tx {
+macro_rules! check_args_count_tx {
     ($cmd:expr, $expected_args_count:expr, $tx:expr) => {{
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::with_capacity(128);

@@ -81,16 +81,6 @@ pub enum HashExistsResult {
     NotExists,
 }
 
-// internal enums
-enum DeleteHashMetadataResult {
-    /// Delete succeeded
-    Ok,
-    /// Hash not found
-    NotFound,
-    /// Exists, but with wrong type
-    WrongType,
-}
-
 enum PutFieldResult {
     /// Ok...
     Inserted,
@@ -235,7 +225,11 @@ impl<'a> HashDb<'a> {
 
         // update the hash metadata
         hash.decr_len_by(items_deleted as u64);
-        self.put_hash_metadata(user_key, &hash)?;
+        if hash.is_empty() {
+            self.delete_hash_metadata(user_key)?;
+        } else {
+            self.put_hash_metadata(user_key, &hash)?;
+        }
 
         // flush the changes
         self.flush_cache()?;
@@ -325,6 +319,13 @@ impl<'a> HashDb<'a> {
         Ok(())
     }
 
+    /// Delete the hash metadata
+    fn delete_hash_metadata(&self, user_key: &BytesMut) -> Result<(), SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        self.cache.delete(&encoded_key)?;
+        Ok(())
+    }
+
     /// Create or replace a hash entry in the database
     /// If `hash_id_opt` is `None`, create a new id and put it
     /// else, override the existing entry
@@ -339,25 +340,6 @@ impl<'a> HashDb<'a> {
 
         self.cache.put(&encoded_key, buffer)?;
         Ok(hash_md)
-    }
-
-    /// Delete an hash from the database
-    fn delete_hash_metadata(
-        &self,
-        user_key: &BytesMut,
-    ) -> Result<DeleteHashMetadataResult, SableError> {
-        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(DeleteHashMetadataResult::NotFound);
-        };
-
-        match self.try_decode_hash_value_metadata(&value)? {
-            None => Ok(DeleteHashMetadataResult::WrongType),
-            Some(_) => {
-                self.cache.delete(&encoded_key)?;
-                Ok(DeleteHashMetadataResult::Ok)
-            }
-        }
     }
 
     /// Encode an hash field key from user field
