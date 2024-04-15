@@ -1,4 +1,7 @@
+mod resp_writer;
 mod temp_file;
+
+pub use resp_writer::RespWriter;
 pub use temp_file::TempFile;
 
 const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
