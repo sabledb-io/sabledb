@@ -26,38 +26,38 @@ where
     /// RESP API
     pub async fn ok(&mut self) -> Result<(), SableError> {
         self.resp_builder.ok(&mut self.buffer);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn error_string(&mut self, msg: &str) -> Result<(), SableError> {
         self.resp_builder.error_string(&mut self.buffer, msg);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn empty_array(&mut self) -> Result<(), SableError> {
         self.resp_builder.empty_array(&mut self.buffer);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_empty_array(&mut self) -> Result<(), SableError> {
         self.resp_builder.add_empty_array(&mut self.buffer);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_null_string(&mut self) -> Result<(), SableError> {
         self.resp_builder.add_null_string(&mut self.buffer);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_array_len(&mut self, len: usize) -> Result<(), SableError> {
         self.resp_builder.add_array_len(&mut self.buffer, len);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_bulk_string(&mut self, s: &[u8]) -> Result<(), SableError> {
         self.resp_builder
             .add_bulk_string_u8_arr(&mut self.buffer, s);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_number<NumberT: std::fmt::Display>(
@@ -66,7 +66,7 @@ where
     ) -> Result<(), SableError> {
         self.resp_builder
             .add_number::<NumberT>(&mut self.buffer, num, false);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     pub async fn add_float<NumberT: std::fmt::Display>(
@@ -75,7 +75,7 @@ where
     ) -> Result<(), SableError> {
         self.resp_builder
             .add_number::<NumberT>(&mut self.buffer, num, true);
-        self.write_if_needed().await
+        self.flush_if_needed().await
     }
 
     /// Unconditionally flush the buffer
@@ -92,7 +92,7 @@ where
     //---------------------------------
 
     /// Write the content to the stream
-    async fn write_if_needed(&mut self) -> Result<(), SableError> {
+    async fn flush_if_needed(&mut self) -> Result<(), SableError> {
         if self.buffer.len() > self.flush_threshold {
             self.tx.write_all(&self.buffer).await?;
             self.buffer.clear();
