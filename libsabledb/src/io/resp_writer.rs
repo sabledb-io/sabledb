@@ -34,6 +34,11 @@ where
         self.write_if_needed().await
     }
 
+    pub async fn empty_array(&mut self) -> Result<(), SableError> {
+        self.resp_builder.empty_array(&mut self.buffer);
+        self.write_if_needed().await
+    }
+
     pub async fn add_empty_array(&mut self) -> Result<(), SableError> {
         self.resp_builder.add_empty_array(&mut self.buffer);
         self.write_if_needed().await
@@ -74,7 +79,7 @@ where
     }
 
     /// Unconditionally flush the buffer
-    async fn flush(&mut self) -> Result<(), SableError> {
+    pub async fn flush(&mut self) -> Result<(), SableError> {
         if !self.buffer.is_empty() {
             self.tx.write_all(&self.buffer).await?;
             self.buffer.clear();

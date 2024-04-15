@@ -16,6 +16,7 @@ use crate::{
     RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
 
+use crate::io::RespWriter;
 use crate::storage::StorageIterator;
 use bytes::BytesMut;
 use rand::prelude::*;
@@ -303,8 +304,13 @@ impl HashCommands {
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
 
-        let builder = RespBuilderV2::default();
-        let mut response_buffer = BytesMut::with_capacity(128);
+        let max_response_buffer = client_state
+            .server_inner_state()
+            .options()
+            .client_limits
+            .client_response_buffer_size;
+
+        let mut writer = RespWriter::new(tx, 4096, max_response_buffer);
         let key = command_arg_at!(command, 1);
 
         // multiple db access -> use exclusive lock
@@ -312,13 +318,13 @@ impl HashCommands {
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
         let hash_md = match hash_db.hash_metadata(key)? {
             GetHashMetadataResult::WrongType => {
-                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
-                tx.write_all(&response_buffer).await?;
+                writer.error_string(ErrorStrings::WRONGTYPE).await?;
+                writer.flush().await?;
                 return Ok(());
             }
             GetHashMetadataResult::NotFound => {
-                builder.empty_array(&mut response_buffer);
-                tx.write_all(&response_buffer).await?;
+                writer.empty_array().await?;
+                writer.flush().await?;
                 return Ok(());
             }
             GetHashMetadataResult::Some(hash_md) => hash_md,
@@ -326,34 +332,27 @@ impl HashCommands {
 
         // empty hash? empty array
         if hash_md.is_empty() {
-            builder.empty_array(&mut response_buffer);
-            tx.write_all(&response_buffer).await?;
+            writer.empty_array().await?;
+            writer.flush().await?;
             return Ok(());
         }
 
-        let max_response_buffer = client_state
-            .server_inner_state()
-            .options()
-            .client_limits
-            .client_response_buffer_size;
-
         // Write the length
-        let mut response_buffer = BytesMut::with_capacity(128 << 10);
-        builder.add_array_len(
-            &mut response_buffer,
-            hash_md
-                .len()
-                .saturating_mul(if output_type == HGetAllOutput::Both {
-                    2
-                } else {
-                    1
-                })
-                .try_into()
-                .unwrap_or(usize::MAX),
-        );
+        writer
+            .add_array_len(
+                hash_md
+                    .len()
+                    .saturating_mul(if output_type == HGetAllOutput::Both {
+                        2
+                    } else {
+                        1
+                    })
+                    .try_into()
+                    .unwrap_or(usize::MAX),
+            )
+            .await?;
 
         let prefix = Rc::new(hash_md.prefix());
-        let mut fields_added = 0usize;
         match client_state.database().create_iterator(prefix.clone())? {
             StorageIterator::RocksDb(mut rocksdb_iter) => {
                 while rocksdb_iter.valid() {
@@ -374,36 +373,22 @@ impl HashCommands {
                     let hash_field_key = HashFieldKey::from_bytes(key)?;
                     match output_type {
                         HGetAllOutput::Keys => {
-                            builder
-                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                            writer.add_bulk_string(hash_field_key.key()).await?;
                         }
                         HGetAllOutput::Values => {
-                            builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                            writer.add_bulk_string(value).await?;
                         }
                         HGetAllOutput::Both => {
-                            builder
-                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
-                            builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                            writer.add_bulk_string(hash_field_key.key()).await?;
+                            writer.add_bulk_string(value).await?;
                         }
                     }
-
-                    // If the buffer len is greater than the limit, flush it now
-                    if response_buffer.len() >= max_response_buffer {
-                        tx.write_all(&response_buffer).await?;
-                        response_buffer.clear();
-                    }
-
-                    fields_added = fields_added.saturating_add(1);
                     rocksdb_iter.next();
                 }
             }
         };
 
-        // Send the remainders
-        if !response_buffer.is_empty() {
-            tx.write_all(&response_buffer).await?;
-        }
-
+        writer.flush().await?;
         Ok(())
     }
 
@@ -534,35 +519,26 @@ impl HashCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let mut response_buffer = BytesMut::with_capacity(1024);
-        let builder = RespBuilderV2::default();
+        let mut writer = RespWriter::new(tx, 1024, max_response_buffer);
         let array_len = command.arg_count().saturating_sub(2); // reduce the command name + the hash key
 
-        builder.add_array_len(&mut response_buffer, array_len);
+        writer.add_array_len(array_len).await?;
         for field in iter {
             match hash_db.get(key, field)? {
                 HashGetResult::Some(field_value) => {
-                    builder.add_bulk_string(&mut response_buffer, &field_value);
+                    writer.add_bulk_string(&field_value).await?;
                 }
                 HashGetResult::FieldNotFound | HashGetResult::NotFound => {
-                    builder.add_null_string(&mut response_buffer);
+                    writer.add_null_string().await?;
                 }
                 HashGetResult::WrongType => {
-                    builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                    writer.error_string(ErrorStrings::WRONGTYPE).await?;
                     break;
                 }
             }
-
-            if response_buffer.len() > max_response_buffer {
-                tx.write_all(&response_buffer).await?;
-                response_buffer.clear();
-            }
         }
 
-        if !response_buffer.is_empty() {
-            tx.write_all(&response_buffer).await?;
-            response_buffer.clear();
-        }
+        writer.flush().await?;
         Ok(())
     }
 
