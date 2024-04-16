@@ -1,18 +1,20 @@
 use crate::{
     commands::{ClientNextAction, ErrorStrings, HandleCommandResult},
+    storage::ScanCursor,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
     RedisCommandName, RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState,
     StorageAdapter, StringCommands, Telemetry,
 };
 
 use bytes::BytesMut;
+use dashmap::DashMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::{
     atomic::{AtomicBool, AtomicU16},
-    Mutex, RwLock,
+    Mutex,
 };
 
 const PONG: &[u8] = b"+PONG\r\n";
@@ -43,14 +45,16 @@ fn new_client_id() -> u128 {
     *value
 }
 
+#[allow(dead_code)]
 pub struct ClientState {
     server_state: Arc<ServerState>,
     store: StorageAdapter,
     client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     db_id: AtomicU16,
-    attributes: RwLock<HashMap<String, String>>,
+    attributes: DashMap<String, String>,
     is_active: AtomicBool,
+    cursors: DashMap<u64, Rc<ScanCursor>>,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -105,19 +109,12 @@ impl ClientState {
 
     /// Set a client attribute
     pub fn set_attribute(&self, name: &str, value: &str) {
-        self.attributes
-            .write()
-            .expect("poisoned mutex")
-            .insert(name.to_owned(), value.to_owned());
+        self.attributes.insert(name.to_owned(), value.to_owned());
     }
 
     /// Get a client attribute
     pub fn attribute(&self, name: &String) -> Option<String> {
-        self.attributes
-            .read()
-            .expect("poisoned mutex")
-            .get(name)
-            .cloned()
+        self.attributes.get(name).map(|p| p.value().clone())
     }
 
     pub fn error(&self, msg: &str) {
@@ -139,6 +136,24 @@ impl ClientState {
     /// static version
     pub fn static_debug(client_id: u128, msg: &str) {
         tracing::debug!("CLNT {}: {}", client_id, msg);
+    }
+
+    /// Return a cursor by its ID
+    pub fn cursor(&self, cursor_id: u64) -> Option<Rc<ScanCursor>> {
+        if let Some(c) = self.cursors.get(&cursor_id) {
+            return Some(c.value().clone());
+        }
+        None
+    }
+
+    /// Insert or replace cursor (this method uses `cursor.id()` as the key)
+    pub fn set_cursor(&self, cursor: Rc<ScanCursor>) {
+        self.cursors.insert(cursor.id(), cursor);
+    }
+
+    /// Remove a cursor from this client
+    pub fn remove_cursor(&self, cursor_id: u64) {
+        let _ = self.cursors.remove(&cursor_id);
     }
 }
 
@@ -177,8 +192,9 @@ impl Client {
             client_id: new_client_id(),
             tls_acceptor,
             db_id: AtomicU16::new(0),
-            attributes: RwLock::new(HashMap::<String, String>::new()),
+            attributes: DashMap::<String, String>::default(),
             is_active: AtomicBool::new(true),
+            cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
         });
 
         let state_clone = state.clone();

@@ -1,5 +1,6 @@
 mod generic_db;
 mod hash_db;
+mod scan_cursor;
 mod storage_adapter;
 mod storage_rocksdb;
 mod storage_trait;
@@ -15,6 +16,7 @@ pub use hash_db::{
     GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
     HashGetResult, HashLenResult, HashPutResult,
 };
+pub use scan_cursor::ScanCursor;
 pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{IterateCallback, StorageIterator, StorageTrait};
 pub use string_db::StringsDb;
