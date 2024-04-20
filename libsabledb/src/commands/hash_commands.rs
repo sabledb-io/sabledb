@@ -751,9 +751,9 @@ impl HashCommands {
             while let Some(wanted_index) = indices.front() {
                 if curidx.eq(wanted_index) {
                     let hash_field_key = HashFieldKey::from_bytes(key)?;
-                    builder.add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                    builder.add_bulk_string(&mut response_buffer, hash_field_key.key());
                     if with_values {
-                        builder.add_bulk_string_u8_arr(&mut response_buffer, value);
+                        builder.add_bulk_string(&mut response_buffer, value);
                     }
                     // pop the first element
                     indices.pop_front();

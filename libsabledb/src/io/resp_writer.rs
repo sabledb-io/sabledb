@@ -62,8 +62,7 @@ where
     }
 
     pub async fn add_bulk_string(&mut self, s: &[u8]) -> Result<(), SableError> {
-        self.resp_builder
-            .add_bulk_string_u8_arr(&mut self.buffer, s);
+        self.resp_builder.add_bulk_string(&mut self.buffer, s);
         self.flush_if_needed().await
     }
 

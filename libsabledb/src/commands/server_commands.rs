@@ -56,7 +56,7 @@ impl ServerCommands {
                 "ERR wrong number of arguments for '{}' command",
                 command.main_command()
             );
-            builder.add_bulk_string_u8_arr(&mut buffer, errmsg.as_bytes());
+            builder.add_bulk_string(&mut buffer, errmsg.as_bytes());
             tx.write_all(buffer.as_ref()).await?;
             return Ok(());
         }

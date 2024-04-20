@@ -141,7 +141,7 @@ impl CommandsManager {
 
         builder.add_array_len(&mut buffer, self.cmds.len() * 2);
         for name in self.cmds.keys() {
-            builder.add_bulk_string_u8_arr(&mut buffer, name.as_bytes());
+            builder.add_bulk_string(&mut buffer, name.as_bytes());
             builder.add_empty_array(&mut buffer);
         }
         buffer

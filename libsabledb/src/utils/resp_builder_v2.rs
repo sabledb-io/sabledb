@@ -26,7 +26,7 @@ impl RespBuilderV2 {
         buffer.extend_from_slice(bytes);
     }
 
-    fn add_bulk_string_internal(&self, buffer: &mut BytesMut, content: &BytesMut) {
+    fn add_bulk_string_internal(&self, buffer: &mut BytesMut, content: &[u8]) {
         let str_len = format!("{}", content.len());
         // extend the buffer as needed
         buffer.reserve(DOLLAR_LEN + str_len.len() + content.len() + (2 * CRLF_LEN));
@@ -42,7 +42,7 @@ impl RespBuilderV2 {
     }
 
     /// Clears the buffer and create a bulk string RESP response
-    pub fn bulk_string(&self, buffer: &mut BytesMut, content: &BytesMut) {
+    pub fn bulk_string(&self, buffer: &mut BytesMut, content: &[u8]) {
         buffer.clear();
         self.add_bulk_string_internal(buffer, content);
     }
@@ -131,7 +131,7 @@ impl RespBuilderV2 {
 
     /// Append bulk string to the buffer.
     /// NOTE: this function does not clear the buffer
-    pub fn add_bulk_string(&self, buffer: &mut BytesMut, content: &BytesMut) {
+    pub fn add_bulk_string(&self, buffer: &mut BytesMut, content: &[u8]) {
         self.add_bulk_string_internal(buffer, content);
     }
 
@@ -141,26 +141,13 @@ impl RespBuilderV2 {
     pub fn add_strings(&self, buffer: &mut BytesMut, strings: &[&str]) {
         self.add_array_len(buffer, strings.len());
         for s in strings {
-            self.add_bulk_string_u8_arr(buffer, s.as_bytes());
+            self.add_bulk_string(buffer, s.as_bytes());
         }
     }
 
     /// Append `resp` into the current buffer
     pub fn add_resp_string(&self, buffer: &mut BytesMut, resp: &[u8]) {
         buffer.extend_from_slice(resp);
-    }
-
-    /// Append bulk string to the buffer.
-    /// NOTE: this function does not clear the buffer
-    pub fn add_bulk_string_u8_arr(&self, buffer: &mut BytesMut, content: &[u8]) {
-        let str_len = format!("{}", content.len());
-        // extend the buffer as needed
-        buffer.reserve(DOLLAR_LEN + str_len.len() + content.len() + (2 * CRLF_LEN));
-        self.append_str(buffer, DOLLAR);
-        buffer.extend_from_slice(str_len.as_bytes());
-        self.append_str(buffer, CRLF);
-        self.append_bytes(buffer, content);
-        self.append_str(buffer, CRLF);
     }
 
     /// Append number
