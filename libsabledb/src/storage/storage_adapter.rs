@@ -379,7 +379,10 @@ impl StorageAdapter {
         db.iterate(prefix, callback)
     }
 
-    pub fn create_iterator(&self, prefix: Rc<BytesMut>) -> Result<StorageIterator, SableError> {
+    pub fn create_iterator(
+        &self,
+        prefix: Option<&BytesMut>,
+    ) -> Result<StorageIterator, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
@@ -486,7 +489,7 @@ mod tests {
     #[test]
     fn test_create_iterator() {
         let (_guard, store) = crate::tests::open_store();
-        let seek_me = Rc::new(BytesMut::from("1"));
+        let seek_me = BytesMut::from("1");
         let value = BytesMut::from("string_value");
 
         let keys = vec![
@@ -501,7 +504,7 @@ mod tests {
         }
 
         let mut matches = 0u32;
-        match store.create_iterator(seek_me.clone()).unwrap() {
+        match store.create_iterator(Some(&seek_me)).unwrap() {
             StorageIterator::RocksDb(mut rocksdb_iter) => {
                 while rocksdb_iter.valid() {
                     // get the key & value

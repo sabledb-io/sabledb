@@ -9,11 +9,12 @@ use crate::{
     parse_string_to_number,
     storage::{
         GenericDb, GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult,
-        HashGetMultiResult, HashGetResult, HashLenResult, HashPutResult,
+        HashGetMultiResult, HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
-    types::List,
+    types::{DataType, List},
+    utils::RespBuilderV2,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
 
 use crate::io::RespWriter;
@@ -23,6 +24,7 @@ use rand::prelude::*;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
+use wildmatch::WildMatch;
 
 pub struct HashCommands {}
 
@@ -94,6 +96,11 @@ impl HashCommands {
             RedisCommandName::Hrandfield => {
                 // write directly to the client
                 Self::hrandfield(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Hscan => {
+                // write directly to the client
+                Self::hscan(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
@@ -304,13 +311,7 @@ impl HashCommands {
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
 
-        let max_response_buffer = client_state
-            .server_inner_state()
-            .options()
-            .client_limits
-            .client_response_buffer_size;
-
-        let mut writer = RespWriter::new(tx, 4096, max_response_buffer);
+        let mut writer = RespWriter::new(tx, 4096, client_state.clone());
         let key = command_arg_at!(command, 1);
 
         // multiple db access -> use exclusive lock
@@ -352,8 +353,8 @@ impl HashCommands {
             )
             .await?;
 
-        let prefix = Rc::new(hash_md.prefix());
-        match client_state.database().create_iterator(prefix.clone())? {
+        let prefix = hash_md.prefix();
+        match client_state.database().create_iterator(Some(&prefix))? {
             StorageIterator::RocksDb(mut rocksdb_iter) => {
                 while rocksdb_iter.valid() {
                     // get the key & value
@@ -361,7 +362,7 @@ impl HashCommands {
                         break;
                     };
 
-                    if !key.starts_with(prefix.as_ref()) {
+                    if !key.starts_with(&prefix) {
                         break;
                     }
 
@@ -509,17 +510,11 @@ impl HashCommands {
         iter.next(); // skip the command name
         iter.next(); // skip the hash key
 
-        let max_response_buffer = client_state
-            .server_inner_state()
-            .options()
-            .client_limits
-            .client_response_buffer_size;
-
         // multi db access requires an exclusive lock
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let mut writer = RespWriter::new(tx, 1024, max_response_buffer);
+        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
         let array_len = command.arg_count().saturating_sub(2); // reduce the command name + the hash key
 
         writer.add_array_len(array_len).await?;
@@ -649,7 +644,7 @@ impl HashCommands {
 
         // create an iterator and place at at the start of the hash fields
         let mut curidx = 0usize;
-        let prefix = Rc::new(hash_md.prefix());
+        let prefix = hash_md.prefix();
 
         let max_response_buffer = client_state
             .server_inner_state()
@@ -660,7 +655,7 @@ impl HashCommands {
         // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
         // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
         // chosen indices
-        match client_state.database().create_iterator(prefix.clone())? {
+        match client_state.database().create_iterator(Some(&prefix))? {
             StorageIterator::RocksDb(mut rocksdb_iter) => {
                 while rocksdb_iter.valid() && !indices.is_empty() {
                     // get the key & value
@@ -668,7 +663,7 @@ impl HashCommands {
                         break;
                     };
 
-                    if !key.starts_with(prefix.as_ref()) {
+                    if !key.starts_with(&prefix) {
                         break;
                     }
 
@@ -709,6 +704,216 @@ impl HashCommands {
             tx.write_all(&response_buffer).await?;
             response_buffer.clear();
         }
+        Ok(())
+    }
+
+    async fn hscan(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 3, tx);
+
+        let hash_name = command_arg_at!(command, 1);
+        let cursor_id = command_arg_at!(command, 2);
+
+        let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
+        let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
+            resp_writer
+                .error_string(ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                .await?;
+            resp_writer.flush().await?;
+            return Ok(());
+        };
+
+        // parse the arguments
+        let mut iter = command.args_vec().iter();
+        iter.next(); // hlen
+        iter.next(); // key
+        iter.next(); // cursor
+
+        let mut count = 10usize;
+        let mut search_pattern: Option<&BytesMut> = None;
+
+        while let Some(arg) = iter.next() {
+            let arg = BytesMutUtils::to_string(arg).to_lowercase();
+            match arg.as_str() {
+                "match" => {
+                    let Some(pattern) = iter.next() else {
+                        resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                        resp_writer.flush().await?;
+                        return Ok(());
+                    };
+
+                    // TODO: parse the pattern and make sure it is valid
+                    search_pattern = Some(pattern);
+                }
+                "count" => {
+                    let Some(n) = iter.next() else {
+                        resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                        resp_writer.flush().await?;
+                        return Ok(());
+                    };
+                    // parse `n`
+                    let Some(n) = BytesMutUtils::parse::<usize>(n) else {
+                        resp_writer
+                            .error_string(ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                            .await?;
+                        resp_writer.flush().await?;
+                        return Ok(());
+                    };
+
+                    // TODO: scan number of items should be configurable
+                    count = if n == 0 { 10usize } else { n };
+                }
+                _ => {
+                    resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                    resp_writer.flush().await?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // multiple db calls, requires exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(hash_name, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        let hash_md = match hash_db.hash_metadata(hash_name)? {
+            GetHashMetadataResult::WrongType => {
+                resp_writer.error_string(ErrorStrings::WRONGTYPE).await?;
+                resp_writer.flush().await?;
+                return Ok(());
+            }
+            GetHashMetadataResult::NotFound => {
+                resp_writer.add_array_len(2).await?;
+                resp_writer.add_number(0).await?;
+                resp_writer.add_empty_array().await?;
+                resp_writer.flush().await?;
+                return Ok(());
+            }
+            GetHashMetadataResult::Some(md) => md,
+        };
+
+        // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
+        // otherwise, return respond with an error
+        let Some(cursor) = client_state.cursor_or(cursor_id, || {
+            let c = ScanCursor::new(DataType::Hash);
+            Rc::new(c)
+        }) else {
+            resp_writer
+                .error_string(format!("ERR: Invalid cursor id {}", cursor_id).as_str())
+                .await?;
+            resp_writer.flush().await?;
+            return Ok(());
+        };
+
+        // Build the prefix matcher
+        let matcher = search_pattern.map(|search_pattern| {
+            WildMatch::new(
+                BytesMutUtils::to_string(search_pattern)
+                    .to_string()
+                    .as_str(),
+            )
+        });
+
+        // Build the prefix
+        let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
+            BytesMut::from(saved_prefix)
+        } else {
+            hash_md.prefix()
+        };
+
+        let hash_prefix = hash_md.prefix();
+
+        let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
+        match client_state
+            .database()
+            .create_iterator(Some(&iter_start_pos))?
+        {
+            StorageIterator::RocksDb(mut rocksdb_iter) => {
+                while rocksdb_iter.valid() && count > 0 {
+                    // get the key & value
+                    let Some(key) = rocksdb_iter.key() else {
+                        break;
+                    };
+
+                    // Go over this hash items only
+                    if !key.starts_with(&hash_prefix) {
+                        break;
+                    }
+
+                    let Some(value) = rocksdb_iter.value() else {
+                        break;
+                    };
+
+                    // extract the key from the row data
+                    let hash_field_key = HashFieldKey::from_bytes(key)?;
+                    let item_user_key = hash_field_key.key();
+                    let item_user_value = value;
+
+                    // If we got a matcher, use it
+                    if let Some(matcher) = &matcher {
+                        let key_str = BytesMutUtils::to_string(item_user_key);
+                        if matcher.matches(key_str.as_str()) {
+                            results.push((
+                                BytesMut::from(item_user_key),
+                                BytesMut::from(item_user_value),
+                            ));
+                            count = count.saturating_sub(1);
+                        }
+                    } else {
+                        results.push((
+                            BytesMut::from(item_user_key),
+                            BytesMut::from(item_user_value),
+                        ));
+                        count = count.saturating_sub(1);
+                    }
+                    rocksdb_iter.next();
+                }
+                let cursor_id = if rocksdb_iter.valid() && count == 0 {
+                    // read the next key to be used as the next starting point for next iteration
+                    let Some(key) = rocksdb_iter.key() else {
+                        // this is an error
+                        resp_writer
+                            .error_string(
+                                "ERR internal error: failed to read key from the database",
+                            )
+                            .await?;
+                        resp_writer.flush().await?;
+                        return Ok(());
+                    };
+
+                    if key.starts_with(&hash_prefix) {
+                        // store the next cursor
+                        let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
+                        // and store the cursor state
+                        client_state.set_cursor(cursor.clone());
+                        cursor.id()
+                    } else {
+                        // there are more items, but they don't belong to this hash
+                        client_state.remove_cursor(cursor.id());
+                        0u64
+                    }
+                } else {
+                    // reached the end
+                    // delete the cursor
+                    client_state.remove_cursor(cursor.id());
+                    0u64
+                };
+
+                // write the response
+                resp_writer.add_array_len(2).await?;
+                resp_writer.add_number(cursor_id).await?;
+                resp_writer
+                    .add_array_len(results.len().saturating_mul(2))
+                    .await?;
+                for (k, v) in results.iter() {
+                    resp_writer.add_bulk_string(k).await?;
+                    resp_writer.add_bulk_string(v).await?;
+                }
+                resp_writer.flush().await?;
+            }
+        };
         Ok(())
     }
 }
@@ -769,6 +974,7 @@ mod test {
     use super::*;
     use crate::{commands::ClientNextAction, Client, ServerState};
 
+    use crate::{ParseResult, RedisObject, RespResponseParserV2};
     use std::rc::Rc;
     use std::sync::Arc;
     use test_case::test_case;
@@ -887,6 +1093,38 @@ mod test {
         (vec!["hrandfield", "myhash_1_item", "1", "withvalues"], "*2\r\n$2\r\nf1\r\n$2\r\nv1\r\n"),
         (vec!["hrandfield", "myhash_1_item"], "$2\r\nf1\r\n"),
     ], "test_hrandfield"; "test_hrandfield")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hscan", "str_key", "0"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec![
+                "hmset",
+                "myhash",
+                "field1",
+                "value1",
+                "field2",
+                "value2",
+                "field3",
+                "value3",
+                "field4",
+                "value4",
+                "field5",
+                "value5",
+                "field6",
+                "value6",
+                "field7",
+                "value7",
+                "field8",
+                "value8",
+                "zield9",
+                "value9",
+                "zield10",
+                "value10",
+              ],
+              "+OK\r\n"),
+        (vec!["hscan", "myhash", "0"], "*2\r\n:0\r\n*20\r\n$6\r\nfield1\r\n$6\r\nvalue1\r\n$6\r\nfield2\r\n$6\r\nvalue2\r\n$6\r\nfield3\r\n$6\r\nvalue3\r\n$6\r\nfield4\r\n$6\r\nvalue4\r\n$6\r\nfield5\r\n$6\r\nvalue5\r\n$6\r\nfield6\r\n$6\r\nvalue6\r\n$6\r\nfield7\r\n$6\r\nvalue7\r\n$6\r\nfield8\r\n$6\r\nvalue8\r\n$7\r\nzield10\r\n$7\r\nvalue10\r\n$6\r\nzield9\r\n$6\r\nvalue9\r\n"),
+        (vec!["hscan", "myhash", "0", "COUNT", "2", "MATCH", "*z*"], "*2\r\n:0\r\n*4\r\n$7\r\nzield10\r\n$7\r\nvalue10\r\n$6\r\nzield9\r\n$6\r\nvalue9\r\n"),
+        (vec!["hscan", "myhash", "12121"], "-ERR: Invalid cursor id 12121\r\n"),
+    ], "test_hscan"; "test_hscan")]
     fn test_hash_commands(
         args: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,
@@ -921,5 +1159,254 @@ mod test {
 
         let selections = choose_multiple_values(8, &options, true).unwrap();
         assert_eq!(selections.len(), 8);
+    }
+
+    #[test]
+    fn test_hscan_continutation() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            let put_items = vec![
+                ("field1", "value1"),
+                ("field2", "value2"),
+                ("field3", "value3"),
+                ("field4", "value4"),
+                ("field5", "value5"),
+                ("field6", "value6"),
+                ("field7", "value7"),
+                ("field8", "value8"),
+                ("zield9", "value9"),
+                ("zield10", "value10"),
+            ];
+
+            // Populate the hash
+            for (k, v) in put_items {
+                let cmd_args = vec!["hset", "myhash", k, v];
+                run_and_expect_output(cmd_args, ":1\r\n", client.inner()).await;
+            }
+
+            let (cid, values) = hscan_read("myhash", 0, 3, client.inner()).await.unwrap();
+            assert_ne!(cid, 0);
+            assert_eq!(values.len(), 6);
+
+            assert_eq!(
+                values,
+                vec![
+                    "field1".to_string(),
+                    "value1".to_string(),
+                    "field2".to_string(),
+                    "value2".to_string(),
+                    "field3".to_string(),
+                    "value3".to_string(),
+                ]
+            );
+            // Check that client has no more active cursors
+            assert_eq!(client.inner().cursors_count(), 1);
+
+            let (next_cid, values) = hscan_read("myhash", cid, 3, client.inner()).await.unwrap();
+            assert_eq!(cid, next_cid); // cursor is still alive
+            assert_eq!(values.len(), 6);
+
+            assert_eq!(
+                values,
+                vec![
+                    "field4".to_string(),
+                    "value4".to_string(),
+                    "field5".to_string(),
+                    "value5".to_string(),
+                    "field6".to_string(),
+                    "value6".to_string(),
+                ]
+            );
+            // Check that client has no more active cursors
+            assert_eq!(client.inner().cursors_count(), 1);
+
+            let (next_cid, values) = hscan_read("myhash", cid, 5, client.inner()).await.unwrap();
+            assert_eq!(0, next_cid); // cursor is deleted
+            assert_eq!(values.len(), 8); // only 4 items left in the hash, so 4 * 2
+
+            assert_eq!(
+                values,
+                vec![
+                    "field7".to_string(),
+                    "value7".to_string(),
+                    "field8".to_string(),
+                    "value8".to_string(),
+                    "zield10".to_string(),
+                    "value10".to_string(),
+                    "zield9".to_string(),
+                    "value9".to_string(),
+                ]
+            );
+
+            // Check that client has no more active cursors
+            assert_eq!(client.inner().cursors_count(), 0);
+        });
+    }
+
+    #[test]
+    fn test_hscan_multiple_iterations() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            let put_items = vec![
+                ("field1", "value1"),
+                ("field2", "value2"),
+                ("field3", "value3"),
+                ("field4", "value4"),
+                ("field5", "value5"),
+                ("field6", "value6"),
+                ("field7", "value7"),
+                ("field8", "value8"),
+                ("zield9", "value9"),
+                ("zield10", "value10"),
+            ];
+
+            // Populate the first hash
+            for (k, v) in &put_items {
+                let cmd_args = vec!["hset", "myhash1", k, v];
+                run_and_expect_output(cmd_args, ":1\r\n", client.inner()).await;
+            }
+
+            // Populate the second hash
+            for (k, v) in &put_items {
+                let cmd_args = vec!["hset", "myhash2", k, v];
+                run_and_expect_output(cmd_args, ":1\r\n", client.inner()).await;
+            }
+
+            let (next_curs_1, values) = hscan_read("myhash1", 0, 1, client.inner()).await.unwrap();
+            assert_eq!(values.len(), 2);
+            assert_eq!(values, vec!["field1".to_string(), "value1".to_string(),]);
+
+            let (next_curs_2, values) = hscan_read("myhash2", 0, 1, client.inner()).await.unwrap();
+            assert_eq!(values.len(), 2);
+            assert_eq!(values, vec!["field1".to_string(), "value1".to_string(),]);
+
+            // Confirm that we have 2 cursors
+            assert_eq!(client.inner().cursors_count(), 2);
+
+            // Now read 2 elements from the first hash
+            let (new_next_curs_1, values) = hscan_read("myhash1", next_curs_1, 2, client.inner())
+                .await
+                .unwrap();
+            assert_eq!(values.len(), 4);
+            assert_eq!(
+                values,
+                vec![
+                    "field2".to_string(),
+                    "value2".to_string(),
+                    "field3".to_string(),
+                    "value3".to_string(),
+                ]
+            );
+            assert_eq!(new_next_curs_1, next_curs_1);
+            assert_ne!(next_curs_1, next_curs_2);
+
+            // Now read 2 elements from the second hash
+            let (new_next_curs_2, values) = hscan_read("myhash2", next_curs_2, 2, client.inner())
+                .await
+                .unwrap();
+            assert_eq!(values.len(), 4);
+            assert_eq!(
+                values,
+                vec![
+                    "field2".to_string(),
+                    "value2".to_string(),
+                    "field3".to_string(),
+                    "value3".to_string(),
+                ]
+            );
+            assert_eq!(new_next_curs_2, next_curs_2);
+            assert_ne!(next_curs_1, next_curs_2);
+        });
+    }
+
+    async fn hscan_read(
+        hash_name: &str,
+        cursor_id: u64,
+        count: usize,
+        client_state: Rc<ClientState>,
+    ) -> Result<(u64, Vec<String>), SableError> {
+        let count_str = format!("{}", count);
+        let cursor_id = format!("{}", cursor_id);
+        // read from the first hash
+        let response = run_and_return_output(
+            vec![
+                "hscan".to_string(),
+                hash_name.to_string(),
+                cursor_id,
+                "count".to_string(),
+                count_str,
+            ],
+            client_state,
+        )
+        .await
+        .unwrap();
+
+        let arr = response.array().unwrap();
+        assert_eq!(arr.len(), 2);
+
+        let next_cursor_id = arr[0].integer()?;
+        let items = arr[1].array()?;
+
+        let mut values = Vec::<String>::with_capacity(items.len() * 2);
+        for obj in items {
+            values.push(BytesMutUtils::to_string(obj.string()?.as_ref()));
+        }
+        Ok((next_cursor_id, values))
+    }
+
+    async fn run_and_expect_output(
+        cmd_args: Vec<&'static str>,
+        output: &str,
+        client_state: Rc<ClientState>,
+    ) {
+        let mut sink = crate::tests::ResponseSink::with_name("test_hscan_continutation").await;
+        let cmd = Rc::new(RedisCommand::for_test(cmd_args));
+
+        match Client::handle_command(client_state, cmd, &mut sink.fp)
+            .await
+            .unwrap()
+        {
+            ClientNextAction::NoAction => {
+                assert_eq!(sink.read_all().await.as_str(), output);
+            }
+            _ => {}
+        }
+    }
+
+    async fn run_and_return_output(
+        cmd_args: Vec<String>,
+        client_state: Rc<ClientState>,
+    ) -> Result<RedisObject, SableError> {
+        let mut sink = crate::tests::ResponseSink::with_name("test_hscan_continutation").await;
+        let cmd = Rc::new(RedisCommand::for_test2(cmd_args));
+
+        match Client::handle_command(client_state, cmd, &mut sink.fp)
+            .await
+            .unwrap()
+        {
+            ClientNextAction::NoAction => {
+                match RespResponseParserV2::parse_response(
+                    sink.read_all().await.as_str().as_bytes(),
+                )
+                .unwrap()
+                {
+                    ParseResult::Ok((_, obj)) => {
+                        return Ok(obj);
+                    }
+                    _ => {
+                        return Err(SableError::OtherError("parsing error".into()));
+                    }
+                }
+            }
+            _ => {
+                return Err(SableError::NotFound);
+            }
+        }
     }
 }

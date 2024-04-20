@@ -32,6 +32,12 @@ impl RedisCommand {
         Self::new(args).unwrap()
     }
 
+    #[cfg(test)]
+    pub fn for_test2(args: Vec<String>) -> Self {
+        let args: Vec<BytesMut> = args.iter().map(|s| BytesMut::from(s.as_bytes())).collect();
+        Self::new(args).unwrap()
+    }
+
     /// Construct `RedisCommandData` from raw parsed data
     pub fn new(args: Vec<BytesMut>) -> Result<Self, SableError> {
         let Some(command_name) = args.first() else {

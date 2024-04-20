@@ -1,5 +1,7 @@
 use bytes::BytesMut;
-use libsabledb::{BytesMutUtils, RespBuilderV2, SableError, StringUtils};
+use libsabledb::{
+    BytesMutUtils, ParseResult, RedisObject, RespBuilderV2, RespResponseParserV2, SableError,
+};
 use pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddrV4;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -65,17 +67,6 @@ impl ServerCertVerifier for NoVerifier {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum RedisObject {
-    Status(BytesMut),
-    Error(BytesMut),
-    Str(BytesMut),
-    Array(Vec<RedisObject>),
-    NullArray,
-    NullString,
-    Integer(u64),
-}
-
 pub enum StreamType {
     Tls(TlsStream<TcpStream>),
     Plain(TcpStream),
@@ -85,13 +76,6 @@ pub enum StreamType {
 pub struct RedisClient {
     builder: RespBuilderV2,
     read_buffer: BytesMut,
-}
-
-#[derive(PartialEq, Eq, Debug)]
-enum ParseResult {
-    NeedMoreData,
-    /// How many bytes consumed to form the RedisObject + the object
-    Ok((usize, RedisObject)),
 }
 
 impl RedisClient {
@@ -356,7 +340,7 @@ impl RedisClient {
 
     async fn read_response(&mut self, stream: &mut StreamType) -> Result<RedisObject, SableError> {
         loop {
-            match self.parse_response(&self.read_buffer)? {
+            match RespResponseParserV2::parse_response(&self.read_buffer)? {
                 ParseResult::NeedMoreData => self.read_more_bytes(stream).await?,
                 ParseResult::Ok((consume, obj)) => {
                     let _ = self.read_buffer.split_to(consume);
@@ -364,207 +348,5 @@ impl RedisClient {
                 }
             }
         }
-    }
-
-    fn parse_response(&self, buffer: &[u8]) -> Result<ParseResult, SableError> {
-        if buffer.is_empty() {
-            return Ok(ParseResult::NeedMoreData);
-        }
-
-        // buffer contains something
-        match buffer[0] {
-            b'+' => {
-                // consume the prefix
-                let mut consume = 1usize;
-                let buffer = &buffer[1..];
-                let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
-                };
-                consume = consume.saturating_add(crlf_pos + 2);
-                Ok(ParseResult::Ok((
-                    consume,
-                    RedisObject::Status(BytesMut::from(&buffer[..crlf_pos])),
-                )))
-            }
-            b'-' => {
-                // consume the prefix
-                let mut consume = 1usize;
-                let buffer = &buffer[1..];
-                let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
-                };
-                consume = consume.saturating_add(crlf_pos + 2);
-                Ok(ParseResult::Ok((
-                    consume,
-                    RedisObject::Error(BytesMut::from(&buffer[..crlf_pos])),
-                )))
-            }
-            b':' => {
-                // consume the prefix
-                let mut consume = 1usize;
-                let buffer = &buffer[1..];
-                let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
-                };
-                consume = consume.saturating_add(crlf_pos + 2);
-                let num = BytesMut::from(&buffer[..crlf_pos]);
-                let Some(num) = BytesMutUtils::parse::<u64>(&num) else {
-                    return Err(SableError::OtherError(format!(
-                        "failed to parse number: `{:?}`",
-                        num
-                    )));
-                };
-
-                Ok(ParseResult::Ok((consume, RedisObject::Integer(num))))
-            }
-            b'$' => {
-                // consume the prefix
-                let mut consume = 1usize;
-                let buffer = &buffer[1..];
-                // read the length
-                let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
-                };
-                consume = consume.saturating_add(crlf_pos + 2);
-                let num = BytesMut::from(&buffer[..crlf_pos]);
-                let Some(strlen) = BytesMutUtils::parse::<i32>(&num) else {
-                    return Err(SableError::OtherError(format!(
-                        "failed to parse number: `{:?}`",
-                        num
-                    )));
-                };
-
-                if strlen <= 0 {
-                    // Null or empty string
-                    Ok(ParseResult::Ok((consume, RedisObject::NullString)))
-                } else {
-                    let strlen = strlen as usize;
-                    // read the string content
-                    let buffer = &buffer[crlf_pos + 2..];
-                    if buffer.len() < strlen + 2
-                    /* the terminator \r\n */
-                    {
-                        return Ok(ParseResult::NeedMoreData);
-                    }
-
-                    let str_content = BytesMut::from(&buffer[..strlen]);
-                    consume = consume.saturating_add(strlen + 2);
-                    Ok(ParseResult::Ok((consume, RedisObject::Str(str_content))))
-                }
-            }
-            b'*' => {
-                // consume the prefix
-                let mut consume = 1usize;
-                let buffer = &buffer[1..];
-                // read & parse the array length
-                let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
-                };
-                let num = BytesMut::from(&buffer[..crlf_pos]);
-                let Some(arrlen) = BytesMutUtils::parse::<i32>(&num) else {
-                    return Err(SableError::OtherError(format!(
-                        "failed to parse number: `{:?}`",
-                        num
-                    )));
-                };
-                // skip the array length
-                consume = consume.saturating_add(crlf_pos + 2);
-
-                // Null array?
-                if arrlen < 0 {
-                    return Ok(ParseResult::Ok((consume, RedisObject::NullArray)));
-                }
-
-                let mut objects = Vec::<RedisObject>::with_capacity(arrlen as usize);
-                let mut buffer = &buffer[crlf_pos + 2..];
-
-                // start reading elements. At this point `buffer` points to the first element
-                for _ in 0..arrlen {
-                    let result = self.parse_response(buffer)?;
-                    match result {
-                        ParseResult::Ok((bytes_read, obj)) => {
-                            consume = consume.saturating_add(bytes_read);
-                            buffer = &buffer[bytes_read..];
-                            objects.push(obj);
-                        }
-                        ParseResult::NeedMoreData => return Ok(ParseResult::NeedMoreData),
-                    }
-                }
-                Ok(ParseResult::Ok((consume, RedisObject::Array(objects))))
-            }
-            _ => Err(SableError::OtherError(format!(
-                "unexpected token found `{}`",
-                self.read_buffer[0]
-            ))),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_case::test_case;
-    #[test_case(b"*4\r\n$5\r\nvalue\r\n$5\r\nvalue\r\n$-1\r\n$5\r\nvalue\r\n",
-        RedisObject::Array(vec![
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::NullString,
-            RedisObject::Str(BytesMut::from("value"))
-        ])
-    ; "parse array with 4 elements")]
-    #[test_case(b"$11\r\nhello world\r\n",
-        RedisObject::Str(BytesMut::from("hello world"))
-    ; "parse simple string")]
-    #[test_case(b"+OK\r\n",
-        RedisObject::Status(BytesMut::from("OK"))
-    ; "parse status OK")]
-    #[test_case(b"-ERR bad thing happened\r\n",
-        RedisObject::Error(BytesMut::from("ERR bad thing happened"))
-    ; "parse err message")]
-    #[test_case(b":42\r\n", RedisObject::Integer(42); "parse integer")]
-    fn test_happy_response_parser(
-        buffer: &[u8],
-        expected_response: RedisObject,
-    ) -> Result<(), SableError> {
-        let client = RedisClient::default();
-        let response = client.parse_response(buffer)?;
-        let ParseResult::Ok((consumed, obj)) = response else {
-            assert!(false, "Expected ParseResult::Ok");
-            return Err(SableError::OtherError(
-                "Expected ParseResult::Ok".to_string(),
-            ));
-        };
-        assert_eq!(buffer.len(), consumed);
-        assert_eq!(expected_response, obj);
-        Ok(())
-    }
-
-    #[test_case(b"$11\r\nhello world\r\n$5\r\n",
-        RedisObject::Str(BytesMut::from("hello world")), 18
-    ; "parse simple string with excessive data")]
-    #[test_case(b"*4\r\n$5\r\nvalue\r\n$5\r\nvalue\r\n$-1\r\n$5\r\nvalue\r\n$5\r\n",
-        RedisObject::Array(vec![
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::NullString,
-            RedisObject::Str(BytesMut::from("value"))
-        ]), 42
-    ; "parse array with 4 elements and excessive data")]
-    fn test_buffer_too_long(
-        buffer: &[u8],
-        expected_response: RedisObject,
-        expected_consumed: usize,
-    ) -> Result<(), SableError> {
-        let client = RedisClient::default();
-        let response = client.parse_response(buffer)?;
-        let ParseResult::Ok((consumed, obj)) = response else {
-            assert!(false, "Expected ParseResult::Ok");
-            return Err(SableError::OtherError(
-                "Expected ParseResult::Ok".to_string(),
-            ));
-        };
-        assert_eq!(expected_consumed, consumed);
-        assert_eq!(expected_response, obj);
-        Ok(())
     }
 }

@@ -100,6 +100,7 @@ pub enum RedisCommandName {
     Hmget,
     Hmset,
     Hrandfield,
+    Hscan,
     NotSupported(String),
 }
 
@@ -760,6 +761,12 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hrandfield)
                         .read_only()
                         .with_arity(-2),
+                ),
+                (
+                    "hscan",
+                    CommandMetadata::new(RedisCommandName::Hscan)
+                        .read_only()
+                        .with_arity(-3),
                 ),
             ]),
         }

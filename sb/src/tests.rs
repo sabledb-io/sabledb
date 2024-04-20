@@ -1,6 +1,6 @@
-use crate::redis_client::{RedisClient, RedisObject, StreamType};
+use crate::redis_client::{RedisClient, StreamType};
 use crate::{bench_utils, sb_options::Options, stats};
-use libsabledb::stopwatch::StopWatch;
+use libsabledb::{stopwatch::StopWatch, RedisObject};
 
 /// Run the `set` test case
 pub async fn run_set(

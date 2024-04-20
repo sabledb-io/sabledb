@@ -1,5 +1,4 @@
-use crate::utils::calculate_slot;
-use crate::PrimaryKeyMetadata;
+use crate::{utils::calculate_slot, PrimaryKeyMetadata};
 use bytes::BytesMut;
 use std::rc::Rc;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};

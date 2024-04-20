@@ -334,9 +334,15 @@ impl StorageTrait for StorageRocksDb {
         Ok(())
     }
 
-    fn create_iterator<'a>(&self, prefix: Rc<BytesMut>) -> Result<StorageIterator, SableError> {
+    /// Create an iterator with an optional prefix
+    fn create_iterator<'a>(
+        &self,
+        prefix: Option<&BytesMut>,
+    ) -> Result<StorageIterator, SableError> {
         let mut iterator = self.store.raw_iterator();
-        iterator.seek(prefix.as_ref());
+        if let Some(prefix) = prefix {
+            iterator.seek(prefix);
+        }
         Ok(StorageIterator::RocksDb(iterator))
     }
 }

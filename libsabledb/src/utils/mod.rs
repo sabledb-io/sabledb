@@ -1,3 +1,9 @@
+pub mod resp_builder_v2;
+pub mod resp_response_parser_v2;
+
+pub use resp_builder_v2::RespBuilderV2;
+pub use resp_response_parser_v2::*;
+
 use crate::{ParserError, SableError};
 use bytes::BytesMut;
 use std::str::FromStr;
@@ -184,7 +190,7 @@ impl BytesMutUtils {
         Some(num)
     }
 
-    pub fn to_string(value: &BytesMut) -> String {
+    pub fn to_string(value: &[u8]) -> String {
         String::from_utf8_lossy(value).to_string()
     }
 

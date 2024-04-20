@@ -1,5 +1,6 @@
-use crate::{RespBuilderV2, SableError};
+use crate::{client::ClientState, RespBuilderV2, SableError};
 use bytes::BytesMut;
+use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
 pub struct RespWriter<'a, W> {
@@ -14,7 +15,13 @@ impl<'a, W> RespWriter<'a, W>
 where
     W: AsyncWriteExt + std::marker::Unpin,
 {
-    pub fn new(tx: &'a mut W, capacity: usize, flush_threshold: usize) -> Self {
+    pub fn new(tx: &'a mut W, capacity: usize, client_state: Rc<ClientState>) -> Self {
+        let flush_threshold = client_state
+            .server_inner_state()
+            .options()
+            .client_limits
+            .client_response_buffer_size;
+
         Self {
             tx,
             buffer: BytesMut::with_capacity(capacity),

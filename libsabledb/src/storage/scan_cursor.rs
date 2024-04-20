@@ -1,6 +1,5 @@
 use crate::types::DataType;
 use bytes::BytesMut;
-use std::rc::Rc;
 use std::sync::atomic;
 
 lazy_static::lazy_static! {
@@ -10,35 +9,37 @@ lazy_static::lazy_static! {
 
 /// A generic cursor that remembers the state of the iteration
 /// Used by the *SCAN* commands (`SCAN`, `HSCAN`, `ZSCAN`)
+#[derive(Debug)]
 pub struct ScanCursor {
     cursor_id: u64,
     data_type: DataType,
-    search_prefix: Rc<BytesMut>,
+    /// If not `None`, seek the storage iterator to this prefix
+    search_prefix: Option<BytesMut>,
 }
 
 impl ScanCursor {
     /// Create a new cursor for a given data type with a unique ID
-    pub fn new(data_type: DataType, search_prefix: Rc<BytesMut>) -> Self {
+    pub fn new(data_type: DataType) -> Self {
         ScanCursor {
             cursor_id: COUNTER.fetch_add(1, atomic::Ordering::Relaxed),
             data_type,
-            search_prefix,
+            search_prefix: None,
         }
     }
 
     /// Create a new cursor with the same ID as this one, but with a different
     /// prefix
-    pub fn progress(&self, search_prefix: Rc<BytesMut>) -> Self {
+    pub fn progress(&self, search_prefix: BytesMut) -> Self {
         ScanCursor {
             cursor_id: self.cursor_id,
             data_type: self.data_type,
-            search_prefix,
+            search_prefix: Some(search_prefix),
         }
     }
 
     /// Return the current prefix
-    pub fn prefix(&self) -> Rc<BytesMut> {
-        self.search_prefix.clone()
+    pub fn prefix(&self) -> Option<&[u8]> {
+        self.search_prefix.as_deref()
     }
 
     /// Return the cursor ID (we send this back to the client)

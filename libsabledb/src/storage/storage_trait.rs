@@ -66,5 +66,5 @@ pub trait StorageTrait {
         callback: Box<IterateCallback>,
     ) -> Result<(), SableError>;
 
-    fn create_iterator(&self, prefix: Rc<BytesMut>) -> Result<StorageIterator, SableError>;
+    fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<StorageIterator, SableError>;
 }

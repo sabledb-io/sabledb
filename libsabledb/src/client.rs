@@ -1,9 +1,10 @@
 use crate::{
     commands::{ClientNextAction, ErrorStrings, HandleCommandResult},
     storage::ScanCursor,
+    utils::RespBuilderV2,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
-    RedisCommandName, RequestParser, RespBuilderV2, SableError, ServerCommands, ServerState,
-    StorageAdapter, StringCommands, Telemetry,
+    RedisCommandName, RequestParser, SableError, ServerCommands, ServerState, StorageAdapter,
+    StringCommands, Telemetry,
 };
 
 use bytes::BytesMut;
@@ -138,12 +139,21 @@ impl ClientState {
         tracing::debug!("CLNT {}: {}", client_id, msg);
     }
 
-    /// Return a cursor by its ID
-    pub fn cursor(&self, cursor_id: u64) -> Option<Rc<ScanCursor>> {
+    /// Return a cursor by ID or create a new cursor, add it and return it
+    pub fn cursor_or<F>(&self, cursor_id: u64, f: F) -> Option<Rc<ScanCursor>>
+    where
+        F: FnOnce() -> Rc<ScanCursor>,
+    {
         if let Some(c) = self.cursors.get(&cursor_id) {
-            return Some(c.value().clone());
+            Some(c.value().clone())
+        } else if cursor_id == 0 {
+            // create a new cursor and add it (only if cursor_id == 0)
+            let cursor = f();
+            self.cursors.insert(cursor.id(), cursor.clone());
+            Some(cursor)
+        } else {
+            None
         }
-        None
     }
 
     /// Insert or replace cursor (this method uses `cursor.id()` as the key)
@@ -154,6 +164,11 @@ impl ClientState {
     /// Remove a cursor from this client
     pub fn remove_cursor(&self, cursor_id: u64) {
         let _ = self.cursors.remove(&cursor_id);
+    }
+
+    /// return the number of active cursors for this client
+    pub fn cursors_count(&self) -> usize {
+        self.cursors.len()
     }
 }
 
@@ -613,7 +628,8 @@ impl Client {
             | RedisCommandName::Hvals
             | RedisCommandName::Hmget
             | RedisCommandName::Hmset
-            | RedisCommandName::Hrandfield => {
+            | RedisCommandName::Hrandfield
+            | RedisCommandName::Hscan => {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

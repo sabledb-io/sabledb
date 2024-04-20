@@ -5,7 +5,6 @@ pub mod io;
 pub mod metadata;
 pub mod replication;
 pub mod request_parser;
-pub mod resp_builder_v2;
 pub mod server;
 pub mod server_options;
 pub mod shard_locker;
@@ -27,7 +26,6 @@ pub use commands::{
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
 pub use request_parser::RequestParser;
-pub use resp_builder_v2::RespBuilderV2;
 pub use server::{Server, ServerState};
 pub use server_options::ServerOptions;
 pub use shard_locker::LockManager;
@@ -35,7 +33,9 @@ pub use stopwatch::IoDurationStopWatch;
 pub use storage::{BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb};
 pub use telemetry::Telemetry;
 pub use transport::Transport;
-pub use utils::{BytesMutUtils, StringUtils, TimeUtils, U8ArrayBuilder, U8ArrayReader};
+pub use utils::resp_builder_v2::RespBuilderV2;
+pub use utils::resp_response_parser_v2::{ParseResult, RedisObject, RespResponseParserV2};
+pub use utils::*;
 pub use worker::{Worker, WorkerContext, WorkerMessage};
 pub use worker_manager::WorkerManager;
 
