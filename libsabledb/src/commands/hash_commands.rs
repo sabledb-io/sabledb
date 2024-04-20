@@ -18,7 +18,6 @@ use crate::{
 };
 
 use crate::io::RespWriter;
-use crate::storage::StorageIterator;
 use bytes::BytesMut;
 use rand::prelude::*;
 use std::collections::VecDeque;
@@ -442,40 +441,33 @@ impl HashCommands {
             .await?;
 
         let prefix = hash_md.prefix();
-        match client_state.database().create_iterator(Some(&prefix))? {
-            StorageIterator::RocksDb(mut rocksdb_iter) => {
-                while rocksdb_iter.valid() {
-                    // get the key & value
-                    let Some(key) = rocksdb_iter.key() else {
-                        break;
-                    };
+        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, value)) = db_iter.key_value() else {
+                break;
+            };
 
-                    if !key.starts_with(&prefix) {
-                        break;
-                    }
+            if !key.starts_with(&prefix) {
+                break;
+            }
 
-                    let Some(value) = rocksdb_iter.value() else {
-                        break;
-                    };
-
-                    // extract the key from the row data
-                    let hash_field_key = HashFieldKey::from_bytes(key)?;
-                    match output_type {
-                        HGetAllOutput::Keys => {
-                            writer.add_bulk_string(hash_field_key.key()).await?;
-                        }
-                        HGetAllOutput::Values => {
-                            writer.add_bulk_string(value).await?;
-                        }
-                        HGetAllOutput::Both => {
-                            writer.add_bulk_string(hash_field_key.key()).await?;
-                            writer.add_bulk_string(value).await?;
-                        }
-                    }
-                    rocksdb_iter.next();
+            // extract the key from the row data
+            let hash_field_key = HashFieldKey::from_bytes(key)?;
+            match output_type {
+                HGetAllOutput::Keys => {
+                    writer.add_bulk_string(hash_field_key.key()).await?;
+                }
+                HGetAllOutput::Values => {
+                    writer.add_bulk_string(value).await?;
+                }
+                HGetAllOutput::Both => {
+                    writer.add_bulk_string(hash_field_key.key()).await?;
+                    writer.add_bulk_string(value).await?;
                 }
             }
-        };
+            db_iter.next();
+        }
 
         writer.flush().await?;
         Ok(())
@@ -743,49 +735,42 @@ impl HashCommands {
         // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
         // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
         // chosen indices
-        match client_state.database().create_iterator(Some(&prefix))? {
-            StorageIterator::RocksDb(mut rocksdb_iter) => {
-                while rocksdb_iter.valid() && !indices.is_empty() {
-                    // get the key & value
-                    let Some(key) = rocksdb_iter.key() else {
-                        break;
-                    };
+        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
 
-                    if !key.starts_with(&prefix) {
-                        break;
+        while db_iter.valid() && !indices.is_empty() {
+            // get the key & value
+            let Some((key, value)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            // extract the key from the row data
+            while let Some(wanted_index) = indices.front() {
+                if curidx.eq(wanted_index) {
+                    let hash_field_key = HashFieldKey::from_bytes(key)?;
+                    builder.add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
+                    if with_values {
+                        builder.add_bulk_string_u8_arr(&mut response_buffer, value);
                     }
+                    // pop the first element
+                    indices.pop_front();
 
-                    let Some(value) = rocksdb_iter.value() else {
-                        break;
-                    };
-
-                    // extract the key from the row data
-                    while let Some(wanted_index) = indices.front() {
-                        if curidx.eq(wanted_index) {
-                            let hash_field_key = HashFieldKey::from_bytes(key)?;
-                            builder
-                                .add_bulk_string_u8_arr(&mut response_buffer, hash_field_key.key());
-                            if with_values {
-                                builder.add_bulk_string_u8_arr(&mut response_buffer, value);
-                            }
-                            // pop the first element
-                            indices.pop_front();
-
-                            // Don't progress the iterator here,  we might have another item with the same index
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if response_buffer.len() > max_response_buffer {
-                        tx.write_all(&response_buffer).await?;
-                        response_buffer.clear();
-                    }
-                    curidx = curidx.saturating_add(1);
-                    rocksdb_iter.next();
+                    // Don't progress the iterator here,  we might have another item with the same index
+                } else {
+                    break;
                 }
             }
-        };
+
+            if response_buffer.len() > max_response_buffer {
+                tx.write_all(&response_buffer).await?;
+                response_buffer.clear();
+            }
+            curidx = curidx.saturating_add(1);
+            db_iter.next();
+        }
 
         // flush the remainder
         if !response_buffer.is_empty() {
@@ -914,94 +899,86 @@ impl HashCommands {
         let hash_prefix = hash_md.prefix();
 
         let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
-        match client_state
+        let mut db_iter = client_state
             .database()
-            .create_iterator(Some(&iter_start_pos))?
-        {
-            StorageIterator::RocksDb(mut rocksdb_iter) => {
-                while rocksdb_iter.valid() && count > 0 {
-                    // get the key & value
-                    let Some(key) = rocksdb_iter.key() else {
-                        break;
-                    };
+            .create_iterator(Some(&iter_start_pos))?;
+        while db_iter.valid() && count > 0 {
+            // get the key & value
+            let Some((key, value)) = db_iter.key_value() else {
+                break;
+            };
 
-                    // Go over this hash items only
-                    if !key.starts_with(&hash_prefix) {
-                        break;
-                    }
-
-                    let Some(value) = rocksdb_iter.value() else {
-                        break;
-                    };
-
-                    // extract the key from the row data
-                    let hash_field_key = HashFieldKey::from_bytes(key)?;
-                    let item_user_key = hash_field_key.key();
-                    let item_user_value = value;
-
-                    // If we got a matcher, use it
-                    if let Some(matcher) = &matcher {
-                        let key_str = BytesMutUtils::to_string(item_user_key);
-                        if matcher.matches(key_str.as_str()) {
-                            results.push((
-                                BytesMut::from(item_user_key),
-                                BytesMut::from(item_user_value),
-                            ));
-                            count = count.saturating_sub(1);
-                        }
-                    } else {
-                        results.push((
-                            BytesMut::from(item_user_key),
-                            BytesMut::from(item_user_value),
-                        ));
-                        count = count.saturating_sub(1);
-                    }
-                    rocksdb_iter.next();
-                }
-                let cursor_id = if rocksdb_iter.valid() && count == 0 {
-                    // read the next key to be used as the next starting point for next iteration
-                    let Some(key) = rocksdb_iter.key() else {
-                        // this is an error
-                        resp_writer
-                            .error_string(
-                                "ERR internal error: failed to read key from the database",
-                            )
-                            .await?;
-                        resp_writer.flush().await?;
-                        return Ok(());
-                    };
-
-                    if key.starts_with(&hash_prefix) {
-                        // store the next cursor
-                        let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
-                        // and store the cursor state
-                        client_state.set_cursor(cursor.clone());
-                        cursor.id()
-                    } else {
-                        // there are more items, but they don't belong to this hash
-                        client_state.remove_cursor(cursor.id());
-                        0u64
-                    }
-                } else {
-                    // reached the end
-                    // delete the cursor
-                    client_state.remove_cursor(cursor.id());
-                    0u64
-                };
-
-                // write the response
-                resp_writer.add_array_len(2).await?;
-                resp_writer.add_number(cursor_id).await?;
-                resp_writer
-                    .add_array_len(results.len().saturating_mul(2))
-                    .await?;
-                for (k, v) in results.iter() {
-                    resp_writer.add_bulk_string(k).await?;
-                    resp_writer.add_bulk_string(v).await?;
-                }
-                resp_writer.flush().await?;
+            // Go over this hash items only
+            if !key.starts_with(&hash_prefix) {
+                break;
             }
+
+            // extract the key from the row data
+            let hash_field_key = HashFieldKey::from_bytes(key)?;
+            let item_user_key = hash_field_key.key();
+            let item_user_value = value;
+
+            // If we got a matcher, use it
+            if let Some(matcher) = &matcher {
+                let key_str = BytesMutUtils::to_string(item_user_key);
+                if matcher.matches(key_str.as_str()) {
+                    results.push((
+                        BytesMut::from(item_user_key),
+                        BytesMut::from(item_user_value),
+                    ));
+                    count = count.saturating_sub(1);
+                }
+            } else {
+                results.push((
+                    BytesMut::from(item_user_key),
+                    BytesMut::from(item_user_value),
+                ));
+                count = count.saturating_sub(1);
+            }
+            db_iter.next();
+        }
+
+        let cursor_id = if db_iter.valid() && count == 0 {
+            // read the next key to be used as the next starting point for next iteration
+            let Some((key, _)) = db_iter.key_value() else {
+                // this is an error
+                resp_writer
+                    .error_string("ERR internal error: failed to read key from the database")
+                    .await?;
+                resp_writer.flush().await?;
+                return Ok(());
+            };
+
+            if key.starts_with(&hash_prefix) {
+                // store the next cursor
+                let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
+                // and store the cursor state
+                client_state.set_cursor(cursor.clone());
+                cursor.id()
+            } else {
+                // there are more items, but they don't belong to this hash
+                client_state.remove_cursor(cursor.id());
+                0u64
+            }
+        } else {
+            // reached the end
+            // delete the cursor
+            client_state.remove_cursor(cursor.id());
+            0u64
         };
+
+        // write the response
+        resp_writer.add_array_len(2).await?;
+        resp_writer.add_number(cursor_id).await?;
+        resp_writer
+            .add_array_len(results.len().saturating_mul(2))
+            .await?;
+        for (k, v) in results.iter() {
+            resp_writer.add_bulk_string(k).await?;
+            resp_writer.add_bulk_string(v).await?;
+        }
+        resp_writer.flush().await?;
+
         Ok(())
     }
 }

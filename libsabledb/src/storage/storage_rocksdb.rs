@@ -1,7 +1,10 @@
 #[allow(unused_imports)]
 use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
-    storage::{storage_trait::StorageIterator, IterateCallback, PutFlags, StorageTrait},
+    storage::{
+        storage_trait::{IteratorAdapter, StorageIterator},
+        IterateCallback, PutFlags, StorageTrait,
+    },
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
 
@@ -338,12 +341,13 @@ impl StorageTrait for StorageRocksDb {
     fn create_iterator<'a>(
         &self,
         prefix: Option<&BytesMut>,
-    ) -> Result<StorageIterator, SableError> {
+    ) -> Result<IteratorAdapter, SableError> {
         let mut iterator = self.store.raw_iterator();
         if let Some(prefix) = prefix {
             iterator.seek(prefix);
         }
-        Ok(StorageIterator::RocksDb(iterator))
+        let iter = IteratorAdapter::new_rocksdb_iterator(iterator);
+        Ok(iter)
     }
 }
 

@@ -12,6 +12,48 @@ pub enum StorageIterator<'a> {
     RocksDb(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
 }
 
+#[allow(dead_code)]
+pub struct IteratorAdapter<'a> {
+    iterator: StorageIterator<'a>,
+}
+
+#[allow(dead_code)]
+impl<'a> IteratorAdapter<'a> {
+    pub fn new_rocksdb_iterator(
+        rocksdb_iter: rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>,
+    ) -> Self {
+        IteratorAdapter {
+            iterator: StorageIterator::RocksDb(rocksdb_iter),
+        }
+    }
+
+    pub fn valid(&self) -> bool {
+        match &self.iterator {
+            StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.valid(),
+        }
+    }
+
+    pub fn next(&mut self) {
+        match &mut self.iterator {
+            StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.next(),
+        }
+    }
+
+    pub fn key_value(&self) -> Option<(&[u8], &[u8])> {
+        match &self.iterator {
+            StorageIterator::RocksDb(rocksdb_iter) => {
+                let k = rocksdb_iter.key();
+                let v = rocksdb_iter.value();
+
+                match (k, v) {
+                    (Some(k), Some(v)) => Some((k, v)),
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
 /// Define the database interface
 pub trait StorageTrait {
     /// Get a record from the store
@@ -66,5 +108,5 @@ pub trait StorageTrait {
         callback: Box<IterateCallback>,
     ) -> Result<(), SableError>;
 
-    fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<StorageIterator, SableError>;
+    fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<IteratorAdapter, SableError>;
 }

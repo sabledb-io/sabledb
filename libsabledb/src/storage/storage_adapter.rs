@@ -1,6 +1,6 @@
 use crate::{
     replication::StorageUpdates,
-    storage::{storage_trait::StorageIterator, IterateCallback, StorageTrait},
+    storage::{storage_trait::IteratorAdapter, IterateCallback, StorageTrait},
     utils, StorageRocksDb,
 };
 
@@ -382,7 +382,7 @@ impl StorageAdapter {
     pub fn create_iterator(
         &self,
         prefix: Option<&BytesMut>,
-    ) -> Result<StorageIterator, SableError> {
+    ) -> Result<IteratorAdapter, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
@@ -403,8 +403,6 @@ unsafe impl Send for StorageAdapter {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::storage_trait::StorageIterator;
-    #[allow(unused_imports)]
     use crate::BytesMutUtils;
     use std::cell::RefCell;
     use std::fs;
@@ -504,25 +502,20 @@ mod tests {
         }
 
         let mut matches = 0u32;
-        match store.create_iterator(Some(&seek_me)).unwrap() {
-            StorageIterator::RocksDb(mut rocksdb_iter) => {
-                while rocksdb_iter.valid() {
-                    // get the key & value
-                    let Some(key) = rocksdb_iter.key() else {
-                        break;
-                    };
+        let mut db_iter = store.create_iterator(Some(&seek_me)).unwrap();
 
-                    if !key.starts_with(seek_me.as_ref()) {
-                        break;
-                    }
-                    matches = matches.saturating_add(1);
-                    let Some(_value) = rocksdb_iter.value() else {
-                        break;
-                    };
-                    rocksdb_iter.next();
-                }
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(seek_me.as_ref()) {
+                break;
             }
-        };
+            matches = matches.saturating_add(1);
+            db_iter.next();
+        }
 
         assert_eq!(matches, 2);
     }
