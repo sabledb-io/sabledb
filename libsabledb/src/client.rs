@@ -629,7 +629,9 @@ impl Client {
             | RedisCommandName::Hmget
             | RedisCommandName::Hmset
             | RedisCommandName::Hrandfield
-            | RedisCommandName::Hscan => {
+            | RedisCommandName::Hscan
+            | RedisCommandName::Hsetnx
+            | RedisCommandName::Hstrlen => {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

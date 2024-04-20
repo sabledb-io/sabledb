@@ -103,6 +103,14 @@ impl HashCommands {
                 Self::hscan(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
+            RedisCommandName::Hsetnx => {
+                // simple response, write to response_buffer
+                Self::hsetnx(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Hstrlen => {
+                // simple response, write to response_buffer
+                Self::hstrlen(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non hash command {}",
@@ -173,6 +181,51 @@ impl HashCommands {
         Ok(())
     }
 
+    /// `HSETNX key field value`
+    ///
+    /// Sets field in the hash stored at key to value, only if field does not yet exist. If key does not exist,
+    /// a new key holding a hash is created. If field already exists, this operation has no effect.
+    async fn hsetnx(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+        let builder = RespBuilderV2::default();
+        let hash_name = command_arg_at!(command, 1);
+        let field = command_arg_at!(command, 2);
+        let value = command_arg_at!(command, 3);
+
+        // Doing get+set -> requires exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(hash_name, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        // Sanity
+        match hash_db.field_exists(hash_name, field)? {
+            HashExistsResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+            HashExistsResult::Exists => {
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+            HashExistsResult::NotExists => {}
+        };
+
+        let items_put = match hash_db.put_multi(hash_name, &[(field, value)])? {
+            HashPutResult::Some(count) => count,
+            HashPutResult::WrongType => {
+                // shouldn't happen...
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                return Ok(());
+            }
+        };
+
+        builder.number_usize(response_buffer, items_put);
+        Ok(())
+    }
+
     /// Returns the value associated with field in the hash stored at key.
     async fn hget(
         client_state: Rc<ClientState>,
@@ -202,6 +255,41 @@ impl HashCommands {
                 // update telemetries
                 Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
+            }
+        };
+        Ok(())
+    }
+
+    /// Returns the string length of the value associated with field in the hash stored at key. If the key or the field
+    /// do not exist, 0 is returned.
+    async fn hstrlen(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let builder = RespBuilderV2::default();
+
+        let key = command_arg_at!(command, 1);
+        let field = command_arg_at!(command, 2);
+
+        // Multiple db calls: exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.database_id());
+        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+
+        match hash_db.get(key, field)? {
+            HashGetResult::WrongType => {
+                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+            }
+            HashGetResult::Some(value) => {
+                // update telemetries
+                Telemetry::inc_db_hit();
+                builder.number_usize(response_buffer, value.len());
+            }
+            HashGetResult::NotFound | HashGetResult::FieldNotFound => {
+                // update telemetries
+                Telemetry::inc_db_miss();
+                builder.number_usize(response_buffer, 0);
             }
         };
         Ok(())
@@ -1125,6 +1213,20 @@ mod test {
         (vec!["hscan", "myhash", "0", "COUNT", "2", "MATCH", "*z*"], "*2\r\n:0\r\n*4\r\n$7\r\nzield10\r\n$7\r\nvalue10\r\n$6\r\nzield9\r\n$6\r\nvalue9\r\n"),
         (vec!["hscan", "myhash", "12121"], "-ERR: Invalid cursor id 12121\r\n"),
     ], "test_hscan"; "test_hscan")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hsetnx", "str_key", "field"], "-ERR wrong number of arguments for 'hsetnx' command\r\n"),
+        (vec!["hsetnx", "str_key", "field", "value"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hsetnx", "myhash", "field", "value"], ":1\r\n"),
+        (vec!["hsetnx", "myhash", "field", "value"], ":0\r\n"),
+    ], "test_hsetnx"; "test_hsetnx")]
+    #[test_case(vec![
+        (vec!["set", "str_key", "value"], "+OK\r\n"),
+        (vec!["hstrlen", "str_key"], "-ERR wrong number of arguments for 'hstrlen' command\r\n"),
+        (vec!["hstrlen", "str_key", "field"], "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        (vec!["hset", "myhash", "field", "value"], ":1\r\n"),
+        (vec!["hstrlen", "myhash", "field"], ":5\r\n"),
+    ], "test_hstrlen"; "test_hstrlen")]
     fn test_hash_commands(
         args: Vec<(Vec<&'static str>, &'static str)>,
         test_name: &str,

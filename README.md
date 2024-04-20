@@ -158,6 +158,8 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | hvals | ✓ |✓ |   |
 | hrandfield | ✓ |✓ |   |
 | hscan | ✓ |✓ |   |
+| hsetnx | ✓ |✓ |   |
+| hstrlen | ✓ |✓ |   |
 
 ### Generic commands
 
