@@ -18,7 +18,7 @@ pub use hash_db::{
 };
 pub use scan_cursor::ScanCursor;
 pub use storage_rocksdb::StorageRocksDb;
-pub use storage_trait::{IterateCallback, StorageIterator, StorageTrait};
+pub use storage_trait::{StorageIterator, StorageTrait};
 pub use string_db::StringsDb;
 pub use write_cache::DbWriteCache;
 

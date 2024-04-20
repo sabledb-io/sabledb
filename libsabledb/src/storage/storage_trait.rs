@@ -4,20 +4,17 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::path::Path;
-use std::rc::Rc;
 
-pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
+//pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
 
 pub enum StorageIterator<'a> {
     RocksDb(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
 }
 
-#[allow(dead_code)]
 pub struct IteratorAdapter<'a> {
     iterator: StorageIterator<'a>,
 }
 
-#[allow(dead_code)]
 impl<'a> IteratorAdapter<'a> {
     pub fn new_rocksdb_iterator(
         rocksdb_iter: rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>,
@@ -101,12 +98,7 @@ pub trait StorageTrait {
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError>;
 
-    /// Iterate on all keys starting with `prefix` and apply `callback` on them
-    fn iterate(
-        &self,
-        prefix: Rc<BytesMut>,
-        callback: Box<IterateCallback>,
-    ) -> Result<(), SableError>;
-
+    /// Create a database iterator. If `prefix` is not `None`, move the iterator
+    /// to point to `prefix`
     fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<IteratorAdapter, SableError>;
 }

@@ -3,7 +3,7 @@ use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator},
-        IterateCallback, PutFlags, StorageTrait,
+        PutFlags, StorageTrait,
     },
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
@@ -11,7 +11,6 @@ use crate::{
 use bytes::BytesMut;
 use num_format::{Locale, ToFormattedString};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 
 type Database = rocksdb::DB;
@@ -299,42 +298,6 @@ impl StorageTrait for StorageRocksDb {
             }
         }
         Ok(myiter.storage_updates)
-    }
-
-    fn iterate(
-        &self,
-        prefix: Rc<BytesMut>,
-        mut callback: Box<IterateCallback>,
-    ) -> Result<(), SableError> {
-        let mut iter = self.store.raw_iterator();
-
-        // search our prefix
-        iter.seek(prefix.as_ref());
-
-        loop {
-            if !iter.valid() {
-                break;
-            }
-
-            // get the key & value
-            let Some(key) = iter.key() else {
-                break;
-            };
-
-            if !key.starts_with(&prefix) {
-                break;
-            }
-
-            let Some(value) = iter.value() else {
-                break;
-            };
-
-            if !callback(prefix.as_ref(), key, value) {
-                break;
-            }
-            iter.next();
-        }
-        Ok(())
     }
 
     /// Create an iterator with an optional prefix
