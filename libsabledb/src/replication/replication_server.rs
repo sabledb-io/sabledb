@@ -133,6 +133,10 @@ impl ReplicationServer {
         std::io::copy(&mut file, stream)?;
         tracing::info!("Sending tar file {} completed", tar_file.display());
         prepare_std_socket(stream)?;
+
+        // Delete the tar + folder
+        let _ = std::fs::remove_file(&tar_file);
+        let _ = std::fs::remove_dir_all(&backup_db_path);
         Ok(())
     }
 
