@@ -8,7 +8,7 @@ mod storage_updates;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::{ReplicationConfig, ServerRole};
-pub use replication_messages::ReplRequest;
+pub use replication_messages::ReplicationMessage;
 pub use replication_server::{replication_thread_stop_all, ReplicationServer};
 pub use storage_updates::{DeleteRecord, PutRecord, StorageUpdates, StorageUpdatesIterItem};
 

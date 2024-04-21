@@ -1,5 +1,5 @@
 use crate::replication::{
-    prepare_std_socket, BytesReader, BytesWriter, ReplRequest, TcpStreamBytesReader,
+    prepare_std_socket, BytesReader, BytesWriter, ReplicationMessage, TcpStreamBytesReader,
     TcpStreamBytesWriter,
 };
 use crate::server_options::ServerOptions;
@@ -27,12 +27,14 @@ enum CheckShutdownResult {
 }
 
 enum RequestChangesResult {
-    // Close the current connection and attempt to re-connect with the primary
+    /// Close the current connection and attempt to re-connect with the primary
     Reconnect,
-    // Exit the replication thread, do not attempt to reconnect to the primary
+    /// Exit the replication thread, do not attempt to reconnect to the primary
     ExitThread,
-    // Command completed successfully
+    /// Command completed successfully
     Success,
+    /// Request a full sync from the primary
+    FullSync,
 }
 
 #[derive(Default)]
@@ -78,28 +80,22 @@ impl ReplicationClient {
                     Ok(stream) => stream,
                 };
 
-                // Now that we are connected, we start by requesting a full sync from the primary
-                if let Err(e) = Self::fullsync(&store, &options, &mut stream) {
-                    tracing::error!("Fullsync error. {:?}", e);
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    break;
-                }
-
                 // hereon: use socket with timeout
                 if let Err(e) = prepare_std_socket(&stream) {
                     tracing::error!("Failed to prepare socket. {:?}", e);
                     let _ = stream.shutdown(std::net::Shutdown::Both);
                     break;
                 }
-                let mut reader = TcpStreamBytesReader::new(&stream);
-                let mut writer = TcpStreamBytesWriter::new(&stream);
 
                 // This is the replication main loop:
                 // We continuously calling `request_changes` from the primary
                 // and store them in our database
                 loop {
-                    match Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx)
-                    {
+                    let mut reader = TcpStreamBytesReader::new(&stream);
+                    let mut writer = TcpStreamBytesWriter::new(&stream);
+                    let result =
+                        Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx);
+                    match result {
                         RequestChangesResult::Success => {
                             // Note: if there are no changes, the primary server will stall
                             // the response
@@ -113,6 +109,14 @@ impl ReplicationClient {
                             tracing::info!("Closing connection with primary: {:?}", stream);
                             let _ = stream.shutdown(std::net::Shutdown::Both);
                             return; // leave the thread
+                        }
+                        RequestChangesResult::FullSync => {
+                            // Try to do a fullsync
+                            if let Err(e) = Self::fullsync(&store, &options, &mut stream) {
+                                tracing::error!("Fullsync error. {:?}", e);
+                                let _ = stream.shutdown(std::net::Shutdown::Both);
+                                break;
+                            }
                         }
                     }
                 }
@@ -163,7 +167,7 @@ impl ReplicationClient {
 
         // Send a "FULL_SYNC" message
         tracing::info!("Sending FULL SYNC message to primary");
-        let request = ReplRequest::new_fullsync();
+        let request = ReplicationMessage::new().with_type(ReplicationMessage::FULL_SYNC);
         let mut buffer = request.to_bytes();
         let mut writer = TcpStreamBytesWriter::new(stream);
         writer.write_message(&mut buffer)?;
@@ -204,7 +208,29 @@ impl ReplicationClient {
 
         let _ = std::fs::remove_file(&output_file_name);
         let _ = std::fs::remove_dir_all(&target_folder_path);
+
+        // restore the socket state
+        prepare_std_socket(stream)?;
         Ok(())
+    }
+
+    fn read_replication_message(
+        reader: &mut dyn BytesReader,
+    ) -> Result<ReplicationMessage, SableError> {
+        // Read the request (this is a fixed size request)
+        loop {
+            let result = match reader.read_message()? {
+                None => None,
+                Some(bytes) => ReplicationMessage::from_bytes(&bytes),
+            };
+            match result {
+                // And this is why I ❤ Rust...
+                Some(req) => break Ok(req),
+                None => {
+                    continue;
+                }
+            };
+        }
     }
 
     /// Request a single "change request"
@@ -242,12 +268,42 @@ impl ReplicationClient {
             "Next sequence: {}",
             sequence_number.to_formatted_string(&Locale::en)
         );
-        let request = ReplRequest::new_get_updates_since(sequence_number);
+
+        let request = ReplicationMessage::new()
+            .with_type(ReplicationMessage::GET_UPDATES_SINCE)
+            .with_sequence(sequence_number);
+
         let mut buffer = request.to_bytes();
         if let Err(e) = writer.write_message(&mut buffer) {
             tracing::error!("Failed to send replication request. {:?}", e);
             return RequestChangesResult::ExitThread;
         };
+
+        // We expect now a `GET_CHANGES_OK` or `GET_CHANGES_ERR` message
+        match Self::read_replication_message(reader) {
+            Err(e) => {
+                tracing::error!("Error reading replication message. {:?}", e);
+                return RequestChangesResult::Reconnect;
+            }
+            Ok(msg) => {
+                match msg.message_type {
+                    ReplicationMessage::GET_CHANGES_OK => {
+                        // fall through
+                    }
+                    ReplicationMessage::GET_CHANGES_ERR => {
+                        // the requested sequence was is not acceptable by the server
+                        // do a full sync
+                        tracing::info!("Failed to get changes. Requesting fullsync");
+                        return RequestChangesResult::FullSync;
+                    }
+                    other => {
+                        tracing::error!("Protocol error: unexpected message type: {:?}", other);
+                        return RequestChangesResult::Reconnect;
+                    }
+                }
+            }
+        }
+
         let buffer = loop {
             match reader.read_message() {
                 Ok(None) => {
@@ -331,7 +387,8 @@ impl ReplicationClient {
     fn read_next_sequence(sequence_file: PathBuf) -> Option<u64> {
         match std::fs::read(sequence_file.clone()) {
             Ok(content) => {
-                if let Ok(seq) = String::from_utf8_lossy(&content).parse::<u64>() {
+                let content = String::from_utf8_lossy(&content).trim().to_string();
+                if let Ok(seq) = content.parse::<u64>() {
                     Some(seq)
                 } else {
                     tracing::error!(
@@ -420,8 +477,13 @@ mod tests {
         let replica_db = create_database("replication_replica", false)?;
 
         let mut writer = SimpleBytesWriter::default();
-        let mut reader =
-            StorageUpdatesBytesReader::new(primary_db.storage_updates_since(0, None, None)?);
+        let mut reader = StorageUpdatesBytesReader::default();
+        reader.add_response(
+            ReplicationMessage::new()
+                .with_type(ReplicationMessage::GET_CHANGES_OK)
+                .to_bytes(),
+        );
+        reader.add_response(primary_db.storage_updates_since(0, None, None)?.to_bytes());
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
@@ -443,40 +505,42 @@ mod tests {
     // Mocks used for this test
     #[derive(Default)]
     struct ReplRequestBytesReader {}
+
+    #[derive(Default)]
     struct StorageUpdatesBytesReader {
-        response: StorageUpdates,
+        buffers: std::collections::VecDeque<BytesMut>,
     }
 
     #[derive(Default)]
     struct SimpleBytesWriter {
-        pub buffer: BytesMut,
+        pub buffers: Vec<BytesMut>,
     }
 
     impl BytesWriter for SimpleBytesWriter {
         fn write_message(&mut self, buffer: &mut BytesMut) -> Result<(), SableError> {
-            self.buffer.clear();
-            self.buffer.reserve(buffer.len());
-            self.buffer.extend_from_slice(buffer);
+            self.buffers.push(buffer.clone());
             Ok(())
         }
     }
 
     impl BytesReader for ReplRequestBytesReader {
         fn read_message(&mut self) -> Result<Option<BytesMut>, SableError> {
-            let repl_request = ReplRequest::new_get_updates_since(0);
+            let repl_request = ReplicationMessage::new()
+                .with_type(ReplicationMessage::GET_UPDATES_SINCE)
+                .with_sequence(0);
             Ok(Some(repl_request.to_bytes()))
         }
     }
 
     impl StorageUpdatesBytesReader {
-        pub fn new(response: StorageUpdates) -> Self {
-            StorageUpdatesBytesReader { response }
+        pub fn add_response(&mut self, buf: BytesMut) {
+            self.buffers.push_back(buf);
         }
     }
 
     impl BytesReader for StorageUpdatesBytesReader {
         fn read_message(&mut self) -> Result<Option<BytesMut>, SableError> {
-            Ok(Some(self.response.to_bytes()))
+            Ok(self.buffers.pop_front())
         }
     }
 }

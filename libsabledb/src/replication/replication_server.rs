@@ -7,7 +7,7 @@ use crate::utils;
 use crate::{
     io::Archive,
     replication::{
-        BytesReader, BytesWriter, ReplRequest, TcpStreamBytesReader, TcpStreamBytesWriter,
+        BytesReader, BytesWriter, ReplicationMessage, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     SableError, StorageAdapter,
 };
@@ -77,12 +77,14 @@ impl Drop for ReplicationThreadMarker {
 }
 
 impl ReplicationServer {
-    fn read_request(reader: &mut dyn BytesReader) -> Result<Option<ReplRequest>, SableError> {
+    fn read_request(
+        reader: &mut dyn BytesReader,
+    ) -> Result<Option<ReplicationMessage>, SableError> {
         // Read the request (this is a fixed size request)
         let result = reader.read_message()?;
         match result {
             None => Ok(None),
-            Some(bytes) => Ok(ReplRequest::from_bytes(&bytes)),
+            Some(bytes) => Ok(ReplicationMessage::from_bytes(&bytes)),
         }
     }
 
@@ -174,8 +176,8 @@ impl ReplicationServer {
         };
         tracing::debug!("Received replication request {:?}", req);
 
-        match req.req_type {
-            ReplRequest::FULL_SYNC => {
+        match req.message_type {
+            ReplicationMessage::FULL_SYNC => {
                 if let Err(e) = Self::send_checkpoint(store, options, replica_addr, stream) {
                     tracing::info!(
                         "Failed sending db chceckpoint to replica {}. {:?}",
@@ -185,12 +187,15 @@ impl ReplicationServer {
                     return false;
                 }
             }
-            ReplRequest::GET_UPDATES_SINCE => {
+            ReplicationMessage::GET_UPDATES_SINCE => {
                 tracing::debug!(
                     "Replica {} is requesting changes since: {}",
                     replica_addr,
                     req.payload
                 );
+
+                // Get the changes from the database. If no changes available
+                // hold the request until we have some changes to send over
                 let storage_updates = loop {
                     let storage_updates = match store.storage_updates_since(
                         req.payload,
@@ -198,8 +203,21 @@ impl ReplicationServer {
                         Some(options.replication_limits.num_updates_per_message as u64),
                     ) {
                         Err(e) => {
-                            tracing::error!("Failed to construct 'changes since' message. {:?}", e);
-                            return false;
+                            tracing::warn!("Failed to construct 'changes since' message. {:?}", e);
+                            let response_not_ok = ReplicationMessage::new()
+                                .with_type(ReplicationMessage::GET_CHANGES_ERR);
+                            let mut response_not_ok_buffer = response_not_ok.to_bytes();
+                            if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
+                                tracing::error!(
+                                    "Failed to send 'GET_CHANGES_ERR' control message. {:?}",
+                                    e
+                                );
+                                // cant recover here, close the connection
+                                return false;
+                            }
+                            tracing::info!("Sent GET_CHANGES_ERR message to replica");
+                            // return true here so we wont close the connection
+                            return true;
                         }
                         Ok(changes_since) => changes_since,
                     };
@@ -216,8 +234,18 @@ impl ReplicationServer {
                     }
                 };
 
-                // Serialise the data
                 tracing::info!("Sending replication update: {}", storage_updates);
+
+                // Send a `GET_CHANGES_OK` message, followed by the data
+                let response_ok =
+                    ReplicationMessage::new().with_type(ReplicationMessage::GET_CHANGES_OK);
+                let mut response_ok_buffer = response_ok.to_bytes();
+                if let Err(e) = writer.write_message(&mut response_ok_buffer) {
+                    tracing::error!("Failed to send 'GET_CHANGES_OK' control message. {:?}", e);
+                    return false;
+                }
+
+                // Send the data
                 let mut buffer = storage_updates.to_bytes();
                 match writer.write_message(&mut buffer) {
                     Err(SableError::BrokenPipe) => {
@@ -234,7 +262,7 @@ impl ReplicationServer {
             _ => {
                 tracing::error!(
                     "Replication protocol error. Unknown replication request with type {}",
-                    req.req_type
+                    req.message_type
                 );
                 return false;
             }
