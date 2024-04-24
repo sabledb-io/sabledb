@@ -11,18 +11,19 @@ pub enum ValueType {
 
 mod encoding;
 mod expiration;
-mod hash_value_metadata;
-mod list_value_metadata;
+mod hash_metadata;
+mod list_metadata;
 mod primary_key_metadata;
 mod string_value_metadata;
 mod value_metadata;
+mod sorted_set_metadata;
 
 pub use encoding::Encoding;
 pub use expiration::Expiration;
 
-pub use hash_value_metadata::{HashFieldKey, HashValueMetadata};
+pub use hash_metadata::{HashFieldKey, HashValueMetadata};
 #[allow(unused_imports)]
-pub use list_value_metadata::ListValueMetadata;
+pub use list_metadata::ListValueMetadata;
 pub use primary_key_metadata::PrimaryKeyMetadata;
 pub use string_value_metadata::StringValueMetadata;
 pub use value_metadata::{CommonValueMetadata, ValueTypeIs};

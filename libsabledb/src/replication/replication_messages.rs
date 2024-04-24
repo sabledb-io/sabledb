@@ -19,7 +19,7 @@ impl Default for ReplicationMessage {
 }
 
 impl ReplicationMessage {
-    pub const SIZE: usize = std::mem::size_of::<u64>() + std::mem::size_of::<u8>();
+    pub const SIZE: usize = std::mem::size_of::<ReplicationMessage>();
     pub const GET_UPDATES_SINCE: u8 = 0;
     pub const FULL_SYNC: u8 = 1;
     pub const GET_CHANGES_OK: u8 = 2; // No payload

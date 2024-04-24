@@ -46,6 +46,8 @@ pub enum SableError {
     AddressParseError(#[from] std::net::AddrParseError),
     #[error("Serialisation error")]
     SerialisationError,
+    #[error("No active transcation")]
+    NoActiveTransaction,
 }
 
 #[allow(dead_code)]

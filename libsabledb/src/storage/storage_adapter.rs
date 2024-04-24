@@ -4,12 +4,13 @@ use crate::{
     utils, StorageRocksDb,
 };
 
+use crate::{storage::DbCacheEntry, SableError};
+use bytes::BytesMut;
+use dashmap::DashMap;
 #[allow(unused_imports)]
 use std::cell::RefCell;
-
-use crate::SableError;
-use bytes::BytesMut;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -205,10 +206,110 @@ impl BatchUpdate {
     }
 }
 
+/// Transcation write cache.
+///
+/// Used by the storage adapter to aggregate all writes (Put/Delete) into a single atomic batch
+#[allow(dead_code)]
+#[derive(Default, Clone)]
+struct TxnWriteCache {
+    changes: DashMap<BytesMut, Option<Rc<DbCacheEntry>>>,
+}
+
+#[allow(dead_code)]
+impl TxnWriteCache {
+    pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
+        let entry = Rc::new(DbCacheEntry::new(value, PutFlags::Override));
+        let _ = self.changes.insert(key.clone(), Some(entry));
+        Ok(())
+    }
+
+    pub fn put_flags(
+        &self,
+        key: &BytesMut,
+        value: BytesMut,
+        flags: PutFlags,
+    ) -> Result<(), SableError> {
+        let entry = Rc::new(DbCacheEntry::new(value, flags));
+        let _ = self.changes.insert(key.clone(), Some(entry));
+        Ok(())
+    }
+
+    /// Note that we do not remove the entry from the `changes` hash,
+    /// instead we use a `None` marker to indicate that this entry
+    /// should be converted into a `delete` operation
+    pub fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
+        let _ = self.changes.insert(key.clone(), None);
+        Ok(())
+    }
+
+    /// Return true if `key` exists in the cache or in the underlying storage
+    pub fn contains(&self, key: &BytesMut, store: &StorageAdapter) -> Result<bool, SableError> {
+        if let Some(value) = self.changes.get(key) {
+            Ok(value.is_some())
+        } else {
+            store.contains(key)
+        }
+    }
+
+    /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
+    /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
+    /// this means that it was deleted, so return a `None` as well
+    pub fn get(
+        &self,
+        key: &BytesMut,
+        store: &StorageAdapter,
+    ) -> Result<Option<BytesMut>, SableError> {
+        let Some(value) = self.changes.get(key) else {
+            return store.get(key);
+        };
+
+        // found an match in cache
+        if let Some(value) = value.value() {
+            // an actual value
+            Ok(Some(value.data().clone()))
+        } else {
+            // the value was deleted
+            Ok(None)
+        }
+    }
+
+    /// Apply `batch` into this txn
+    pub fn apply_batch(&self, batch: &BatchUpdate) -> Result<(), SableError> {
+        if let Some(delete_keys) = batch.keys_to_delete() {
+            for key in delete_keys {
+                self.delete(key)?;
+            }
+        }
+
+        if let Some(put_items) = batch.items_to_put() {
+            for (key, val) in put_items {
+                self.put(key, val.clone())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_write_batch(&self) -> BatchUpdate {
+        let mut batch_update = BatchUpdate::default();
+        for entry in &self.changes {
+            match entry.value() {
+                None => batch_update.delete(entry.key().clone()),
+                Some(value) => batch_update.put(entry.key().clone(), value.data().clone()),
+            }
+        }
+        batch_update
+    }
+
+    pub fn clear(&self) {
+        self.changes.clear()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct StorageAdapter {
     store: Option<Arc<dyn StorageTrait>>,
     open_params: StorageOpenParams,
+    txn: Option<TxnWriteCache>,
 }
 
 /// We use an adapter to hide all `RocksDb` details and (maybe)
@@ -222,11 +323,23 @@ impl StorageAdapter {
         Ok(())
     }
 
+    /// Start a transcation
+    pub fn transaction(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.txn = Some(TxnWriteCache::default());
+        cloned
+    }
+
     /// Flush all dirty buffers to the disk
     pub fn flush(&self) -> Result<(), SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
+
+        // discard any changes (txn must be explicitly committed)
+        if let Some(txn) = &self.txn {
+            txn.clear();
+        }
         db.flush()
     }
 
@@ -249,7 +362,12 @@ impl StorageAdapter {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.get(key)
+
+        if let Some(txn) = &self.txn {
+            txn.get(key, self)
+        } else {
+            db.get(key)
+        }
     }
 
     /// Put a `key` : `value` pair into the database
@@ -262,7 +380,12 @@ impl StorageAdapter {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.put(key, value, put_flags)?;
+
+        if let Some(txn) = &self.txn {
+            txn.put_flags(key, value.clone(), put_flags)?;
+        } else {
+            db.put(key, value, put_flags)?;
+        }
         Ok(())
     }
 
@@ -271,7 +394,12 @@ impl StorageAdapter {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.contains(key)
+
+        if let Some(txn) = &self.txn {
+            txn.contains(key, self)
+        } else {
+            db.contains(key)
+        }
     }
 
     /// Similar to delete, but with no app locking
@@ -279,8 +407,12 @@ impl StorageAdapter {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.delete(key)?;
-        Ok(())
+
+        if let Some(txn) = &self.txn {
+            txn.delete(key)
+        } else {
+            db.delete(key)
+        }
     }
 
     /// Generated ID that is guaranteed to be unique.
@@ -294,7 +426,12 @@ impl StorageAdapter {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.apply_batch(update)?;
+
+        if let Some(txn) = &self.txn {
+            txn.apply_batch(update)?;
+        } else {
+            db.apply_batch(update)?;
+        }
         Ok(())
     }
 
@@ -374,6 +511,20 @@ impl StorageAdapter {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
         db.create_iterator(prefix)
+    }
+
+    /// Commit the txn into the database as a single batch operation
+    pub fn commit(&self) -> Result<(), SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+
+        let Some(txn) = &self.txn else {
+            return Err(SableError::NoActiveTransaction);
+        };
+
+        let updates = txn.to_write_batch();
+        db.apply_batch(&updates)
     }
 }
 

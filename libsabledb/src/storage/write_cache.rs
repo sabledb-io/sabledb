@@ -3,15 +3,23 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use std::rc::Rc;
 
-struct CacheEntry {
+pub struct DbCacheEntry {
     data: BytesMut,
     #[allow(dead_code)]
     flags: PutFlags,
 }
 
-impl CacheEntry {
+impl DbCacheEntry {
     pub fn new(data: BytesMut, flags: PutFlags) -> Self {
-        CacheEntry { data, flags }
+        DbCacheEntry { data, flags }
+    }
+
+    pub fn data(&self) -> &BytesMut {
+        &self.data
+    }
+
+    pub fn flags(&self) -> &PutFlags {
+        &self.flags
     }
 }
 
@@ -27,19 +35,19 @@ impl CacheEntry {
 /// calling to `DbWriteCache::to_write_batch()` followed by `StroageAdapter::apply_batch` call
 pub struct DbWriteCache<'a> {
     store: &'a StorageAdapter,
-    changes: DashMap<BytesMut, Option<Rc<CacheEntry>>>,
+    changes: DashMap<BytesMut, Option<Rc<DbCacheEntry>>>,
 }
 
 impl<'a> DbWriteCache<'a> {
     pub fn with_storage(store: &'a StorageAdapter) -> Self {
         DbWriteCache {
             store,
-            changes: DashMap::<BytesMut, Option<Rc<CacheEntry>>>::default(),
+            changes: DashMap::<BytesMut, Option<Rc<DbCacheEntry>>>::default(),
         }
     }
 
     pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
-        let entry = Rc::new(CacheEntry::new(value, PutFlags::Override));
+        let entry = Rc::new(DbCacheEntry::new(value, PutFlags::Override));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
@@ -50,7 +58,7 @@ impl<'a> DbWriteCache<'a> {
         value: BytesMut,
         flags: PutFlags,
     ) -> Result<(), SableError> {
-        let entry = Rc::new(CacheEntry::new(value, flags));
+        let entry = Rc::new(DbCacheEntry::new(value, flags));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }

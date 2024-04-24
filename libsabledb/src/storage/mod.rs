@@ -1,6 +1,7 @@
 mod generic_db;
 mod hash_db;
 mod scan_cursor;
+mod sorted_set_db;
 mod storage_adapter;
 mod storage_rocksdb;
 mod storage_trait;
@@ -20,7 +21,7 @@ pub use scan_cursor::ScanCursor;
 pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{StorageIterator, StorageTrait};
 pub use string_db::StringsDb;
-pub use write_cache::DbWriteCache;
+pub use write_cache::{DbCacheEntry, DbWriteCache};
 
 #[macro_export]
 macro_rules! storage_rocksdb {

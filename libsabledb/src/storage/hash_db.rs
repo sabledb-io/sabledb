@@ -1,8 +1,7 @@
 /// A database accessor that does not really care about the value
-#[allow(unused_imports)]
 use crate::{
     metadata::{HashFieldKey, HashValueMetadata},
-    storage::{DbWriteCache, PutFlags},
+    storage::DbWriteCache,
     CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
 };
@@ -422,6 +421,7 @@ impl<'a> HashDb<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::PutFlags;
     use crate::StorageOpenParams;
     use std::path::PathBuf;
 
