@@ -18,7 +18,7 @@ pub mod utils;
 pub mod worker;
 pub mod worker_manager;
 
-pub use client::Client;
+pub use client::{Client, ClientState, ClientStateFlags};
 pub use commands::{
     ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
     ServerCommands, StringCommands,

@@ -14,11 +14,25 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU16},
+    atomic::{AtomicU16, AtomicU32},
     Mutex,
 };
 
 const PONG: &[u8] = b"+PONG\r\n";
+
+pub struct ClientStateFlags {}
+
+impl ClientStateFlags {
+    /// The client was killed (either by the user or by SableDb internally)
+    pub const KILLED: u32 = (1 << 0);
+    /// Pre transaction state. This state is a special state that indicating that
+    /// SableDb is preparing for executing a transcation for this client
+    pub const TXN_PRE: u32 = (1 << 1);
+    /// Txn is currently in progress. When this state is detected, some operations
+    /// are skipped (for example: LockManager will return noop lock, because the lock is already obtained
+    /// at the top level command, i.e. `EXEC`)
+    pub const TXN_IN_PROGRESS: u32 = (1 << 2);
+}
 
 #[allow(unused_imports)]
 use tokio::{
@@ -46,7 +60,6 @@ fn new_client_id() -> u128 {
     *value
 }
 
-#[allow(dead_code)]
 pub struct ClientState {
     server_state: Arc<ServerState>,
     store: StorageAdapter,
@@ -54,7 +67,7 @@ pub struct ClientState {
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     db_id: AtomicU16,
     attributes: DashMap<String, String>,
-    is_active: AtomicBool,
+    flags: AtomicU32,
     cursors: DashMap<u64, Rc<ScanCursor>>,
 }
 
@@ -96,16 +109,51 @@ impl ClientState {
         self.db_id.store(id, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Return the client's database ID
+    /// Is the client alive? (e.g. was it killed using `client kill` command?)
     pub fn active(&self) -> bool {
-        self.is_active.load(std::sync::atomic::Ordering::Relaxed)
+        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        flags & ClientStateFlags::KILLED == 0
     }
 
     /// Kill the current client by marking it as non active. The connection will be closed
     /// next time the client will attempt to use it or when a timeout occurs
     pub fn kill(&self) {
-        self.is_active
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        flags |= ClientStateFlags::KILLED;
+        self.flags
+            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_pre_txn_state(&self) -> bool {
+        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        flags & ClientStateFlags::TXN_PRE == ClientStateFlags::TXN_PRE
+    }
+
+    pub fn set_pre_txn_state(&self, pre_txn_state: bool) {
+        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        if pre_txn_state {
+            flags |= ClientStateFlags::TXN_PRE;
+        } else {
+            flags &= !ClientStateFlags::TXN_PRE;
+        }
+        self.flags
+            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_txn_active(&self, active: bool) {
+        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        if active {
+            flags |= ClientStateFlags::TXN_IN_PROGRESS;
+        } else {
+            flags &= !ClientStateFlags::TXN_IN_PROGRESS;
+        }
+        self.flags
+            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_txn_active(&self) -> bool {
+        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        flags & ClientStateFlags::TXN_IN_PROGRESS == ClientStateFlags::TXN_IN_PROGRESS
     }
 
     /// Set a client attribute
@@ -208,7 +256,7 @@ impl Client {
             tls_acceptor,
             db_id: AtomicU16::new(0),
             attributes: DashMap::<String, String>::default(),
-            is_active: AtomicBool::new(true),
+            flags: AtomicU32::new(0),
             cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
         });
 

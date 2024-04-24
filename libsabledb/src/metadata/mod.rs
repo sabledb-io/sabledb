@@ -14,9 +14,9 @@ mod expiration;
 mod hash_metadata;
 mod list_metadata;
 mod primary_key_metadata;
+mod sorted_set_metadata;
 mod string_value_metadata;
 mod value_metadata;
-mod sorted_set_metadata;
 
 pub use encoding::Encoding;
 pub use expiration::Expiration;
