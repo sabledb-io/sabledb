@@ -21,6 +21,9 @@ pub enum RedisCommandFlags {
     /// Command might block the client
     #[strum(serialize = "blocking")]
     Blocking = 1 << 4,
+    /// This command is now allowed inside a transaction block (`MULTI` / `EXEC`)
+    #[strum(serialize = "notransaction")]
+    NoTxn = 1 << 5,
 }
 
 #[derive(Clone, Debug, Default, EnumString)]
@@ -216,6 +219,12 @@ impl CommandMetadata {
         self
     }
 
+    /// This command might block the client
+    pub fn no_transaction(mut self) -> Self {
+        self.set_flag(RedisCommandFlags::NoTxn);
+        self
+    }
+
     /// This command is a "write" command
     pub fn write(mut self) -> Self {
         self.set_flag(RedisCommandFlags::Write);
@@ -246,7 +255,15 @@ impl CommandMetadata {
 
     /// Is this command a "Write" command?
     pub fn is_write_command(&self) -> bool {
-        self.cmd_flags & RedisCommandFlags::Write as u64 == RedisCommandFlags::Write as u64
+        self.has_flag(RedisCommandFlags::Write)
+    }
+
+    pub fn is_blocking(&self) -> bool {
+        self.has_flag(RedisCommandFlags::Blocking)
+    }
+
+    pub fn is_notxn(&self) -> bool {
+        self.has_flag(RedisCommandFlags::NoTxn)
     }
 
     pub fn to_resp_v2(&self) -> BytesMut {
@@ -268,6 +285,10 @@ impl CommandMetadata {
         }
         if self.has_flag(RedisCommandFlags::Connection) {
             flags.push("connection");
+        }
+
+        if self.has_flag(RedisCommandFlags::NoTxn) {
+            flags.push("notransaction");
         }
 
         let cmdname = BytesMut::from(format!("{:?}", self.cmd_name).to_lowercase().as_str());
@@ -308,7 +329,8 @@ impl Default for CommandsManager {
                         .with_arity(-2)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 (
                     "info",
@@ -317,7 +339,8 @@ impl Default for CommandsManager {
                         .with_arity(-1)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 // string commands
                 (
@@ -611,7 +634,9 @@ impl Default for CommandsManager {
                 // Client commands
                 (
                     "client",
-                    CommandMetadata::new(RedisCommandName::Client).connection(),
+                    CommandMetadata::new(RedisCommandName::Client)
+                        .connection()
+                        .no_transaction(),
                 ),
                 (
                     "select",
@@ -620,7 +645,8 @@ impl Default for CommandsManager {
                         .with_arity(2)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 // Server commands
                 (
@@ -630,7 +656,8 @@ impl Default for CommandsManager {
                         .with_arity(3)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 (
                     "slaveof",
@@ -639,7 +666,8 @@ impl Default for CommandsManager {
                         .with_arity(3)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 (
                     "ping",
@@ -648,7 +676,8 @@ impl Default for CommandsManager {
                         .with_arity(-1)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 (
                     "command",
@@ -656,7 +685,8 @@ impl Default for CommandsManager {
                         .with_arity(-1)
                         .with_first_key(0)
                         .with_last_key(0)
-                        .with_step(0),
+                        .with_step(0)
+                        .no_transaction(),
                 ),
                 // generic commands
                 (
@@ -726,7 +756,8 @@ impl Default for CommandsManager {
                     "hgetall",
                     CommandMetadata::new(RedisCommandName::Hgetall)
                         .read_only()
-                        .with_arity(2),
+                        .with_arity(2)
+                        .no_transaction(),
                 ),
                 (
                     "hincrbyfloat",
@@ -768,7 +799,8 @@ impl Default for CommandsManager {
                     "hscan",
                     CommandMetadata::new(RedisCommandName::Hscan)
                         .read_only()
-                        .with_arity(-3),
+                        .with_arity(-3)
+                        .no_transaction(),
                 ),
                 (
                     "hsetnx",
