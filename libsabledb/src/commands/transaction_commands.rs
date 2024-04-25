@@ -292,12 +292,31 @@ mod test {
                 run_and_return_output(vec!["get".to_string(), "k1".to_string()], client.inner())
                     .await
                     .unwrap();
-            assert_eq!(output, RedisObject::Str("v1".into()),);
+            assert_eq!(output, RedisObject::Str("v1".into()));
             let output =
                 run_and_return_output(vec!["get".to_string(), "k2".to_string()], client.inner())
                     .await
                     .unwrap();
             assert_eq!(output, RedisObject::Str("v2".into()),);
+            assert_eq!(client.inner().commands_queue().len(), 0);
+
+            // Run another command, this time we expect it to run without "EXEC"
+            let output = run_and_return_output(
+                vec!["set".to_string(), "no_cached".to_string(), "1".to_string()],
+                client.inner(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(output, RedisObject::Status("OK".into()));
+
+            // Run another command, this time we expect it to run without "EXEC"
+            let output = run_and_return_output(
+                vec!["get".to_string(), "no_cached".to_string()],
+                client.inner(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(output, RedisObject::Str("1".into()));
         });
     }
 }
