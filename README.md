@@ -56,6 +56,7 @@ $target/release/sabledb [sabledb.ini]
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
 - Use the `sb` command line utility (`target/release/sb`) for performance testing
+- Transactions ( `MULTI` / `EXEC` )
 
 ## Benchmark tool - `sb`
 
