@@ -1,4 +1,4 @@
-use crate::{utils::calculate_slot, PrimaryKeyMetadata};
+use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata};
 use bytes::BytesMut;
 use std::rc::Rc;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -65,19 +65,31 @@ impl LockManager {
     }
 
     // obtain execlusive lock on a user key
-    pub fn lock_user_key_exclusive<'a>(user_key: &BytesMut, db_id: u16) -> ShardLockGuard<'a> {
+    pub fn lock_user_key_exclusive<'a>(
+        user_key: &BytesMut,
+        client_state: Rc<ClientState>,
+    ) -> ShardLockGuard<'a> {
+        let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_exclusive(&internal_key)
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_key_shared<'a>(user_key: &BytesMut, db_id: u16) -> ShardLockGuard<'a> {
+    pub fn lock_user_key_shared<'a>(
+        user_key: &BytesMut,
+        client_state: Rc<ClientState>,
+    ) -> ShardLockGuard<'a> {
+        let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_shared(&internal_key)
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_shared<'a>(user_keys: &[&BytesMut], db_id: u16) -> ShardLockGuard<'a> {
+    pub fn lock_user_keys_shared<'a>(
+        user_keys: &[&BytesMut],
+        client_state: Rc<ClientState>,
+    ) -> ShardLockGuard<'a> {
+        let db_id = client_state.database_id();
         let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         for user_key in user_keys.iter() {
@@ -89,7 +101,11 @@ impl LockManager {
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_exclusive<'a>(user_keys: &[&BytesMut], db_id: u16) -> ShardLockGuard<'a> {
+    pub fn lock_user_keys_exclusive<'a>(
+        user_keys: &[&BytesMut],
+        client_state: Rc<ClientState>,
+    ) -> ShardLockGuard<'a> {
+        let db_id = client_state.database_id();
         let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
         for user_key in user_keys.iter() {
