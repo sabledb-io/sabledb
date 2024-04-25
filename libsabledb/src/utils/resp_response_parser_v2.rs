@@ -23,8 +23,21 @@ impl RedisObject {
     pub fn integer(&self) -> Result<u64, SableError> {
         match self {
             Self::Integer(num) => Ok(*num),
-            _ => Err(SableError::OtherError(
-                "RedisObject is not of type Integer".into(),
+            other => Err(SableError::OtherError(
+                format!("Expected Integer. Found: {:?}", other)
+                    .as_str()
+                    .into(),
+            )),
+        }
+    }
+
+    pub fn status(&self) -> Result<BytesMut, SableError> {
+        match self {
+            Self::Status(s) => Ok(s.clone()),
+            other => Err(SableError::OtherError(
+                format!("Expected Status. Found: {:?}", other)
+                    .as_str()
+                    .into(),
             )),
         }
     }
@@ -32,8 +45,8 @@ impl RedisObject {
     pub fn string(&self) -> Result<BytesMut, SableError> {
         match self {
             Self::Str(s) => Ok(s.clone()),
-            _ => Err(SableError::OtherError(
-                "RedisObject is not of type Integer".into(),
+            other => Err(SableError::OtherError(
+                format!("Expected Str. Found: {:?}", other).as_str().into(),
             )),
         }
     }
@@ -41,8 +54,8 @@ impl RedisObject {
     pub fn error_string(&self) -> Result<BytesMut, SableError> {
         match self {
             Self::Error(s) => Ok(s.clone()),
-            _ => Err(SableError::OtherError(
-                "RedisObject is not of type Integer".into(),
+            other => Err(SableError::OtherError(
+                format!("Expected Err. Found: {:?}", other).as_str().into(),
             )),
         }
     }
@@ -50,10 +63,16 @@ impl RedisObject {
     pub fn array(&self) -> Result<Vec<RedisObject>, SableError> {
         match self {
             Self::Array(arr) => Ok(arr.clone()),
-            _ => Err(SableError::OtherError(
-                "RedisObject is not of type Integer".into(),
+            other => Err(SableError::OtherError(
+                format!("Expected Array. Found: {:?}", other)
+                    .as_str()
+                    .into(),
             )),
         }
+    }
+
+    pub fn is_null_string(&self) -> bool {
+        matches!(self, Self::NullString)
     }
 }
 

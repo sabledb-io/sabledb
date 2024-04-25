@@ -1033,7 +1033,7 @@ mod test {
     use super::*;
     use crate::{commands::ClientNextAction, Client, ServerState};
 
-    use crate::{ParseResult, RedisObject, RespResponseParserV2};
+    use crate::tests::run_and_return_output;
     use std::rc::Rc;
     use std::sync::Arc;
     use test_case::test_case;
@@ -1449,37 +1449,6 @@ mod test {
                 assert_eq!(sink.read_all().await.as_str(), output);
             }
             _ => {}
-        }
-    }
-
-    async fn run_and_return_output(
-        cmd_args: Vec<String>,
-        client_state: Rc<ClientState>,
-    ) -> Result<RedisObject, SableError> {
-        let mut sink = crate::tests::ResponseSink::with_name("test_hscan_continutation").await;
-        let cmd = Rc::new(RedisCommand::for_test2(cmd_args));
-
-        match Client::handle_command(client_state, cmd, &mut sink.fp)
-            .await
-            .unwrap()
-        {
-            ClientNextAction::NoAction => {
-                match RespResponseParserV2::parse_response(
-                    sink.read_all().await.as_str().as_bytes(),
-                )
-                .unwrap()
-                {
-                    ParseResult::Ok((_, obj)) => {
-                        return Ok(obj);
-                    }
-                    _ => {
-                        return Err(SableError::OtherError("parsing error".into()));
-                    }
-                }
-            }
-            _ => {
-                return Err(SableError::NotFound);
-            }
         }
     }
 }

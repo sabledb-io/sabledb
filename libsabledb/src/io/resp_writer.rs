@@ -41,6 +41,11 @@ where
         self.flush_if_needed().await
     }
 
+    pub async fn status_string(&mut self, msg: &str) -> Result<(), SableError> {
+        self.resp_builder.status_string(&mut self.buffer, msg);
+        self.flush_if_needed().await
+    }
+
     pub async fn empty_array(&mut self) -> Result<(), SableError> {
         self.resp_builder.empty_array(&mut self.buffer);
         self.flush_if_needed().await
@@ -58,6 +63,12 @@ where
 
     pub async fn add_array_len(&mut self, len: usize) -> Result<(), SableError> {
         self.resp_builder.add_array_len(&mut self.buffer, len);
+        self.flush_if_needed().await
+    }
+
+    pub async fn add_resp_string(&mut self, resp2_buf: &[u8]) -> Result<(), SableError> {
+        self.resp_builder
+            .add_resp_string(&mut self.buffer, resp2_buf);
         self.flush_if_needed().await
     }
 

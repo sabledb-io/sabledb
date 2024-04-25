@@ -5,7 +5,7 @@ use crate::{
     utils::RespBuilderV2,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
     RedisCommandName, RequestParser, SableError, ServerCommands, ServerState, StorageAdapter,
-    StringCommands, Telemetry,
+    StringCommands, Telemetry, TransactionCommands,
 };
 
 use bytes::BytesMut;
@@ -69,6 +69,7 @@ fn new_client_id() -> u128 {
 pub struct ClientState {
     server_state: Arc<ServerState>,
     store: StorageAdapter,
+    store_with_cache: StorageAdapter,
     client_id: u128,
     pub tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     db_id: AtomicU16,
@@ -87,6 +88,9 @@ enum PreHandleCommandResult {
     ClientKilled,
     /// Running inside a "MULTI" block. This command should be queued
     QueueCommand,
+    /// The current txn should be aborted. This can happen for multiple reasons
+    /// e.g. a "No transaction" command was passed as part of the MULTI phase
+    CmdIsNotValidForTxn,
 }
 
 /// Used by the `block_until` return code
@@ -97,8 +101,46 @@ pub enum WaitResult {
 }
 
 impl ClientState {
+    pub fn new(
+        server_state: Arc<ServerState>,
+        store: StorageAdapter,
+        tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
+    ) -> Self {
+        ClientState {
+            server_state,
+            store_with_cache: store.transaction(),
+            store,
+            client_id: new_client_id(),
+            tls_acceptor,
+            db_id: AtomicU16::new(0),
+            attributes: DashMap::<String, String>::default(),
+            flags: AtomicU32::new(0),
+            cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
+            queued_commands: Arc::<SegQueue<Rc<RedisCommand>>>::default(),
+        }
+    }
+
+    /// Return the queued commands queue
+    pub fn commands_queue(&self) -> Arc<SegQueue<Rc<RedisCommand>>> {
+        self.queued_commands.clone()
+    }
+
+    /// Return the queued command as a vector. This function consumes the queue
+    /// after which `self.queued_commands.is_empty() == true`
+    pub fn take_queued_commands(&self) -> Vec<Rc<RedisCommand>> {
+        let mut vec_commands = Vec::<Rc<RedisCommand>>::with_capacity(self.queued_commands.len());
+        while let Some(cmd) = self.queued_commands.pop() {
+            vec_commands.push(cmd);
+        }
+        vec_commands
+    }
+
     pub fn database(&self) -> &StorageAdapter {
-        &self.store
+        if self.is_txn_state_exec() {
+            &self.store_with_cache
+        } else {
+            &self.store
+        }
     }
 
     pub fn id(&self) -> u128 {
@@ -264,18 +306,7 @@ impl Client {
         tls_acceptor: Option<Rc<tokio_rustls::TlsAcceptor>>,
     ) -> Self {
         Telemetry::inc_connections_opened();
-        let state = Rc::new(ClientState {
-            server_state,
-            store,
-            client_id: new_client_id(),
-            tls_acceptor,
-            db_id: AtomicU16::new(0),
-            attributes: DashMap::<String, String>::default(),
-            flags: AtomicU32::new(0),
-            cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
-            queued_commands: Arc::<SegQueue<Rc<RedisCommand>>>::default(),
-        });
-
+        let state = Rc::new(ClientState::new(server_state, store, tls_acceptor));
         let state_clone = state.clone();
 
         // register this client
@@ -513,8 +544,18 @@ impl Client {
         } else if client_state.server_state.is_replica() && command.metadata().is_write_command() {
             PreHandleCommandResult::WriteInReadOnlyReplica
         } else if client_state.is_txn_state_multi() {
-            // Running within a "MULTI" block
-            PreHandleCommandResult::QueueCommand
+            if command.metadata().name().eq(&RedisCommandName::Exec) {
+                // we are in MULTI state and received an EXEC command
+                // allow it to continue
+                return PreHandleCommandResult::Continue;
+            } else {
+                // Running within a "MULTI" block
+                if command.metadata().is_notxn() {
+                    PreHandleCommandResult::CmdIsNotValidForTxn
+                } else {
+                    PreHandleCommandResult::QueueCommand
+                }
+            }
         } else {
             PreHandleCommandResult::Continue
         }
@@ -526,10 +567,8 @@ impl Client {
         command: Rc<RedisCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<ClientNextAction, SableError> {
-        let builder = RespBuilderV2::default();
-
-        // Can we handle this command?
         {
+            // In principal, can we handle this command?
             let mut resp_writer = RespWriter::new(tx, 128, client_state.clone());
             match Self::pre_handle_command(client_state.clone(), command.clone()) {
                 PreHandleCommandResult::WriteInReadOnlyReplica => {
@@ -546,16 +585,57 @@ impl Client {
                     resp_writer.flush().await?;
                     return Ok(ClientNextAction::TerminateConnection);
                 }
-                PreHandleCommandResult::Continue => {}
-                PreHandleCommandResult::QueueCommand => {
-                    // queue the command and reply with "QUEUED"
-                    client_state.queued_commands.push(command);
-                    resp_writer.error_string(Strings::QUEUED).await?;
+                PreHandleCommandResult::CmdIsNotValidForTxn => {
+                    resp_writer
+                        .error_string(&format!(
+                            "command {} can not be used in a MULTI / EXEC block",
+                            command.main_command()
+                        ))
+                        .await?;
                     resp_writer.flush().await?;
                     return Ok(ClientNextAction::NoAction);
                 }
+                PreHandleCommandResult::QueueCommand => {
+                    // queue the command and reply with "QUEUED"
+                    client_state.queued_commands.push(command);
+                    resp_writer.status_string(Strings::QUEUED).await?;
+                    resp_writer.flush().await?;
+                    return Ok(ClientNextAction::NoAction);
+                }
+                PreHandleCommandResult::Continue => {
+                    // fall through
+                }
             }
         }
+
+        // We break the match here into 2: EXEC and all other non EXEC commands
+        // we do this in order to be able to process these commands while in
+        // the `TransactionCommands::handle_command`. Rust async does not allow us to
+        // recursively call `Client::handle_command()`from within `TransactionCommands::handle_command()`
+        // as this will cause some compilation errors
+        let kind = command.metadata().name();
+        match kind {
+            RedisCommandName::Exec => {
+                match TransactionCommands::handle_exec(client_state.clone(), command, tx).await? {
+                    HandleCommandResult::Blocked(_) => Err(SableError::ClientInvalidState),
+                    HandleCommandResult::ResponseSent => Ok(ClientNextAction::NoAction),
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.client_id).await?;
+                        Ok(ClientNextAction::NoAction)
+                    }
+                }
+            }
+            _ => Self::handle_non_exec_command(client_state.clone(), command, tx).await,
+        }
+    }
+
+    /// Handle all commands, execpt for `Exec`
+    pub async fn handle_non_exec_command(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<ClientNextAction, SableError> {
+        let builder = RespBuilderV2::default();
         let kind = command.metadata().name();
         let client_action = match kind {
             RedisCommandName::Ping => {
@@ -711,6 +791,27 @@ impl Client {
             | RedisCommandName::Hsetnx
             | RedisCommandName::Hstrlen => {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
+                    HandleCommandResult::Blocked(_) => {
+                        return Err(SableError::OtherError(
+                            "Inernal error: client is in invalid state".to_string(),
+                        ));
+                    }
+                    HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.client_id).await?;
+                        ClientNextAction::NoAction
+                    }
+                }
+            }
+            RedisCommandName::Exec => {
+                // Well, this is unexpected. We shouldn't reach this pattern matching block
+                // with `Exec`... (it is handled earlier in the Client::handle_command)
+                return Err(SableError::OtherError(
+                    "Inernal error: client is in invalid state".to_string(),
+                ));
+            }
+            RedisCommandName::Multi => {
+                match TransactionCommands::handle_multi(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
                             "Inernal error: client is in invalid state".to_string(),

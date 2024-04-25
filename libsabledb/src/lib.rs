@@ -21,7 +21,7 @@ pub mod worker_manager;
 pub use client::{Client, ClientState, ClientStateFlags};
 pub use commands::{
     ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
-    ServerCommands, StringCommands,
+    ServerCommands, StringCommands, TransactionCommands,
 };
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
@@ -227,6 +227,37 @@ mod tests {
         let mut store = StorageAdapter::default();
         store.open(open_params).unwrap();
         (DirDeleter::with_path(database_fullpath), store)
+    }
+
+    pub async fn run_and_return_output(
+        cmd_args: Vec<String>,
+        client_state: std::rc::Rc<ClientState>,
+    ) -> Result<RedisObject, SableError> {
+        let mut sink = crate::tests::ResponseSink::with_name("run_and_return_output").await;
+        let cmd = std::rc::Rc::new(RedisCommand::for_test2(cmd_args));
+
+        match Client::handle_command(client_state, cmd, &mut sink.fp)
+            .await
+            .unwrap()
+        {
+            crate::commands::ClientNextAction::NoAction => {
+                match RespResponseParserV2::parse_response(
+                    sink.read_all().await.as_str().as_bytes(),
+                )
+                .unwrap()
+                {
+                    ParseResult::Ok((_, obj)) => {
+                        return Ok(obj);
+                    }
+                    _ => {
+                        return Err(SableError::OtherError("parsing error".into()));
+                    }
+                }
+            }
+            _ => {
+                return Err(SableError::NotFound);
+            }
+        }
     }
 
     #[test]

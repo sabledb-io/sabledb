@@ -234,6 +234,42 @@ impl LockManager {
         })
     }
 
+    /// Lock `slots`, exclusively
+    pub fn lock_multi_slots_exclusive<'a>(
+        mut slots: Vec<u16>,
+        client_state: Rc<ClientState>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(slots.len());
+
+        // the sorting is required to avoid deadlocks
+        slots.sort();
+        slots.dedup();
+
+        if client_state.is_txn_state_calc_slots() {
+            return Err(SableError::LockCancelledTxnPrep(slots));
+        } else if client_state.is_txn_state_exec() {
+            // The client is running an active transaction, lock was already obtained
+            return Self::noop_lock();
+        }
+
+        for idx in slots.into_iter() {
+            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+                unreachable!("No lock in index {}", idx);
+            };
+
+            if let Ok(lock) = lock.write() {
+                write_locks.push(lock);
+            } else {
+                panic!("Can't obtain lock for slot: {}", idx);
+            }
+        }
+
+        Ok(ShardLockGuard {
+            read_locks: None,
+            write_locks: Some(write_locks),
+        })
+    }
+
     fn lock_internal_key_shared<'a>(
         key: &BytesMut,
         client_state: Rc<ClientState>,

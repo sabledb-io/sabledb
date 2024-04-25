@@ -26,7 +26,7 @@ pub enum RedisCommandFlags {
     NoTxn = 1 << 5,
 }
 
-#[derive(Clone, Debug, Default, EnumString)]
+#[derive(Clone, Debug, Default, EnumString, PartialEq, Eq)]
 pub enum RedisCommandName {
     Append,
     Decr,
@@ -106,6 +106,9 @@ pub enum RedisCommandName {
     Hscan,
     Hsetnx,
     Hstrlen,
+    // Transaction
+    Multi,
+    Exec,
     NotSupported(String),
 }
 
@@ -813,6 +816,25 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hstrlen)
                         .read_only()
                         .with_arity(3),
+                ),
+                (
+                    "multi",
+                    CommandMetadata::new(RedisCommandName::Multi)
+                        .read_only()
+                        .with_arity(1)
+                        .with_last_key(0)
+                        .with_first_key(0)
+                        .with_step(0)
+                        .no_transaction(),
+                ),
+                (
+                    "exec",
+                    CommandMetadata::new(RedisCommandName::Exec)
+                        .read_only()
+                        .with_arity(1)
+                        .with_last_key(0)
+                        .with_first_key(0)
+                        .with_step(0),
                 ),
             ]),
         }

@@ -24,4 +24,5 @@ impl Strings {
     pub const INVALID_PRIMARY_PORT: &'static str = "ERR Invalid master port";
     pub const SERVER_CLOSED_CONNECTION: &'static str = "ERR: server closed the connection";
     pub const QUEUED: &'static str = "QUEUED";
+    pub const EXEC_WITHOUT_MULTI: &'static str = "ERR EXEC without MULTI";
 }

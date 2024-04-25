@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{atomic, atomic::Ordering};
 
 lazy_static::lazy_static! {
@@ -8,10 +7,9 @@ lazy_static::lazy_static! {
 
 /// Create a unique file for the process
 pub struct TempFile {
-    full_path: PathBuf,
+    full_path: String,
 }
 
-#[allow(dead_code)]
 impl TempFile {
     pub fn with_name(name: &str) -> Self {
         let full_path = format!(
@@ -24,13 +22,11 @@ impl TempFile {
         let full_path = full_path.replace('\\', "/");
         let full_path = full_path.replace("//", "/");
 
-        TempFile {
-            full_path: PathBuf::from(full_path),
-        }
+        TempFile { full_path }
     }
 
-    pub fn fullpath(&self) -> String {
-        self.full_path.to_string_lossy().to_string()
+    pub fn fullpath(&self) -> &String {
+        &self.full_path
     }
 }
 

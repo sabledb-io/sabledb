@@ -181,6 +181,13 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | command | ✓ |✓ |   |
 | command docs | ✓ | x |   |
 
+### Transaction
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| multi | ✓ |✓ |   |
+| exec | ✓ |✓ |   |
+
 ### Connection management commands
 
 | Command  | Supported  | Fully supported?  | Comment  |

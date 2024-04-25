@@ -7,6 +7,7 @@ const DOLLAR_LEN: usize = 1;
 
 //const PLUS: &str = "+";
 const ERR: &str = "-";
+const STATUS: &str = "+";
 const OK: &str = "+OK\r\n";
 const NULL_STRING: &str = "$-1\r\n";
 const EMPTY_ARRAY: &str = "*0\r\n";
@@ -69,6 +70,14 @@ impl RespBuilderV2 {
     pub fn error_string(&self, buffer: &mut BytesMut, msg: &str) {
         buffer.clear();
         self.append_str(buffer, ERR);
+        self.append_str(buffer, msg);
+        self.append_str(buffer, CRLF);
+    }
+
+    /// Clears the buffer and create a status string message
+    pub fn status_string(&self, buffer: &mut BytesMut, msg: &str) {
+        buffer.clear();
+        self.append_str(buffer, STATUS);
         self.append_str(buffer, msg);
         self.append_str(buffer, CRLF);
     }

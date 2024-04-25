@@ -1,6 +1,8 @@
+mod file_output_sink;
 mod resp_writer;
 mod temp_file;
 
+pub use file_output_sink::FileResponseSink;
 pub use resp_writer::RespWriter;
 pub use temp_file::TempFile;
 

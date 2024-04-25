@@ -14,6 +14,21 @@ macro_rules! expect_args_count {
 }
 
 #[macro_export]
+macro_rules! expect_args_count_tx {
+    ($cmd:expr, $expected_args_count:expr, $resp_writer:expr, $return_value:expr) => {
+        if !$cmd.expect_args_count($expected_args_count) {
+            let errmsg = format!(
+                "ERR wrong number of arguments for '{}' command",
+                $cmd.main_command()
+            );
+            $resp_writer.error_string(&errmsg).await?;
+            $resp_writer.flush().await?;
+            return Ok($return_value);
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! check_args_count {
     ($cmd:expr, $expected_args_count:expr, $response_buffer:expr) => {
         expect_args_count!($cmd, $expected_args_count, $response_buffer, ())
@@ -24,7 +39,7 @@ macro_rules! check_args_count {
 macro_rules! check_args_count_tx {
     ($cmd:expr, $expected_args_count:expr, $tx:expr) => {{
         let builder = RespBuilderV2::default();
-        let mut response_buffer = BytesMut::with_capacity(128);
+        let mut response_buffer = bytes::BytesMut::with_capacity(128);
         if !$cmd.expect_args_count($expected_args_count) {
             builder.error_string(
                 &mut response_buffer,
@@ -182,6 +197,7 @@ mod list_commands;
 mod server_commands;
 mod string_commands;
 mod strings;
+mod transaction_commands;
 
 pub use crate::commands::strings::Strings;
 pub use base_commands::BaseCommands;
@@ -194,5 +210,6 @@ pub use hash_commands::HashCommands;
 pub use list_commands::ListCommands;
 pub use server_commands::ServerCommands;
 pub use string_commands::StringCommands;
+pub use transaction_commands::TransactionCommands;
 
 use tokio::{sync::mpsc::Receiver, time::Duration};

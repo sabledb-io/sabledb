@@ -52,6 +52,8 @@ pub enum SableError {
     /// and return the requested slots instead
     #[error("Lock cancelled. Client in preparing transcation state")]
     LockCancelledTxnPrep(Vec<u16>),
+    #[error("Client is in invalid state")]
+    ClientInvalidState,
 }
 
 #[allow(dead_code)]
