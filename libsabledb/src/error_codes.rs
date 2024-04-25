@@ -48,6 +48,10 @@ pub enum SableError {
     SerialisationError,
     #[error("No active transcation")]
     NoActiveTransaction,
+    /// When the client state is in "Preparing Txn", we cancel the lock
+    /// and return the requested slots instead
+    #[error("Lock cancelled. Client in preparing transcation state")]
+    LockCancelledTxnPrep(Vec<u16>),
 }
 
 #[allow(dead_code)]

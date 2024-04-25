@@ -216,7 +216,7 @@ impl StorageTrait for StorageRocksDb {
             "Restoring database from checkpoint: {}",
             backup_location.display()
         );
-        let _unused = crate::LockManager::lock_all_keys_shared();
+        let _unused = crate::LockManager::lock_all_keys_shared()?;
         tracing::info!("Database is now locked (read-only mode)");
 
         if delete_all_before_store {

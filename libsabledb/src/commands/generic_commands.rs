@@ -68,7 +68,7 @@ impl GenericCommands {
         let db_id = client_state.database_id();
         for user_key in iter {
             // obtain the lock per key
-            let _unused = LockManager::lock_user_key_exclusive(user_key, client_state.clone());
+            let _unused = LockManager::lock_user_key_exclusive(user_key, client_state.clone())?;
             let key_type =
                 Self::query_key_type(client_state.clone(), command.clone(), user_key).await?;
             match key_type {
@@ -118,7 +118,7 @@ impl GenericCommands {
         let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone());
+        let _unused = LockManager::lock_user_key_shared(key, client_state.clone())?;
         let generic_db =
             GenericDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((_, value_metadata)) = generic_db.get(key)? {
@@ -203,7 +203,7 @@ impl GenericCommands {
         };
 
         let db_id = client_state.database_id();
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone());
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let generic_db = GenericDb::with_storage(client_state.database(), db_id);
 
         // Make sure the key exists in the database
