@@ -206,6 +206,12 @@ impl BatchUpdate {
     }
 }
 
+enum TxnWriteCacheGetResult {
+    NotFound,
+    Deleted,
+    Found(BytesMut),
+}
+
 /// Transcation write cache.
 ///
 /// Used by the storage adapter to aggregate all writes (Put/Delete) into a single atomic batch
@@ -254,22 +260,18 @@ impl TxnWriteCache {
     /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
     /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
     /// this means that it was deleted, so return a `None` as well
-    pub fn get(
-        &self,
-        key: &BytesMut,
-        store: &StorageAdapter,
-    ) -> Result<Option<BytesMut>, SableError> {
+    pub fn get(&self, key: &BytesMut) -> Result<TxnWriteCacheGetResult, SableError> {
         let Some(value) = self.changes.get(key) else {
-            return store.get(key);
+            return Ok(TxnWriteCacheGetResult::NotFound);
         };
 
         // found an match in cache
         if let Some(value) = value.value() {
             // an actual value
-            Ok(Some(value.data().clone()))
+            Ok(TxnWriteCacheGetResult::Found(value.data().clone()))
         } else {
             // the value was deleted
-            Ok(None)
+            Ok(TxnWriteCacheGetResult::Deleted)
         }
     }
 
@@ -364,7 +366,10 @@ impl StorageAdapter {
         };
 
         if let Some(txn) = &self.txn {
-            txn.get(key, self)
+            match txn.get(key)? {
+                TxnWriteCacheGetResult::NotFound | TxnWriteCacheGetResult::Deleted => Ok(None),
+                TxnWriteCacheGetResult::Found(data) => Ok(Some(data)),
+            }
         } else {
             db.get(key)
         }

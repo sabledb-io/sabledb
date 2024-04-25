@@ -109,6 +109,7 @@ pub enum RedisCommandName {
     // Transaction
     Multi,
     Exec,
+    Discard,
     NotSupported(String),
 }
 
@@ -830,6 +831,15 @@ impl Default for CommandsManager {
                 (
                     "exec",
                     CommandMetadata::new(RedisCommandName::Exec)
+                        .read_only()
+                        .with_arity(1)
+                        .with_last_key(0)
+                        .with_first_key(0)
+                        .with_step(0),
+                ),
+                (
+                    "discard",
+                    CommandMetadata::new(RedisCommandName::Discard)
                         .read_only()
                         .with_arity(1)
                         .with_last_key(0)

@@ -71,7 +71,12 @@ impl ListCommands {
                 Self::rpoplpush(client_state, command, response_buffer).await
             }
             RedisCommandName::Brpoplpush => {
-                Self::blocking_rpoplpush(client_state, command, response_buffer).await
+                // When in transaction, run the non-blocking version
+                if client_state.is_txn_state_exec() {
+                    Self::rpoplpush(client_state, command, response_buffer).await
+                } else {
+                    Self::blocking_rpoplpush(client_state, command, response_buffer).await
+                }
             }
             RedisCommandName::Blpop => {
                 Self::blocking_pop(client_state, command, response_buffer, ListFlags::FromLeft)
@@ -82,7 +87,12 @@ impl ListCommands {
                     .await
             }
             RedisCommandName::Blmove => {
-                Self::blocking_move(client_state, command, response_buffer).await
+                // When in transaction, run the non-blocking version
+                if client_state.is_txn_state_exec() {
+                    Self::lmove(client_state, command, response_buffer).await
+                } else {
+                    Self::blocking_move(client_state, command, response_buffer).await
+                }
             }
             RedisCommandName::Blmpop => {
                 Self::lmpop(client_state, command, true, response_buffer).await
@@ -336,7 +346,7 @@ impl ListCommands {
                         .await;
                     Ok(HandleCommandResult::Blocked((rx, blocking_duration)))
                 } else {
-                    builder.null_string(&mut response_buffer);
+                    builder.null_array(&mut response_buffer);
                     Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                 }
             }
@@ -344,6 +354,7 @@ impl ListCommands {
     }
 
     /// `LMPOP numkeys key [key ...] <LEFT | RIGHT> [COUNT count]`
+    /// `BLMPOP timeout numkeys key [key ...] <LEFT | RIGHT> [COUNT count]`
     /// Pops one or more elements from the first non-empty list key from the list of provided key names
     pub async fn lmpop(
         client_state: Rc<ClientState>,
@@ -394,7 +405,6 @@ impl ListCommands {
             RightOrLeft,
             Count,
         }
-
         let mut state = State::CollectingKeys;
         let mut list_flags: Option<ListFlags> = None;
         let mut count = 1;
@@ -491,6 +501,7 @@ impl ListCommands {
             }
             MultiPopResult::None => {
                 // block the client here
+                let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
                 if allow_blocking {
                     let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
                     let rx = client_state.server_inner_state().block_client(&keys).await;
@@ -499,7 +510,7 @@ impl ListCommands {
                         Duration::from_millis(timeout_ms as u64),
                     )))
                 } else {
-                    builder.null_string(&mut response_buffer);
+                    builder.null_array(&mut response_buffer);
                     Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                 }
             }
@@ -602,6 +613,12 @@ impl ListCommands {
         {
             Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         } else {
+            if client_state.is_txn_state_exec() {
+                // do not block the client
+                let builder = RespBuilderV2::default();
+                builder.null_array(&mut response_buffer);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+            }
             // Block the client
             let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
             let rx = client_state.server_inner_state().block_client(&keys).await;
@@ -615,6 +632,7 @@ impl ListCommands {
                 );
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             };
+
             let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
             Ok(HandleCommandResult::Blocked((
                 rx,
@@ -1116,21 +1134,21 @@ mod tests {
         (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "sdsd"], "-ERR timeout is not a float or out of range\r\n"),
         (vec!["llen", "brpoplpush_new_list"], ":3\r\n"),
         (vec!["lrange", "brpoplpush_new_list", "0", "-1"], "*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"),
-        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "$-1\r\n"),
+        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "*-1\r\n"),
         ], "brpoplpush"; "brpoplpush")]
     #[test_case(vec![
         (vec!["rpush", "blpop_list1", "a", "b", "c"], ":3\r\n"),
         (vec!["blpop", "blpop_list2", "blpop_list1", "1"], "*2\r\n$11\r\nblpop_list1\r\n$1\r\na\r\n"),
         (vec!["blpop", "blpop_list2", "blpop_list1", "1"], "*2\r\n$11\r\nblpop_list1\r\n$1\r\nb\r\n"),
         (vec!["blpop", "blpop_list2", "blpop_list1", "1"], "*2\r\n$11\r\nblpop_list1\r\n$1\r\nc\r\n"),
-        (vec!["blpop", "blpop_list2", "blpop_list1", "1"], "$-1\r\n"), // timeout
+        (vec!["blpop", "blpop_list2", "blpop_list1", "1"], "*-1\r\n"), // timeout
         ], "blpop"; "blpop")]
     #[test_case(vec![
         (vec!["rpush", "brpop_list1", "a", "b", "c"], ":3\r\n"),
         (vec!["brpop", "brpop_list2", "brpop_list1", "1"], "*2\r\n$11\r\nbrpop_list1\r\n$1\r\nc\r\n"),
         (vec!["brpop", "brpop_list2", "brpop_list1", "1"], "*2\r\n$11\r\nbrpop_list1\r\n$1\r\nb\r\n"),
         (vec!["brpop", "brpop_list2", "brpop_list1", "1"], "*2\r\n$11\r\nbrpop_list1\r\n$1\r\na\r\n"),
-        (vec!["brpop", "brpop_list2", "brpop_list1", "1"], "$-1\r\n"), // timeout
+        (vec!["brpop", "brpop_list2", "brpop_list1", "1"], "*-1\r\n"), // timeout
         ], "brpop"; "brpop")]
     #[test_case(vec![
         (vec!["rpush", "list1", "a", "b", "c"], ":3\r\n"),
@@ -1143,7 +1161,7 @@ mod tests {
         (vec!["lmpop", "2", "list1", "list2", "left", "COUNT", "bla"], "-ERR syntax error\r\n"),
         (vec!["lmpop", "2", "list1", "list2", "left", "COUNT", "1"], "*2\r\n$5\r\nlist1\r\n*1\r\n$1\r\nb\r\n"),
         (vec!["lmpop", "2", "list1", "list2", "left", "COUNT", "1"], "*2\r\n$5\r\nlist2\r\n*1\r\n$1\r\nd\r\n"),
-        (vec!["lmpop", "2", "list1", "list2", "left", "COUNT", "1"], "$-1\r\n"),
+        (vec!["lmpop", "2", "list1", "list2", "left", "COUNT", "1"], "*-1\r\n"),
         ], "lmpop"; "lmpop")]
     #[test_case(vec![
         (vec!["rpush", "list1", "a", "b", "c"], ":3\r\n"),
@@ -1160,13 +1178,13 @@ mod tests {
         (vec!["lrange", "list1", "0", "-1"], "*6\r\n$1\r\n_\r\n$1\r\na\r\n$1\r\nb\r\n$3\r\nb.1\r\n$1\r\nc\r\n$1\r\nd\r\n"),
         ], "linsert"; "linsert")]
     #[test_case(vec![
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"),
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"),
         (vec!["rpush", "blmove_src", "a", "b", "c"], ":3\r\n"),
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\na\r\n"), // a
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nb\r\n"), // b
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nc\r\n"), // c
         (vec!["lrange", "blmove_target", "0", "-1"], "*3\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n"),
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"), // timeout
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"), // timeout
         ], "blmove"; "blmove")]
     #[test_case(vec![
         (vec!["rpush", "blmpop_list1", "a", "b", "c"], ":3\r\n"),
@@ -1178,7 +1196,7 @@ mod tests {
         (vec!["blmpop", "1", "2", "blmpop_list1", "blmpop_list2", "right", "COUNT", "1"], "*2\r\n$12\r\nblmpop_list1\r\n*1\r\n$1\r\nb\r\n"),
         // pop from the second list now ("d")
         (vec!["blmpop", "1", "2", "blmpop_list1", "blmpop_list2", "right", "COUNT", "1"], "*2\r\n$12\r\nblmpop_list2\r\n*1\r\n$1\r\nd\r\n"),
-        (vec!["blmpop", "1", "2", "blmpop_list1", "blmpop_list2", "right", "COUNT", "1"], "$-1\r\n"),
+        (vec!["blmpop", "1", "2", "blmpop_list1", "blmpop_list2", "right", "COUNT", "1"], "*-1\r\n"),
         (vec!["blmpop", "1", "2", "blmpop_list1", "blmpop_list2", "left", "COUNT"], "-ERR syntax error\r\n"),
         ], "blmpop"; "blmpop")]
     fn test_list_commands(args_vec: Vec<(Vec<&'static str>, &'static str)>, test_name: &str) {
@@ -1221,7 +1239,7 @@ mod tests {
                             crate::client::WaitResult::Timeout => {
                                 let builder = RespBuilderV2::default();
                                 let mut response = BytesMut::new();
-                                builder.null_string(&mut response);
+                                builder.null_array(&mut response);
                                 response
                             }
                         };

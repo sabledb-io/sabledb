@@ -9,9 +9,10 @@ const DOLLAR_LEN: usize = 1;
 const ERR: &str = "-";
 const STATUS: &str = "+";
 const OK: &str = "+OK\r\n";
+const EMPTY_STRING: &str = "$0\r\n\r\n";
 const NULL_STRING: &str = "$-1\r\n";
 const EMPTY_ARRAY: &str = "*0\r\n";
-const EMPTY_STRING: &str = "$0\r\n\r\n";
+const NULL_ARRAY: &str = "*-1\r\n";
 const PONG: &str = "+PONG\r\n";
 
 #[derive(Default, Clone)]
@@ -58,6 +59,12 @@ impl RespBuilderV2 {
     pub fn null_string(&self, buffer: &mut BytesMut) {
         buffer.clear();
         self.add_null_string_internal(buffer);
+    }
+
+    /// Clears the buffer and create a null array RESP response
+    pub fn null_array(&self, buffer: &mut BytesMut) {
+        buffer.clear();
+        self.add_null_array(buffer);
     }
 
     /// Clears the buffer and create an empty string RESP response
@@ -185,5 +192,11 @@ impl RespBuilderV2 {
     /// NOTE: this function does not clear the buffer
     pub fn add_empty_array(&self, buffer: &mut BytesMut) {
         buffer.extend_from_slice(EMPTY_ARRAY.as_bytes());
+    }
+
+    /// Append an empty array
+    /// NOTE: this function does not clear the buffer
+    pub fn add_null_array(&self, buffer: &mut BytesMut) {
+        buffer.extend_from_slice(NULL_ARRAY.as_bytes());
     }
 }

@@ -192,6 +192,13 @@ impl ClientState {
         self.enable_client_flag(ClientStateFlags::TXN_MULTI, enabled)
     }
 
+    pub fn discard_transaction(&self) {
+        self.enable_client_flag(ClientStateFlags::TXN_MULTI, false);
+        self.enable_client_flag(ClientStateFlags::TXN_CALC_SLOTS, false);
+        self.enable_client_flag(ClientStateFlags::TXN_EXEC, false);
+        let _ = self.take_queued_commands();
+    }
+
     pub fn is_txn_state_multi(&self) -> bool {
         self.is_flag_enabled(ClientStateFlags::TXN_MULTI)
     }
@@ -528,7 +535,7 @@ impl Client {
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::new();
 
-        builder.null_string(&mut response_buffer);
+        builder.null_array(&mut response_buffer);
         Ok(response_buffer)
     }
 
@@ -544,16 +551,17 @@ impl Client {
         } else if client_state.server_state.is_replica() && command.metadata().is_write_command() {
             PreHandleCommandResult::WriteInReadOnlyReplica
         } else if client_state.is_txn_state_multi() {
-            if command.metadata().name().eq(&RedisCommandName::Exec) {
-                // we are in MULTI state and received an EXEC command
-                // allow it to continue
-                return PreHandleCommandResult::Continue;
-            } else {
-                // Running within a "MULTI" block
-                if command.metadata().is_notxn() {
-                    PreHandleCommandResult::CmdIsNotValidForTxn
-                } else {
-                    PreHandleCommandResult::QueueCommand
+            // All commands by "exec" and "discard" are queued
+            match command.metadata().name() {
+                RedisCommandName::Exec | RedisCommandName::Discard => {
+                    PreHandleCommandResult::Continue
+                }
+                _ => {
+                    if command.metadata().is_notxn() {
+                        PreHandleCommandResult::CmdIsNotValidForTxn
+                    } else {
+                        PreHandleCommandResult::QueueCommand
+                    }
                 }
             }
         } else {
@@ -806,12 +814,11 @@ impl Client {
             RedisCommandName::Exec => {
                 // Well, this is unexpected. We shouldn't reach this pattern matching block
                 // with `Exec`... (it is handled earlier in the Client::handle_command)
-                return Err(SableError::OtherError(
-                    "Inernal error: client is in invalid state".to_string(),
-                ));
+                return Err(SableError::ClientInvalidState);
             }
-            RedisCommandName::Multi => {
-                match TransactionCommands::handle_multi(client_state.clone(), command, tx).await? {
+            RedisCommandName::Multi | RedisCommandName::Discard => {
+                match TransactionCommands::handle_command(client_state.clone(), command, tx).await?
+                {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
                             "Inernal error: client is in invalid state".to_string(),

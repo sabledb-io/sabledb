@@ -187,6 +187,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | multi | ✓ |✓ |   |
 | exec | ✓ |✓ |   |
+| discard | ✓ |✓ |   |
 
 ### Connection management commands
 

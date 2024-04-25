@@ -25,4 +25,5 @@ impl Strings {
     pub const SERVER_CLOSED_CONNECTION: &'static str = "ERR: server closed the connection";
     pub const QUEUED: &'static str = "QUEUED";
     pub const EXEC_WITHOUT_MULTI: &'static str = "ERR EXEC without MULTI";
+    pub const DISCARD_WITHOUT_MULTI: &'static str = "ERR DISCARD without MULTI";
 }
