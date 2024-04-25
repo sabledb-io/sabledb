@@ -45,7 +45,7 @@ macro_rules! check_value_type {
     ($key_md:expr, $expected_type:expr, $response_buffer:expr) => {
         if !$key_md.is_type($expected_type) {
             let builder = RespBuilderV2::default();
-            builder.error_string($response_buffer, ErrorStrings::WRONGTYPE);
+            builder.error_string($response_buffer, Strings::WRONGTYPE);
             return Ok(());
         }
     };
@@ -56,10 +56,7 @@ macro_rules! parse_string_to_number {
     ($val:expr, $response_buffer:expr) => {{
         let Ok(res) = StringUtils::parse_str_to_number::<u64>($val) else {
             let builder = RespBuilderV2::default();
-            builder.error_string(
-                $response_buffer,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            );
+            builder.error_string($response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
             return Ok(());
         };
         res
@@ -94,7 +91,7 @@ macro_rules! to_number {
             $number_type,
             $response_buffer,
             $err_val,
-            ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE
+            Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE
         )
     }};
 }
@@ -118,7 +115,7 @@ macro_rules! command_arg_at_as_str {
     ($cmd:expr, $pos:expr) => {{
         let Some(cmdarg) = $cmd.arg_as_lowercase_string($pos) else {
             return Err(SableError::InvalidArgument(
-                ErrorStrings::OUT_OF_BOUNDS.to_string(),
+                Strings::OUT_OF_BOUNDS.to_string(),
             ));
         };
         cmdarg
@@ -170,7 +167,7 @@ pub enum HandleCommandResult {
 pub enum ClientNextAction {
     SendResponse(bytes::BytesMut),
     Wait((Receiver<u8>, Duration)),
-    TerminateConnection(bytes::BytesMut),
+    TerminateConnection,
     /// Response was already sent to the client
     NoAction,
 }
@@ -179,14 +176,14 @@ mod base_commands;
 mod client_commands;
 mod command;
 mod commander;
-mod error_strings;
 mod generic_commands;
 mod hash_commands;
 mod list_commands;
 mod server_commands;
 mod string_commands;
+mod strings;
 
-pub use crate::commands::error_strings::ErrorStrings;
+pub use crate::commands::strings::Strings;
 pub use base_commands::BaseCommands;
 pub use client_commands::ClientCommands;
 pub use command::commands_manager;

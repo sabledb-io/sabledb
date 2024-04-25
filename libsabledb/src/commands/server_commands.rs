@@ -3,7 +3,7 @@ use crate::{
     check_args_count, check_value_type,
     client::ClientState,
     command_arg_at,
-    commands::ErrorStrings,
+    commands::Strings,
     commands::{HandleCommandResult, StringCommands},
     metadata::CommonValueMetadata,
     parse_string_to_number,
@@ -112,7 +112,7 @@ impl ServerCommands {
             }
             (_, _) => {
                 let Ok(port) = second_arg.parse::<u16>() else {
-                    builder.error_string(response_buffer, ErrorStrings::INVALID_PRIMARY_PORT);
+                    builder.error_string(response_buffer, Strings::INVALID_PRIMARY_PORT);
                     return Ok(());
                 };
                 tracing::info!("Connecting to primary at: {}:{}", first_arg, port);

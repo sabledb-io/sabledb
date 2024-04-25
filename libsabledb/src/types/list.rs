@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use crate::{
-    commands::ErrorStrings,
+    commands::Strings,
     iter_next_or_prev, list_md_or_null_string, list_or_size_0,
     metadata::PrimaryKeyMetadata,
     metadata::{CommonValueMetadata, Encoding, ListValueMetadata},
@@ -129,7 +129,7 @@ impl<'a> List<'a> {
         match self.blocking_pop_internal(lists, count, flags)? {
             BlockingPopInternalResult::WouldBlock => Ok(BlockingCommandResult::WouldBlock),
             BlockingPopInternalResult::InvalidArguments => {
-                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR);
+                builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
                 Ok(BlockingCommandResult::Ok)
             }
             BlockingPopInternalResult::Some((list_name, values)) => {
@@ -159,7 +159,7 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let mut list_md = match self.get_list_metadata_with_name(list_name)? {
             GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {
@@ -278,7 +278,7 @@ impl<'a> List<'a> {
                 return Ok(());
             }
             IterResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             IterResult::Some(item) => item,
@@ -298,11 +298,11 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let item = match self.find_by_index(list_name, index)? {
             IterResult::None => {
-                builder.error_string(response_buffer, ErrorStrings::INDEX_OUT_OF_BOUNDS);
+                builder.error_string(response_buffer, Strings::INDEX_OUT_OF_BOUNDS);
                 return Ok(());
             }
             IterResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             IterResult::Some(item) => item,
@@ -327,7 +327,7 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let mut list_md = match self.get_list_metadata_with_name(list_name)? {
             GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {
@@ -394,7 +394,7 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         match (count, self.pos(list_name, user_value, rank, count, maxlen)?) {
             (_, PosResult::InvalidRank) => {
-                builder.error_string(response_buffer, ErrorStrings::LIST_RANK_INVALID);
+                builder.error_string(response_buffer, Strings::LIST_RANK_INVALID);
             }
             (Some(_), PosResult::Some(value)) => {
                 // count provided, we return array
@@ -417,7 +417,7 @@ impl<'a> List<'a> {
                 }
             }
             (_, PosResult::WrongType) => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
             }
             (_, PosResult::None) => {
                 builder.null_string(response_buffer);
@@ -436,7 +436,7 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let list = match self.get_list_metadata_with_name(list_name)? {
             GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {
@@ -467,7 +467,7 @@ impl<'a> List<'a> {
 
             let cur_item = match self.next(&list, cur_item_opt.clone())? {
                 IterResult::WrongType => {
-                    builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                    builder.error_string(response_buffer, Strings::WRONGTYPE);
                     return Ok(());
                 }
                 IterResult::None => {
@@ -501,7 +501,7 @@ impl<'a> List<'a> {
         let builder = RespBuilderV2::default();
         let mut list = match self.get_list_metadata_with_name(list_name)? {
             GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {
@@ -532,7 +532,7 @@ impl<'a> List<'a> {
 
             let cur_item = match self.next(&list, cur_item_opt.clone())? {
                 IterResult::WrongType => {
-                    builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                    builder.error_string(response_buffer, Strings::WRONGTYPE);
                     return Ok(());
                 }
                 IterResult::None => {
@@ -577,7 +577,7 @@ impl<'a> List<'a> {
             }
             GetListMetadataResult::Some(list) => list,
             GetListMetadataResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
         };

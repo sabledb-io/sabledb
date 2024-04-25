@@ -1,7 +1,7 @@
-pub struct ErrorStrings {}
+pub struct Strings {}
 
 #[allow(dead_code)]
-impl ErrorStrings {
+impl Strings {
     pub const VALUE_NOT_AN_INT_OR_OUT_OF_RANGE: &'static str =
         "ERR value is not an integer or out of range";
     pub const VALUE_NOT_VALID_FLOAT: &'static str = "ERR value is not a valid float";
@@ -22,4 +22,6 @@ impl ErrorStrings {
     pub const WRITE_CMD_AGAINST_REPLICA: &'static str =
         "READONLY You can't write against a read only replica.";
     pub const INVALID_PRIMARY_PORT: &'static str = "ERR Invalid master port";
+    pub const SERVER_CLOSED_CONNECTION: &'static str = "ERR: server closed the connection";
+    pub const QUEUED: &'static str = "QUEUED";
 }

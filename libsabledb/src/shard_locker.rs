@@ -169,9 +169,9 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        if client_state.is_pre_txn_state() {
+        if client_state.is_txn_state_calc_slots() {
             return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_active() {
+        } else if client_state.is_txn_state_exec() {
             // The client is running an active transaction, lock was already obtained
             return Self::noop_lock();
         }
@@ -209,9 +209,9 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        if client_state.is_pre_txn_state() {
+        if client_state.is_txn_state_calc_slots() {
             return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_active() {
+        } else if client_state.is_txn_state_exec() {
             // The client is running an active transaction, lock was already obtained
             return Self::noop_lock();
         }
@@ -242,10 +242,10 @@ impl LockManager {
         // Calculate the slots and sort them
         let slot = calculate_slot(key);
 
-        if client_state.is_pre_txn_state() {
+        if client_state.is_txn_state_calc_slots() {
             let slots = vec![slot];
             return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_active() {
+        } else if client_state.is_txn_state_exec() {
             // The client is running an active transaction, lock was already obtained
             return Self::noop_lock();
         }
@@ -265,7 +265,6 @@ impl LockManager {
         })
     }
 
-    #[allow(dead_code)]
     fn noop_lock<'a>() -> Result<ShardLockGuard<'a>, SableError> {
         Ok(ShardLockGuard {
             write_locks: None,
@@ -281,10 +280,10 @@ impl LockManager {
         // Calculate the slots and sort them
         let slot = calculate_slot(key);
 
-        if client_state.is_pre_txn_state() {
+        if client_state.is_txn_state_calc_slots() {
             let slots = vec![slot];
             return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_active() {
+        } else if client_state.is_txn_state_exec() {
             // The client is running an active transaction, lock was already obtained
             return Self::noop_lock();
         }
@@ -374,7 +373,7 @@ mod tests {
         let (_guard, store) = crate::tests::open_store();
         let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        client.inner().set_pre_txn_state(true);
+        client.inner().set_txn_state_calc_slots(true);
 
         let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
         keys.push(k1);
@@ -403,7 +402,7 @@ mod tests {
         let (_guard, store) = crate::tests::open_store();
         let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        client.inner().set_txn_active(true);
+        client.inner().set_txn_state_exec(true);
 
         let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
         keys.push(k1);

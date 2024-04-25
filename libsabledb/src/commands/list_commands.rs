@@ -1,6 +1,6 @@
 use crate::{
     client::ClientState,
-    commands::{ErrorStrings, HandleCommandResult},
+    commands::{HandleCommandResult, Strings},
     to_number,
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2, SableError,
@@ -298,7 +298,7 @@ impl ListCommands {
             ("right", "left") => (ListFlags::FromRight, ListFlags::FromLeft),
             (_, _) => {
                 let builder = RespBuilderV2::default();
-                builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
         };
@@ -315,7 +315,7 @@ impl ListCommands {
         let builder = RespBuilderV2::default();
         match res {
             MoveResult::WrongType => {
-                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MoveResult::Some(popped_item) => {
@@ -416,7 +416,7 @@ impl ListCommands {
                             list_flags = Some(ListFlags::FromRight);
                         }
                         _ => {
-                            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                         }
                     }
@@ -427,8 +427,7 @@ impl ListCommands {
                     match argstr.as_str() {
                         "count" => {
                             let Some(elements_to_pop) = iter.next() else {
-                                builder
-                                    .error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                                 return Ok(HandleCommandResult::ResponseBufferUpdated(
                                     response_buffer,
                                 ));
@@ -437,8 +436,7 @@ impl ListCommands {
                             let Some(elements_to_pop) =
                                 BytesMutUtils::parse::<usize>(elements_to_pop)
                             else {
-                                builder
-                                    .error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                                 return Ok(HandleCommandResult::ResponseBufferUpdated(
                                     response_buffer,
                                 ));
@@ -457,7 +455,7 @@ impl ListCommands {
                             break; // Parsing is completed
                         }
                         _ => {
-                            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                         }
                     }
@@ -466,12 +464,12 @@ impl ListCommands {
         }
 
         if keys.len() != numkeys {
-            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
 
         let Some(list_flags) = list_flags else {
-            builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
@@ -479,7 +477,7 @@ impl ListCommands {
         let list = List::with_storage(client_state.database(), client_state.database_id());
         match list.multi_pop(&keys, count, list_flags)? {
             MultiPopResult::WrongType => {
-                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             MultiPopResult::Some((list_name, values)) => {
@@ -744,7 +742,7 @@ impl ListCommands {
             "before" => ListFlags::InsertBefore,
             _ => {
                 let builder = RespBuilderV2::default();
-                builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
         };
@@ -831,7 +829,7 @@ impl ListCommands {
 
                     // rank can not be 0
                     if value == 0 {
-                        builder.error_string(&mut response_buffer, ErrorStrings::LIST_RANK_INVALID);
+                        builder.error_string(&mut response_buffer, Strings::LIST_RANK_INVALID);
                         return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     rank = Some(value);
@@ -844,10 +842,7 @@ impl ListCommands {
                         Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
                     );
                     if value < 0 {
-                        builder.error_string(
-                            &mut response_buffer,
-                            ErrorStrings::COUNT_CANT_BE_NEGATIVE,
-                        );
+                        builder.error_string(&mut response_buffer, Strings::COUNT_CANT_BE_NEGATIVE);
                         return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     count = Some(value.try_into().unwrap_or(1));
@@ -861,16 +856,14 @@ impl ListCommands {
                     );
 
                     if value < 0 {
-                        builder.error_string(
-                            &mut response_buffer,
-                            ErrorStrings::MAXLNE_CANT_BE_NEGATIVE,
-                        );
+                        builder
+                            .error_string(&mut response_buffer, Strings::MAXLNE_CANT_BE_NEGATIVE);
                         return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                     }
                     maxlen = Some(value.try_into().unwrap_or(0));
                 }
                 _ => {
-                    builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                     return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
             }
@@ -1201,7 +1194,7 @@ mod tests {
                     .await
                     .unwrap()
                 {
-                    ClientNextAction::TerminateConnection(_) => {}
+                    ClientNextAction::TerminateConnection => {}
                     ClientNextAction::SendResponse(response_buffer) => {
                         if BytesMutUtils::to_string(&response_buffer).as_str() != expected_value {
                             println!("Command: {:?}", cmd);
@@ -1251,7 +1244,7 @@ mod tests {
         match next_action {
             ClientNextAction::NoAction => panic!("expected to be blocked"),
             ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
-            ClientNextAction::TerminateConnection(_) => panic!("expected to be blocked"),
+            ClientNextAction::TerminateConnection => panic!("expected to be blocked"),
             ClientNextAction::Wait((rx, duration)) => (rx, duration),
         }
     }
@@ -1267,7 +1260,7 @@ mod tests {
             ClientNextAction::NoAction => {
                 BytesMutUtils::from_string(sink.read_all().await.as_str())
             }
-            ClientNextAction::TerminateConnection(_) => {
+            ClientNextAction::TerminateConnection => {
                 panic!("Command {:?} is not expected to be blocked", cmd)
             }
             ClientNextAction::Wait(_) => panic!("Command {:?} is not expected to be blocked", cmd),

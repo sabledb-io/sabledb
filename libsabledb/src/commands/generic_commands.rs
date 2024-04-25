@@ -1,4 +1,4 @@
-use crate::commands::ErrorStrings;
+use crate::commands::Strings;
 #[allow(unused_imports)]
 use crate::{
     check_args_count, check_value_type,
@@ -195,10 +195,7 @@ impl GenericCommands {
 
         // Convert into seconds
         let Some(seconds) = BytesMutUtils::parse::<u64>(seconds) else {
-            builder.error_string(
-                response_buffer,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            );
+            builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
             return Ok(());
         };
 

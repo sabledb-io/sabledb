@@ -3,7 +3,7 @@ use crate::{client::ClientState, commands::BaseCommands, metadata::Encoding, sto
 use crate::{
     check_args_count, check_value_type, command_arg_at, command_arg_at_as_str,
     commands::SetFlags,
-    commands::{ErrorStrings, HandleCommandResult},
+    commands::{HandleCommandResult, Strings},
     metadata::ValueTypeIs,
     parse_string_to_number,
     storage::PutFlags,
@@ -426,7 +426,7 @@ impl StringCommands {
                 -1,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         } else {
             Self::incr_by_internal::<i64>(
@@ -434,7 +434,7 @@ impl StringCommands {
                 -1,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         };
 
@@ -472,7 +472,7 @@ impl StringCommands {
                 1,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         } else {
             Self::incr_by_internal::<i64>(
@@ -480,7 +480,7 @@ impl StringCommands {
                 1,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         };
 
@@ -520,7 +520,7 @@ impl StringCommands {
                 -decrement,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         } else {
             Self::incr_by_internal::<i64>(
@@ -528,7 +528,7 @@ impl StringCommands {
                 -decrement,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         };
 
@@ -568,7 +568,7 @@ impl StringCommands {
                 decrement,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         } else {
             Self::incr_by_internal::<i64>(
@@ -576,7 +576,7 @@ impl StringCommands {
                 decrement,
                 response_buffer,
                 false,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
             )
         };
 
@@ -608,7 +608,7 @@ impl StringCommands {
             f64,
             response_buffer,
             Ok(()),
-            ErrorStrings::VALUE_NOT_VALID_FLOAT
+            Strings::VALUE_NOT_VALID_FLOAT
         );
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
@@ -622,7 +622,7 @@ impl StringCommands {
                 decrement,
                 response_buffer,
                 true,
-                ErrorStrings::VALUE_NOT_VALID_FLOAT,
+                Strings::VALUE_NOT_VALID_FLOAT,
             )
         } else {
             Self::incr_by_internal::<f64>(
@@ -630,7 +630,7 @@ impl StringCommands {
                 decrement,
                 response_buffer,
                 true,
-                ErrorStrings::VALUE_NOT_VALID_FLOAT,
+                Strings::VALUE_NOT_VALID_FLOAT,
             )
         };
 
@@ -687,7 +687,7 @@ impl StringCommands {
             let Some(extra_arg) = command.arg_as_lowercase_string(i) else {
                 // this shouldn't happen
                 return Err(SableError::InvalidArgument(
-                    ErrorStrings::LCS_FAILED_TO_READ_EXTRA_ARG.to_string(),
+                    Strings::LCS_FAILED_TO_READ_EXTRA_ARG.to_string(),
                 ));
             };
 
@@ -704,7 +704,7 @@ impl StringCommands {
 
         // Check for conflicts
         if extra_args_map.contains_key(LEN) && extra_args_map.contains_key(IDX) {
-            builder.error_string(response_buffer, ErrorStrings::LCS_LEN_AND_IDX);
+            builder.error_string(response_buffer, Strings::LCS_LEN_AND_IDX);
             return Ok(());
         }
 
@@ -723,7 +723,7 @@ impl StringCommands {
         }
 
         // default: unsupported
-        builder.error_string(response_buffer, ErrorStrings::LCS_UNSUPPORTED_ARGS);
+        builder.error_string(response_buffer, Strings::LCS_UNSUPPORTED_ARGS);
         Ok(())
     }
 
@@ -1128,10 +1128,10 @@ impl StringCommands {
                 builder.null_string(response_buffer)
             }
             SetInternalReturnValue::SyntaxError => {
-                builder.error_string(response_buffer, ErrorStrings::SYNTAX_ERROR)
+                builder.error_string(response_buffer, Strings::SYNTAX_ERROR)
             }
             SetInternalReturnValue::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE)
+                builder.error_string(response_buffer, Strings::WRONGTYPE)
             }
             SetInternalReturnValue::Success(Some(old_value)) => {
                 builder.bulk_string(response_buffer, &old_value);
@@ -1472,7 +1472,7 @@ mod test {
                 ClientNextAction::NoAction => {
                     assert_eq!(
                         sink.read_all().await.as_str(),
-                        &format!("-{}\r\n", ErrorStrings::WRITE_CMD_AGAINST_REPLICA)
+                        &format!("-{}\r\n", Strings::WRITE_CMD_AGAINST_REPLICA)
                     );
                 }
                 _ => {}

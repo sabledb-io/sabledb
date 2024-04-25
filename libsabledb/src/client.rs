@@ -1,5 +1,6 @@
 use crate::{
-    commands::{ClientNextAction, ErrorStrings, HandleCommandResult},
+    commands::{ClientNextAction, HandleCommandResult, Strings},
+    io::RespWriter,
     storage::ScanCursor,
     utils::RespBuilderV2,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
@@ -8,7 +9,9 @@ use crate::{
 };
 
 use bytes::BytesMut;
+use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -27,11 +30,14 @@ impl ClientStateFlags {
     pub const KILLED: u32 = (1 << 0);
     /// Pre transaction state. This state is a special state that indicating that
     /// SableDb is preparing for executing a transcation for this client
-    pub const TXN_PRE: u32 = (1 << 1);
+    pub const TXN_CALC_SLOTS: u32 = (1 << 1);
+    /// Pre transaction state. This state is a special state that indicating that
+    /// SableDb is preparing for executing a transcation for this client
+    pub const TXN_MULTI: u32 = (1 << 2);
     /// Txn is currently in progress. When this state is detected, some operations
     /// are skipped (for example: LockManager will return noop lock, because the lock is already obtained
     /// at the top level command, i.e. `EXEC`)
-    pub const TXN_IN_PROGRESS: u32 = (1 << 2);
+    pub const TXN_EXEC: u32 = (1 << 3);
 }
 
 #[allow(unused_imports)]
@@ -69,14 +75,18 @@ pub struct ClientState {
     attributes: DashMap<String, String>,
     flags: AtomicU32,
     cursors: DashMap<u64, Rc<ScanCursor>>,
+    /// Holds the commands to be executed while in the "MULTI" state
+    queued_commands: Arc<SegQueue<Rc<RedisCommand>>>,
 }
 
 #[derive(PartialEq, PartialOrd)]
-enum CanHandleCommandResult {
-    Ok,
+enum PreHandleCommandResult {
+    Continue,
     WriteInReadOnlyReplica,
-    // Client was killed
+    /// Client was killed
     ClientKilled,
+    /// Running inside a "MULTI" block. This command should be queued
+    QueueCommand,
 }
 
 /// Used by the `block_until` return code
@@ -111,49 +121,37 @@ impl ClientState {
 
     /// Is the client alive? (e.g. was it killed using `client kill` command?)
     pub fn active(&self) -> bool {
-        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        flags & ClientStateFlags::KILLED == 0
+        !self.is_flag_enabled(ClientStateFlags::KILLED)
     }
 
     /// Kill the current client by marking it as non active. The connection will be closed
     /// next time the client will attempt to use it or when a timeout occurs
     pub fn kill(&self) {
-        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        flags |= ClientStateFlags::KILLED;
-        self.flags
-            .store(flags, std::sync::atomic::Ordering::Relaxed);
+        self.enable_client_flag(ClientStateFlags::KILLED, true)
     }
 
-    pub fn is_pre_txn_state(&self) -> bool {
-        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        flags & ClientStateFlags::TXN_PRE == ClientStateFlags::TXN_PRE
+    pub fn is_txn_state_calc_slots(&self) -> bool {
+        self.is_flag_enabled(ClientStateFlags::TXN_CALC_SLOTS)
     }
 
-    pub fn set_pre_txn_state(&self, pre_txn_state: bool) {
-        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        if pre_txn_state {
-            flags |= ClientStateFlags::TXN_PRE;
-        } else {
-            flags &= !ClientStateFlags::TXN_PRE;
-        }
-        self.flags
-            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    pub fn set_txn_state_calc_slots(&self, enabled: bool) {
+        self.enable_client_flag(ClientStateFlags::TXN_CALC_SLOTS, enabled)
     }
 
-    pub fn set_txn_active(&self, active: bool) {
-        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        if active {
-            flags |= ClientStateFlags::TXN_IN_PROGRESS;
-        } else {
-            flags &= !ClientStateFlags::TXN_IN_PROGRESS;
-        }
-        self.flags
-            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    pub fn set_txn_state_exec(&self, enabled: bool) {
+        self.enable_client_flag(ClientStateFlags::TXN_EXEC, enabled)
     }
 
-    pub fn is_txn_active(&self) -> bool {
-        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
-        flags & ClientStateFlags::TXN_IN_PROGRESS == ClientStateFlags::TXN_IN_PROGRESS
+    pub fn is_txn_state_exec(&self) -> bool {
+        self.is_flag_enabled(ClientStateFlags::TXN_EXEC)
+    }
+
+    pub fn set_txn_state_multi(&self, enabled: bool) {
+        self.enable_client_flag(ClientStateFlags::TXN_MULTI, enabled)
+    }
+
+    pub fn is_txn_state_multi(&self) -> bool {
+        self.is_flag_enabled(ClientStateFlags::TXN_MULTI)
     }
 
     /// Set a client attribute
@@ -218,6 +216,23 @@ impl ClientState {
     pub fn cursors_count(&self) -> usize {
         self.cursors.len()
     }
+
+    // Helper methods
+    fn enable_client_flag(&self, flag: u32, enabled: bool) {
+        let mut flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        if enabled {
+            flags |= flag;
+        } else {
+            flags &= !flag;
+        }
+        self.flags
+            .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn is_flag_enabled(&self, flag: u32) -> bool {
+        let flags = self.flags.load(std::sync::atomic::Ordering::Relaxed);
+        flags & flag == flag
+    }
 }
 
 pub struct Client {
@@ -258,6 +273,7 @@ impl Client {
             attributes: DashMap::<String, String>::default(),
             flags: AtomicU32::new(0),
             cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
+            queued_commands: Arc::<SegQueue<Rc<RedisCommand>>>::default(),
         });
 
         let state_clone = state.clone();
@@ -444,8 +460,7 @@ impl Client {
                                 }
                             }
                         }
-                        ClientNextAction::TerminateConnection(response) => {
-                            Self::send_response(&mut tx, &response, client_state.client_id).await?;
+                        ClientNextAction::TerminateConnection => {
                             return Err(SableError::ConnectionClosed);
                         }
                     },
@@ -489,16 +504,19 @@ impl Client {
     /// Can this client handle the command?
     /// We use this function as a sanity check for various checks, for example:
     /// A write command being called on a replica server
-    fn can_handle(
+    fn pre_handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-    ) -> CanHandleCommandResult {
+    ) -> PreHandleCommandResult {
         if !client_state.active() {
-            CanHandleCommandResult::ClientKilled
+            PreHandleCommandResult::ClientKilled
         } else if client_state.server_state.is_replica() && command.metadata().is_write_command() {
-            CanHandleCommandResult::WriteInReadOnlyReplica
+            PreHandleCommandResult::WriteInReadOnlyReplica
+        } else if client_state.is_txn_state_multi() {
+            // Running within a "MULTI" block
+            PreHandleCommandResult::QueueCommand
         } else {
-            CanHandleCommandResult::Ok
+            PreHandleCommandResult::Continue
         }
     }
 
@@ -511,21 +529,33 @@ impl Client {
         let builder = RespBuilderV2::default();
 
         // Can we handle this command?
-        match Self::can_handle(client_state.clone(), command.clone()) {
-            CanHandleCommandResult::WriteInReadOnlyReplica => {
-                let mut buffer = BytesMut::with_capacity(256);
-                builder.error_string(&mut buffer, ErrorStrings::WRITE_CMD_AGAINST_REPLICA);
-                Self::send_response(tx, &buffer, client_state.client_id).await?;
-                return Ok(ClientNextAction::NoAction);
+        {
+            let mut resp_writer = RespWriter::new(tx, 128, client_state.clone());
+            match Self::pre_handle_command(client_state.clone(), command.clone()) {
+                PreHandleCommandResult::WriteInReadOnlyReplica => {
+                    resp_writer
+                        .error_string(Strings::WRITE_CMD_AGAINST_REPLICA)
+                        .await?;
+                    resp_writer.flush().await?;
+                    return Ok(ClientNextAction::NoAction);
+                }
+                PreHandleCommandResult::ClientKilled => {
+                    resp_writer
+                        .error_string(Strings::SERVER_CLOSED_CONNECTION)
+                        .await?;
+                    resp_writer.flush().await?;
+                    return Ok(ClientNextAction::TerminateConnection);
+                }
+                PreHandleCommandResult::Continue => {}
+                PreHandleCommandResult::QueueCommand => {
+                    // queue the command and reply with "QUEUED"
+                    client_state.queued_commands.push(command);
+                    resp_writer.error_string(Strings::QUEUED).await?;
+                    resp_writer.flush().await?;
+                    return Ok(ClientNextAction::NoAction);
+                }
             }
-            CanHandleCommandResult::ClientKilled => {
-                let mut buffer = BytesMut::with_capacity(256);
-                builder.error_string(&mut buffer, "ERR: server closed the connection");
-                return Ok(ClientNextAction::TerminateConnection(buffer));
-            }
-            _ => {}
         }
-
         let kind = command.metadata().name();
         let client_action = match kind {
             RedisCommandName::Ping => {

@@ -3,7 +3,7 @@ use crate::{
     check_args_count, check_value_type,
     client::ClientState,
     command_arg_at,
-    commands::ErrorStrings,
+    commands::Strings,
     commands::{HandleCommandResult, StringCommands},
     metadata::CommonValueMetadata,
     parse_string_to_number,
@@ -238,10 +238,10 @@ mod tests {
                 .await
                 .unwrap()
             {
-                ClientNextAction::TerminateConnection(response_buffer) => {
+                ClientNextAction::TerminateConnection => {
                     assert_eq!(
-                        BytesMutUtils::to_string(&response_buffer).as_str(),
-                        "-ERR: server closed the connection\r\n"
+                        sink.read_all().await.as_str(),
+                        format!("-{}\r\n", Strings::SERVER_CLOSED_CONNECTION).as_str()
                     );
                 }
                 other => {

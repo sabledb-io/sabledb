@@ -5,7 +5,7 @@ macro_rules! list_or_size_0 {
     ($list:expr, $list_name:expr, $response_buffer:expr, $builder:expr) => {{
         match $list.get_list_metadata_with_name($list_name)? {
             GetListMetadataResult::WrongType => {
-                $builder.error_string($response_buffer, ErrorStrings::WRONGTYPE);
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {
@@ -22,7 +22,7 @@ macro_rules! list_md_or_null_string {
     ($list:expr, $list_name:expr, $response_buffer:expr, $builder:expr) => {{
         match $list.get_list_metadata_with_name($list_name)? {
             GetListMetadataResult::WrongType => {
-                $builder.error_string($response_buffer, ErrorStrings::WRONGTYPE);
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             GetListMetadataResult::None => {

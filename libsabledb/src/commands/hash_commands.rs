@@ -3,7 +3,7 @@ use crate::{
     check_args_count, check_value_type,
     client::ClientState,
     command_arg_at,
-    commands::{ErrorStrings, HandleCommandResult, StringCommands},
+    commands::{HandleCommandResult, StringCommands, Strings},
     metadata::Encoding,
     metadata::{CommonValueMetadata, HashFieldKey, HashValueMetadata},
     parse_string_to_number,
@@ -171,7 +171,7 @@ impl HashCommands {
         let items_put = match hash_db.put_multi(key, &field_values)? {
             HashPutResult::Some(count) => count,
             HashPutResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
         };
@@ -202,7 +202,7 @@ impl HashCommands {
         // Sanity
         match hash_db.field_exists(hash_name, field)? {
             HashExistsResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             HashExistsResult::Exists => {
@@ -216,7 +216,7 @@ impl HashCommands {
             HashPutResult::Some(count) => count,
             HashPutResult::WrongType => {
                 // shouldn't happen...
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
         };
@@ -243,7 +243,7 @@ impl HashCommands {
 
         match hash_db.get(key, field)? {
             HashGetResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
             }
             HashGetResult::Some(value) => {
                 // update telemetries
@@ -278,7 +278,7 @@ impl HashCommands {
 
         match hash_db.get(key, field)? {
             HashGetResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
             }
             HashGetResult::Some(value) => {
                 // update telemetries
@@ -330,7 +330,7 @@ impl HashCommands {
         let items_put = match hash_db.delete(key, &fields)? {
             HashDeleteResult::Some(count) => count,
             HashDeleteResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
         };
@@ -356,7 +356,7 @@ impl HashCommands {
         let count = match hash_db.len(key)? {
             HashLenResult::Some(count) => count,
             HashLenResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
         };
@@ -383,7 +383,7 @@ impl HashCommands {
             HashExistsResult::NotExists => builder.number_usize(response_buffer, 0),
             HashExistsResult::Exists => builder.number_usize(response_buffer, 1),
             HashExistsResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE)
+                builder.error_string(response_buffer, Strings::WRONGTYPE)
             }
         };
         Ok(())
@@ -406,7 +406,7 @@ impl HashCommands {
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
         let hash_md = match hash_db.hash_metadata(key)? {
             GetHashMetadataResult::WrongType => {
-                writer.error_string(ErrorStrings::WRONGTYPE).await?;
+                writer.error_string(Strings::WRONGTYPE).await?;
                 writer.flush().await?;
                 return Ok(());
             }
@@ -489,10 +489,7 @@ impl HashCommands {
         let increment = command_arg_at!(command, 3);
 
         let Some(increment) = BytesMutUtils::parse::<i64>(increment) else {
-            builder.error_string(
-                response_buffer,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            );
+            builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
             return Ok(());
         };
 
@@ -502,7 +499,7 @@ impl HashCommands {
 
         let prev_value = match hash_db.get(key, field)? {
             HashGetResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             HashGetResult::NotFound | HashGetResult::FieldNotFound => 0i64,
@@ -540,10 +537,7 @@ impl HashCommands {
         let increment = command_arg_at!(command, 3);
 
         let Some(increment) = BytesMutUtils::parse::<f64>(increment) else {
-            builder.error_string(
-                response_buffer,
-                ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            );
+            builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
             return Ok(());
         };
 
@@ -553,7 +547,7 @@ impl HashCommands {
 
         let prev_value = match hash_db.get(key, field)? {
             HashGetResult::WrongType => {
-                builder.error_string(response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
             HashGetResult::NotFound | HashGetResult::FieldNotFound => 0f64,
@@ -607,7 +601,7 @@ impl HashCommands {
                     writer.add_null_string().await?;
                 }
                 HashGetResult::WrongType => {
-                    writer.error_string(ErrorStrings::WRONGTYPE).await?;
+                    writer.error_string(Strings::WRONGTYPE).await?;
                     break;
                 }
             }
@@ -646,7 +640,7 @@ impl HashCommands {
                 let Some(count) = BytesMutUtils::parse::<i64>(count) else {
                     builder.error_string(
                         &mut response_buffer,
-                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                        Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
                     );
                     tx.write_all(&response_buffer).await?;
                     return Ok(());
@@ -657,13 +651,13 @@ impl HashCommands {
                 let Some(count) = BytesMutUtils::parse::<i64>(count) else {
                     builder.error_string(
                         &mut response_buffer,
-                        ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                        Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
                     );
                     tx.write_all(&response_buffer).await?;
                     return Ok(());
                 };
                 if BytesMutUtils::to_string(with_values).to_lowercase() != "withvalues" {
-                    builder.error_string(&mut response_buffer, ErrorStrings::SYNTAX_ERROR);
+                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                     tx.write_all(&response_buffer).await?;
                     return Ok(());
                 }
@@ -685,7 +679,7 @@ impl HashCommands {
                 return Ok(());
             }
             GetHashMetadataResult::WrongType => {
-                builder.error_string(&mut response_buffer, ErrorStrings::WRONGTYPE);
+                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
             }
@@ -793,7 +787,7 @@ impl HashCommands {
         let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
         let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
             resp_writer
-                .error_string(ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
                 .await?;
             resp_writer.flush().await?;
             return Ok(());
@@ -813,7 +807,7 @@ impl HashCommands {
             match arg.as_str() {
                 "match" => {
                     let Some(pattern) = iter.next() else {
-                        resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                        resp_writer.error_string(Strings::SYNTAX_ERROR).await?;
                         resp_writer.flush().await?;
                         return Ok(());
                     };
@@ -823,14 +817,14 @@ impl HashCommands {
                 }
                 "count" => {
                     let Some(n) = iter.next() else {
-                        resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                        resp_writer.error_string(Strings::SYNTAX_ERROR).await?;
                         resp_writer.flush().await?;
                         return Ok(());
                     };
                     // parse `n`
                     let Some(n) = BytesMutUtils::parse::<usize>(n) else {
                         resp_writer
-                            .error_string(ErrorStrings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                            .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
                             .await?;
                         resp_writer.flush().await?;
                         return Ok(());
@@ -840,7 +834,7 @@ impl HashCommands {
                     count = if n == 0 { 10usize } else { n };
                 }
                 _ => {
-                    resp_writer.error_string(ErrorStrings::SYNTAX_ERROR).await?;
+                    resp_writer.error_string(Strings::SYNTAX_ERROR).await?;
                     resp_writer.flush().await?;
                     return Ok(());
                 }
@@ -853,7 +847,7 @@ impl HashCommands {
 
         let hash_md = match hash_db.hash_metadata(hash_name)? {
             GetHashMetadataResult::WrongType => {
-                resp_writer.error_string(ErrorStrings::WRONGTYPE).await?;
+                resp_writer.error_string(Strings::WRONGTYPE).await?;
                 resp_writer.flush().await?;
                 return Ok(());
             }
