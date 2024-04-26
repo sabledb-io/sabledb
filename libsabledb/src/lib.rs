@@ -26,7 +26,7 @@ pub use commands::{
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
 pub use request_parser::RequestParser;
-pub use server::{Server, ServerState};
+pub use server::{BlockClientResult, Server, ServerState};
 pub use server_options::ServerOptions;
 pub use shard_locker::LockManager;
 pub use stopwatch::IoDurationStopWatch;

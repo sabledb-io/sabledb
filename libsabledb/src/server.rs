@@ -3,16 +3,17 @@ use crate::{
     replication::{
         ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
     },
-    Client, SableError, ServerOptions, StorageAdapter, Telemetry, WorkerContext, WorkerManager,
+    Client, ClientState, SableError, ServerOptions, StorageAdapter, Telemetry, WorkerContext,
+    WorkerManager,
 };
 use bytes::BytesMut;
 use crossbeam::queue::SegQueue;
 #[allow(unused_imports)]
 use dashmap::{DashMap, DashSet};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Arc, Mutex,
 };
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
@@ -22,6 +23,15 @@ type ChannelQueue = Arc<SegQueue<TokioSender<u8>>>;
 
 // Contains a table that maps between a `Key` and a list of channels (FIFO)
 type BlockedClientTable = DashMap<BytesMut, ChannelQueue>;
+
+/// Possible output for block_client function
+#[derive(Debug)]
+pub enum BlockClientResult {
+    /// Client successfully blocked
+    Blocked(TokioReceiver<u8>),
+    /// Transaction is active, can't block
+    TxnActive,
+}
 
 pub struct ServerState {
     blocked_clients: BlockedClientTable,
@@ -160,8 +170,16 @@ impl ServerState {
     }
 
     /// Block the current client for the provided keys
-    pub async fn block_client(&self, keys: &[BytesMut]) -> TokioReceiver<u8> {
+    pub async fn block_client(
+        &self,
+        keys: &[BytesMut],
+        client_state: Rc<ClientState>,
+    ) -> BlockClientResult {
         tracing::debug!("blocking client for keys {:?}", keys);
+        if client_state.is_txn_state_exec() {
+            return BlockClientResult::TxnActive;
+        }
+
         let (tx, rx) = tokio::sync::mpsc::channel(keys.len());
 
         for key in keys.iter() {
@@ -175,7 +193,7 @@ impl ServerState {
                     .insert(key.clone(), channel_queue.clone());
             };
         }
-        rx
+        BlockClientResult::Blocked(rx)
     }
 
     // Connect to primary instance

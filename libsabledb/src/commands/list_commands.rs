@@ -3,12 +3,35 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     to_number,
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
-    BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2, SableError,
+    BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
+    SableError,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
+
+/// Block `$client_state` for keys `$interersting_keys`. In case of failure to block
+/// the client, return `NullArray`
+macro_rules! block_client_for_keys {
+    ($client_state:expr, $interersting_keys:expr, $response_buffer:expr) => {{
+        let client_state_clone = $client_state.clone();
+        let rx = match $client_state
+            .server_inner_state()
+            .block_client(&$interersting_keys, client_state_clone)
+            .await
+        {
+            BlockClientResult::Blocked(rx) => rx,
+            BlockClientResult::TxnActive => {
+                // can't block the client due to an active transaction
+                let builder = RespBuilderV2::default();
+                builder.null_array(&mut $response_buffer);
+                return Ok(HandleCommandResult::ResponseBufferUpdated($response_buffer));
+            }
+        };
+        rx
+    }};
+}
 
 #[allow(dead_code)]
 pub struct ListCommands {}
@@ -71,12 +94,7 @@ impl ListCommands {
                 Self::rpoplpush(client_state, command, response_buffer).await
             }
             RedisCommandName::Brpoplpush => {
-                // When in transaction, run the non-blocking version
-                if client_state.is_txn_state_exec() {
-                    Self::rpoplpush(client_state, command, response_buffer).await
-                } else {
-                    Self::blocking_rpoplpush(client_state, command, response_buffer).await
-                }
+                Self::blocking_rpoplpush(client_state, command, response_buffer).await
             }
             RedisCommandName::Blpop => {
                 Self::blocking_pop(client_state, command, response_buffer, ListFlags::FromLeft)
@@ -87,12 +105,7 @@ impl ListCommands {
                     .await
             }
             RedisCommandName::Blmove => {
-                // When in transaction, run the non-blocking version
-                if client_state.is_txn_state_exec() {
-                    Self::lmove(client_state, command, response_buffer).await
-                } else {
-                    Self::blocking_move(client_state, command, response_buffer).await
-                }
+                Self::blocking_move(client_state, command, response_buffer).await
             }
             RedisCommandName::Blmpop => {
                 Self::lmpop(client_state, command, true, response_buffer).await
@@ -340,10 +353,8 @@ impl ListCommands {
                 if let Some(blocking_duration) = blocking_duration {
                     let interersting_keys: Vec<BytesMut> =
                         keys.iter().map(|e| (*e).clone()).collect();
-                    let rx = client_state
-                        .server_inner_state()
-                        .block_client(&interersting_keys)
-                        .await;
+                    let rx =
+                        block_client_for_keys!(client_state, interersting_keys, response_buffer);
                     Ok(HandleCommandResult::Blocked((
                         rx,
                         blocking_duration,
@@ -508,7 +519,7 @@ impl ListCommands {
                 let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
                 if allow_blocking {
                     let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
-                    let rx = client_state.server_inner_state().block_client(&keys).await;
+                    let rx = block_client_for_keys!(client_state, keys, response_buffer);
                     Ok(HandleCommandResult::Blocked((
                         rx,
                         Duration::from_millis(timeout_ms as u64),
@@ -626,7 +637,7 @@ impl ListCommands {
             }
             // Block the client
             let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
-            let rx = client_state.server_inner_state().block_client(&keys).await;
+            let rx = block_client_for_keys!(client_state, keys, response_buffer);
 
             // Notify the caller
             let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
