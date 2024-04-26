@@ -1,6 +1,6 @@
 use crate::{
     client::ClientState,
-    commands::{HandleCommandResult, Strings},
+    commands::{HandleCommandResult, Strings, TimeoutResponse},
     to_number,
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2, SableError,
@@ -344,7 +344,11 @@ impl ListCommands {
                         .server_inner_state()
                         .block_client(&interersting_keys)
                         .await;
-                    Ok(HandleCommandResult::Blocked((rx, blocking_duration)))
+                    Ok(HandleCommandResult::Blocked((
+                        rx,
+                        blocking_duration,
+                        TimeoutResponse::NullArrray,
+                    )))
                 } else {
                     builder.null_array(&mut response_buffer);
                     Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -508,6 +512,7 @@ impl ListCommands {
                     Ok(HandleCommandResult::Blocked((
                         rx,
                         Duration::from_millis(timeout_ms as u64),
+                        TimeoutResponse::NullArrray,
                     )))
                 } else {
                     builder.null_array(&mut response_buffer);
@@ -637,6 +642,7 @@ impl ListCommands {
             Ok(HandleCommandResult::Blocked((
                 rx,
                 std::time::Duration::from_millis(timeout_ms),
+                TimeoutResponse::NullArrray,
             )))
         }
     }
@@ -1225,7 +1231,7 @@ mod tests {
                     ClientNextAction::NoAction => {
                         assert_eq!(&sink.read_all().await, expected_value);
                     }
-                    ClientNextAction::Wait((rx, duration)) => {
+                    ClientNextAction::Wait((rx, duration, timeout_response)) => {
                         println!("--> got Wait for duration of {:?}", duration);
                         let sw = crate::stopwatch::StopWatch::default();
                         let response = match Client::wait_for(rx, duration).await {
@@ -1239,7 +1245,17 @@ mod tests {
                             crate::client::WaitResult::Timeout => {
                                 let builder = RespBuilderV2::default();
                                 let mut response = BytesMut::new();
-                                builder.null_array(&mut response);
+                                match timeout_response {
+                                    TimeoutResponse::NullString => {
+                                        builder.null_string(&mut response)
+                                    }
+                                    TimeoutResponse::NullArrray => {
+                                        builder.null_array(&mut response)
+                                    }
+                                    TimeoutResponse::Number(num) => {
+                                        builder.number_i64(&mut response, num)
+                                    }
+                                }
                                 response
                             }
                         };
@@ -1254,7 +1270,7 @@ mod tests {
     async fn deferred_command(
         client_state: Rc<ClientState>,
         cmd: Rc<RedisCommand>,
-    ) -> (Receiver<u8>, Duration) {
+    ) -> (Receiver<u8>, Duration, TimeoutResponse) {
         let mut sink = crate::tests::ResponseSink::with_name("deferred_command").await;
         let next_action = Client::handle_command(client_state, cmd, &mut sink.fp)
             .await
@@ -1263,7 +1279,9 @@ mod tests {
             ClientNextAction::NoAction => panic!("expected to be blocked"),
             ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
             ClientNextAction::TerminateConnection => panic!("expected to be blocked"),
-            ClientNextAction::Wait((rx, duration)) => (rx, duration),
+            ClientNextAction::Wait((rx, duration, timout_response)) => {
+                (rx, duration, timout_response)
+            }
         }
     }
 
@@ -1304,7 +1322,8 @@ mod tests {
             ]));
 
             // we expect to get a rx + duration, if we dont "deferred_command" will panic!
-            let (rx, duration) = deferred_command(reader.inner(), read_cmd.clone()).await;
+            let (rx, duration, _timeout_response) =
+                deferred_command(reader.inner(), read_cmd.clone()).await;
 
             // second connection: push data to the list
             let pus_cmd = Rc::new(RedisCommand::for_test(vec![

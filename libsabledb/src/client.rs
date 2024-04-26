@@ -1,5 +1,5 @@
 use crate::{
-    commands::{ClientNextAction, HandleCommandResult, Strings},
+    commands::{ClientNextAction, HandleCommandResult, Strings, TimeoutResponse},
     io::RespWriter,
     storage::ScanCursor,
     utils::RespBuilderV2,
@@ -473,7 +473,7 @@ impl Client {
                             Self::send_response(&mut tx, &response, client_state.client_id).await?;
                             break;
                         }
-                        ClientNextAction::Wait((rx, duration)) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response)) => {
                             // suspend the client for the specified duration or until a wakeup bit arrives
                             match Self::wait_for(rx, duration).await {
                                 WaitResult::Timeout => {
@@ -484,6 +484,7 @@ impl Client {
                                     let response_buffer = Self::handle_timeout(
                                         client_state.clone(),
                                         command.clone(),
+                                        timeout_response,
                                     )?;
                                     Self::send_response(
                                         &mut tx,
@@ -531,11 +532,22 @@ impl Client {
     fn handle_timeout(
         _client_state: Rc<ClientState>,
         _command: Rc<RedisCommand>,
+        timeout_response: TimeoutResponse,
     ) -> Result<BytesMut, SableError> {
         let builder = RespBuilderV2::default();
         let mut response_buffer = BytesMut::new();
 
-        builder.null_array(&mut response_buffer);
+        match timeout_response {
+            TimeoutResponse::NullString => {
+                builder.null_string(&mut response_buffer);
+            }
+            TimeoutResponse::NullArrray => {
+                builder.null_array(&mut response_buffer);
+            }
+            TimeoutResponse::Number(num) => {
+                builder.number_i64(&mut response_buffer, num);
+            }
+        }
         Ok(response_buffer)
     }
 
@@ -754,8 +766,8 @@ impl Client {
                         Self::send_response(tx, &buffer, client_state.client_id).await?;
                         ClientNextAction::NoAction
                     }
-                    HandleCommandResult::Blocked((rx, duration)) => {
-                        ClientNextAction::Wait((rx, duration))
+                    HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response))
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                 }
@@ -766,7 +778,7 @@ impl Client {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.client_id).await?;
                     }
-                    HandleCommandResult::Blocked((_rx, _duration)) => {}
+                    HandleCommandResult::Blocked((_rx, _duration, _timeout_response)) => {}
                     HandleCommandResult::ResponseSent => {}
                 }
                 ClientNextAction::NoAction
@@ -776,7 +788,7 @@ impl Client {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.client_id).await?;
                     }
-                    HandleCommandResult::Blocked((_rx, _duration)) => {}
+                    HandleCommandResult::Blocked((_rx, _duration, _timeout_response)) => {}
                     HandleCommandResult::ResponseSent => {}
                 }
                 ClientNextAction::NoAction

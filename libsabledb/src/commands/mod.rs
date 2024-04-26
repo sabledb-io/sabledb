@@ -168,12 +168,19 @@ pub struct SetFlags: u32  {
 }
 }
 
+#[derive(Debug)]
+pub enum TimeoutResponse {
+    NullString,
+    NullArrray,
+    Number(i64),
+}
+
 /// Possible return value for a "process_command" function
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum HandleCommandResult {
     ResponseBufferUpdated(bytes::BytesMut),
-    Blocked((Receiver<u8>, Duration)),
+    Blocked((Receiver<u8>, Duration, TimeoutResponse)),
     ResponseSent,
 }
 
@@ -181,7 +188,7 @@ pub enum HandleCommandResult {
 #[allow(dead_code)]
 pub enum ClientNextAction {
     SendResponse(bytes::BytesMut),
-    Wait((Receiver<u8>, Duration)),
+    Wait((Receiver<u8>, Duration, TimeoutResponse)),
     TerminateConnection,
     /// Response was already sent to the client
     NoAction,
