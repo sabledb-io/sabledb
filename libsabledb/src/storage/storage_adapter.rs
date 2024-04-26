@@ -212,6 +212,12 @@ enum TxnWriteCacheGetResult {
     Found(BytesMut),
 }
 
+enum TxnWriteCacheContainsResult {
+    NotFound,
+    Deleted,
+    Found,
+}
+
 /// Transcation write cache.
 ///
 /// Used by the storage adapter to aggregate all writes (Put/Delete) into a single atomic batch
@@ -248,24 +254,29 @@ impl TxnWriteCache {
         Ok(())
     }
 
-    /// Return true if `key` exists in the cache or in the underlying storage
-    pub fn contains(&self, key: &BytesMut, store: &StorageAdapter) -> Result<bool, SableError> {
-        if let Some(value) = self.changes.get(key) {
-            Ok(value.is_some())
+    /// Return true if `key` exists in the cache
+    pub fn contains(&self, key: &BytesMut) -> Result<TxnWriteCacheContainsResult, SableError> {
+        let Some(value) = self.changes.get(key) else {
+            return Ok(TxnWriteCacheContainsResult::NotFound);
+        };
+
+        // found a match in the cache
+        if value.value().is_some() {
+            // an actual value
+            Ok(TxnWriteCacheContainsResult::Found)
         } else {
-            store.contains(key)
+            // the value was deleted
+            Ok(TxnWriteCacheContainsResult::Deleted)
         }
     }
 
-    /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
-    /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
-    /// this means that it was deleted, so return a `None` as well
+    /// Get a key from cache
     pub fn get(&self, key: &BytesMut) -> Result<TxnWriteCacheGetResult, SableError> {
         let Some(value) = self.changes.get(key) else {
             return Ok(TxnWriteCacheGetResult::NotFound);
         };
 
-        // found an match in cache
+        // found a match in cache
         if let Some(value) = value.value() {
             // an actual value
             Ok(TxnWriteCacheGetResult::Found(value.data().clone()))
@@ -367,8 +378,9 @@ impl StorageAdapter {
 
         if let Some(txn) = &self.txn {
             match txn.get(key)? {
-                TxnWriteCacheGetResult::NotFound | TxnWriteCacheGetResult::Deleted => Ok(None),
                 TxnWriteCacheGetResult::Found(data) => Ok(Some(data)),
+                TxnWriteCacheGetResult::Deleted => Ok(None),
+                TxnWriteCacheGetResult::NotFound => db.get(key),
             }
         } else {
             db.get(key)
@@ -401,7 +413,11 @@ impl StorageAdapter {
         };
 
         if let Some(txn) = &self.txn {
-            txn.contains(key, self)
+            match txn.contains(key)? {
+                TxnWriteCacheContainsResult::Deleted => Ok(false),
+                TxnWriteCacheContainsResult::Found => Ok(true),
+                TxnWriteCacheContainsResult::NotFound => db.contains(key),
+            }
         } else {
             db.contains(key)
         }
