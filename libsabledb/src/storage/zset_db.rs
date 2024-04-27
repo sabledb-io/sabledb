@@ -146,7 +146,7 @@ impl<'a> ZSetDb<'a> {
             score
         };
 
-        match self.put_member(md.id(), member, new_score, &flags)? {
+        match self.put_member(md.id(), member, new_score, flags)? {
             PutMemberResult::Updated(_) => {
                 if flags.intersects(ZAddFlags::Ch) {
                     return_value = return_value.saturating_add(1);

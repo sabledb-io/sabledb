@@ -1,8 +1,8 @@
 use crate::{
-    storage::{BatchUpdate, PutFlags, StorageAdapter},
+    storage::{DbWriteCache, PutFlags, StorageAdapter},
     PrimaryKeyMetadata, SableError, StringValueMetadata, U8ArrayBuilder, U8ArrayReader,
 };
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 
 #[allow(dead_code)]
 
@@ -10,11 +10,16 @@ use bytes::BytesMut;
 pub struct StringsDb<'a> {
     store: &'a StorageAdapter,
     db_id: u16,
+    cache: Box<DbWriteCache<'a>>,
 }
 
 impl<'a> StringsDb<'a> {
     pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
-        StringsDb { store, db_id }
+        StringsDb {
+            store,
+            db_id,
+            cache: Box::new(DbWriteCache::with_storage(store)),
+        }
     }
 
     /// Put or Replace key
@@ -26,7 +31,8 @@ impl<'a> StringsDb<'a> {
         metadata: &StringValueMetadata,
         put_flags: PutFlags,
     ) -> Result<(), SableError> {
-        self.put_internal(user_key, value, metadata, put_flags)
+        self.put_internal(user_key, value, metadata, &put_flags)?;
+        self.flush_cache()
     }
 
     /// Get a string key from the underlying storage
@@ -34,13 +40,16 @@ impl<'a> StringsDb<'a> {
         &self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
-        self.get_internal(user_key)
+        let result = self.get_internal(user_key)?;
+        self.flush_cache()?;
+        Ok(result)
     }
 
     /// Delete key. The key is assumed to be a user key (i.e. not encoded)
     pub fn delete(&self, user_key: &BytesMut) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        self.store.delete(&internal_key)
+        self.cache.delete(&internal_key)?;
+        self.flush_cache()
     }
 
     /// Put multiple items in the store. On success, return `true`
@@ -50,30 +59,14 @@ impl<'a> StringsDb<'a> {
         put_flags: PutFlags,
     ) -> Result<bool, SableError> {
         let metadata = StringValueMetadata::new();
-        let mut updates = BatchUpdate::default();
 
         // Check for the flags first
         for (key, value) in user_keys_and_values.iter() {
-            let internal_key = PrimaryKeyMetadata::new_primary_key(key, self.db_id);
-            let can_continue = match put_flags {
-                PutFlags::Override => true,
-                PutFlags::PutIfNotExists => self.store.get(&internal_key)?.is_none(),
-                PutFlags::PutIfExists => self.store.get(&internal_key)?.is_some(),
-            };
-
-            // Can not continue
-            if !can_continue {
+            if !self.put_internal(key, value, &metadata, &put_flags)? {
                 return Ok(false);
             }
-
-            let mut joined_value = BytesMut::with_capacity(StringValueMetadata::SIZE + value.len());
-            let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
-            metadata.to_bytes(&mut builder);
-            builder.write_bytes(value);
-            updates.put(internal_key, joined_value);
         }
-
-        self.store.apply_batch(&updates)?;
+        self.flush_cache()?;
         Ok(true)
     }
 
@@ -85,14 +78,28 @@ impl<'a> StringsDb<'a> {
         user_key: &BytesMut,
         value: &BytesMut,
         metadata: &StringValueMetadata,
-        put_flags: PutFlags,
-    ) -> Result<(), SableError> {
-        let mut joined_value = BytesMut::with_capacity(value.len() + StringValueMetadata::SIZE);
+        put_flags: &PutFlags,
+    ) -> Result<bool, SableError> {
+        // Check for the flags first
+
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        let can_continue = match put_flags {
+            PutFlags::Override => true,
+            PutFlags::PutIfNotExists => self.cache.get(&internal_key)?.is_none(),
+            PutFlags::PutIfExists => self.cache.get(&internal_key)?.is_some(),
+        };
+
+        // Can not continue
+        if !can_continue {
+            return Ok(false);
+        }
+
+        let mut joined_value = BytesMut::with_capacity(StringValueMetadata::SIZE + value.len());
         let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
         metadata.to_bytes(&mut builder);
         builder.write_bytes(value);
-        self.store.put(&internal_key, &joined_value, put_flags)
+        self.cache.put(&internal_key, joined_value)?;
+        Ok(true)
     }
 
     /// Get a string key from the underlying storage
@@ -102,20 +109,30 @@ impl<'a> StringsDb<'a> {
     ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
 
-        let raw_value = self.store.get(&internal_key)?;
+        let raw_value = self.cache.get(&internal_key)?;
         if let Some(mut value) = raw_value {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let md = StringValueMetadata::from_bytes(&mut reader)?;
 
             if md.expiration().is_expired()? {
-                self.store.delete(&internal_key)?;
+                self.cache.delete(&internal_key)?;
                 Ok(None)
             } else {
-                let _ = value.split_to(StringValueMetadata::SIZE);
+                value.advance(StringValueMetadata::SIZE);
                 Ok(Some((value, md)))
             }
         } else {
             Ok(None)
         }
+    }
+
+    /// Apply the changes to the store and clear the cache
+    fn flush_cache(&self) -> Result<(), SableError> {
+        if self.cache.is_empty() {
+            return Ok(());
+        }
+        let batch = self.cache.to_write_batch();
+        self.cache.clear();
+        self.store.apply_batch(&batch)
     }
 }

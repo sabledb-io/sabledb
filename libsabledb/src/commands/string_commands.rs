@@ -1230,6 +1230,8 @@ mod test {
     // The commands below are executed in serialised manner. So each command
     // "remembers" the outcome of the previous command
     #[test_case(vec![
+        (vec!["set", "empty_str", ""], "+OK\r\n"),
+        (vec!["get", "empty_str"], "$0\r\n\r\n"),
         (vec!["set", "set_key", "value"], "+OK\r\n"),
         (vec!["get", "set_key"], "$5\r\nvalue\r\n"),
         (vec!["append", "set_key", "value2"], ":11\r\n"),

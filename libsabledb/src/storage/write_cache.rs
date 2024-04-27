@@ -112,6 +112,14 @@ impl<'a> DbWriteCache<'a> {
     pub fn clear(&self) {
         self.changes.clear()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.changes.len()
+    }
 }
 
 #[cfg(test)]
