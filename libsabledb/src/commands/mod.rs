@@ -205,6 +205,7 @@ mod server_commands;
 mod string_commands;
 mod strings;
 mod transaction_commands;
+mod zset_commands;
 
 pub use crate::commands::strings::Strings;
 pub use base_commands::BaseCommands;
@@ -218,5 +219,6 @@ pub use list_commands::ListCommands;
 pub use server_commands::ServerCommands;
 pub use string_commands::StringCommands;
 pub use transaction_commands::TransactionCommands;
+pub use zset_commands::ZSetCommands;
 
 use tokio::{sync::mpsc::Receiver, time::Duration};

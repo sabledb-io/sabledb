@@ -162,6 +162,13 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 | hsetnx | ✓ |✓ |   |
 | hstrlen | ✓ |✓ |   |
 
+### Sorted Set (`ZSET`) commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| zadd | ✓ |✓ |   |
+| zcard | ✓ |✓ |   |
+
 ### Generic commands
 
 | Command  | Supported  | Fully supported?  | Comment  |

@@ -21,7 +21,7 @@ pub mod worker_manager;
 pub use client::{Client, ClientState, ClientStateFlags};
 pub use commands::{
     ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
-    ServerCommands, StringCommands, TransactionCommands,
+    ServerCommands, StringCommands, TransactionCommands, ZSetCommands,
 };
 pub use error_codes::{ParserError, SableError};
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};

@@ -5,7 +5,7 @@ use crate::{
     utils::RespBuilderV2,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
     RedisCommandName, RequestParser, SableError, ServerCommands, ServerState, StorageAdapter,
-    StringCommands, Telemetry, TransactionCommands,
+    StringCommands, Telemetry, TransactionCommands, ZSetCommands,
 };
 
 use bytes::BytesMut;
@@ -831,6 +831,20 @@ impl Client {
             RedisCommandName::Multi | RedisCommandName::Discard => {
                 match TransactionCommands::handle_command(client_state.clone(), command, tx).await?
                 {
+                    HandleCommandResult::Blocked(_) => {
+                        return Err(SableError::OtherError(
+                            "Inernal error: client is in invalid state".to_string(),
+                        ));
+                    }
+                    HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.client_id).await?;
+                        ClientNextAction::NoAction
+                    }
+                }
+            }
+            RedisCommandName::Zadd | RedisCommandName::Zcard => {
+                match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
                             "Inernal error: client is in invalid state".to_string(),

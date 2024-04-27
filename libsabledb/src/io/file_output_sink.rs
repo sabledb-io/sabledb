@@ -18,6 +18,11 @@ impl FileResponseSink {
         self.read_all_with_size(Self::BUFFER_SIZE).await
     }
 
+    pub async fn read_all_as_string(&mut self) -> Result<String, SableError> {
+        let as_bytes = self.read_all_with_size(Self::BUFFER_SIZE).await?;
+        Ok(crate::BytesMutUtils::to_string(&as_bytes))
+    }
+
     pub async fn read_all_with_size(&mut self, size: usize) -> Result<bytes::BytesMut, SableError> {
         self.fp.sync_data().await?;
         let mut fp = tokio::fs::File::open(&self.temp_file.fullpath()).await?;

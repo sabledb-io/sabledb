@@ -7,21 +7,21 @@ use bytes::BytesMut;
 /// Contains information about the hash item
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SortedSetValueMetadata {
+pub struct ZSetValueMetadata {
     common: CommonValueMetadata,
     zset_id: u64,
-    hash_size: u64,
+    zset_size: u64,
 }
 
 #[allow(dead_code)]
-impl SortedSetValueMetadata {
+impl ZSetValueMetadata {
     pub const SIZE: usize = 2 * std::mem::size_of::<u64>() + CommonValueMetadata::SIZE;
 
     pub fn with_id(zset_id: u64) -> Self {
-        SortedSetValueMetadata {
-            common: CommonValueMetadata::default().set_hash(),
+        ZSetValueMetadata {
+            common: CommonValueMetadata::default().set_zset(),
             zset_id,
-            hash_size: 0,
+            zset_size: 0,
         }
     }
 
@@ -33,31 +33,31 @@ impl SortedSetValueMetadata {
         self.common.expiration_mut()
     }
 
-    /// Return the number of items owned by this hash
+    /// Return the number of items owned by this zset
     pub fn len(&self) -> u64 {
-        self.hash_size
+        self.zset_size
     }
 
     /// Equivalent to `len() == 0`
     pub fn is_empty(&self) -> bool {
-        self.hash_size.eq(&0u64)
+        self.zset_size.eq(&0u64)
     }
 
-    /// Return the hash unique ID
+    /// Return the zset unique ID
     pub fn id(&self) -> u64 {
         self.zset_id
     }
 
-    /// Return the hash unique ID
+    /// Return the zset unique ID
     pub fn incr_len_by(&mut self, diff: u64) {
-        self.hash_size = self.hash_size.saturating_add(diff);
+        self.zset_size = self.zset_size.saturating_add(diff);
     }
 
     pub fn decr_len_by(&mut self, diff: u64) {
-        self.hash_size = self.hash_size.saturating_sub(diff);
+        self.zset_size = self.zset_size.saturating_sub(diff);
     }
 
-    /// Set the hash ID
+    /// Set the zset ID
     pub fn set_id(&mut self, zset_id: u64) {
         self.zset_id = zset_id
     }
@@ -66,19 +66,19 @@ impl SortedSetValueMetadata {
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         self.common.to_bytes(builder);
         builder.write_u64(self.zset_id);
-        builder.write_u64(self.hash_size);
+        builder.write_u64(self.zset_size);
     }
 
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
         let common = CommonValueMetadata::from_bytes(reader)?;
 
         let zset_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
-        let hash_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        let zset_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
 
-        Ok(SortedSetValueMetadata {
+        Ok(ZSetValueMetadata {
             common,
             zset_id,
-            hash_size,
+            zset_size,
         })
     }
 
@@ -103,7 +103,7 @@ impl SortedSetValueMetadata {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub struct ZSetKeyByScore<'a> {
     kind: u8,
@@ -166,7 +166,7 @@ impl<'a> ZSetKeyByScore<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct ZSetKeyByMember<'a> {
     kind: u8,
@@ -217,5 +217,54 @@ impl<'a> ZSetKeyByMember<'a> {
 
     pub fn member(&self) -> &'a [u8] {
         self.member
+    }
+}
+
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn test_zset_key_by_member_serialization() -> Result<(), SableError> {
+        let field_key = BytesMut::from("field_key");
+        let zset_item = ZSetKeyByMember::new(42, &field_key);
+        let kk = BytesMut::from(zset_item.member);
+        assert_eq!(kk, BytesMut::from("field_key"),);
+        assert_eq!(zset_item.zset_id(), 42);
+        assert_eq!(zset_item.kind, Encoding::KEY_ZSET_MEMBER_ITEM);
+
+        let mut buffer = BytesMut::with_capacity(256);
+        let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
+        zset_item.to_bytes(&mut reader);
+
+        let deserialised = ZSetKeyByMember::from_bytes(&buffer).unwrap();
+        assert_eq!(deserialised, zset_item);
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_zset_key_by_score_serialization() -> Result<(), SableError> {
+        let field_key = BytesMut::from("field_key");
+        let zset_item = ZSetKeyByScore::new(42, 0.75, &field_key);
+        let kk = BytesMut::from(zset_item.member);
+        assert_eq!(kk, BytesMut::from("field_key"),);
+        assert_eq!(zset_item.zset_id(), 42);
+        assert_eq!(zset_item.score(), 0.75);
+        assert_eq!(zset_item.kind, Encoding::KEY_ZSET_SCORE_ITEM);
+
+        let mut buffer = BytesMut::with_capacity(256);
+        let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
+        zset_item.to_bytes(&mut reader);
+
+        let deserialised = ZSetKeyByScore::from_bytes(&buffer).unwrap();
+        assert_eq!(deserialised, zset_item);
+        Ok(())
     }
 }

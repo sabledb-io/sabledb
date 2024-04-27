@@ -93,7 +93,6 @@ enum PutFieldResult {
 /// Locking strategy: this class does not lock anything and relies on the caller
 /// to obtain the locks if needed
 pub struct HashDb<'a> {
-    /// This class handles String command database access
     store: &'a StorageAdapter,
     db_id: u16,
     cache: Box<DbWriteCache<'a>>,
@@ -422,23 +421,10 @@ impl<'a> HashDb<'a> {
 mod tests {
     use super::*;
     use crate::storage::PutFlags;
-    use crate::StorageOpenParams;
-    use std::path::PathBuf;
-
-    fn create_database(db_name: &str) -> StorageAdapter {
-        let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from(format!("tests/{}.db", db_name));
-        let _ = std::fs::remove_dir_all(db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(true)
-            .set_cache_size(64)
-            .set_path(&db_path);
-        crate::storage_rocksdb!(open_params.clone())
-    }
 
     #[test]
     fn test_hash_wrong_type() -> Result<(), SableError> {
-        let db = create_database("test_hash_wrong_type");
+        let (_deleter, db) = crate::tests::open_store();
         let hash_db = HashDb::with_storage(&db, 0);
         let strings_db = crate::storage::StringsDb::with_storage(&db, 0);
 
@@ -467,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_hash_db() -> Result<(), SableError> {
-        let db = create_database("test_hash_db");
+        let (_deleter, db) = crate::tests::open_store();
         let hash_db = HashDb::with_storage(&db, 0);
 
         let hash_name = BytesMut::from("myhash");

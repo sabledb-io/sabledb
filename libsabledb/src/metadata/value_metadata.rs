@@ -59,6 +59,10 @@ impl CommonValueMetadata {
         self.value_encoding == Encoding::VALUE_HASH
     }
 
+    pub fn is_zset(&self) -> bool {
+        self.value_encoding == Encoding::VALUE_ZSET
+    }
+
     pub fn value_type(&self) -> u8 {
         self.value_encoding
     }
@@ -75,6 +79,11 @@ impl CommonValueMetadata {
 
     pub fn set_hash(mut self) -> Self {
         self.value_encoding = Encoding::VALUE_HASH;
+        self
+    }
+
+    pub fn set_zset(mut self) -> Self {
+        self.value_encoding = Encoding::VALUE_ZSET;
         self
     }
 }

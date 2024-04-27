@@ -254,6 +254,17 @@ impl BytesMutUtils {
         u16::from_be_bytes(arr)
     }
 
+    pub fn to_f64(bytes: &BytesMut) -> f64 {
+        let mut arr = [0u8; std::mem::size_of::<f64>()];
+        arr.copy_from_slice(&bytes[0..std::mem::size_of::<f64>()]);
+        f64::from_be_bytes(arr)
+    }
+
+    pub fn from_f64(num: f64) -> BytesMut {
+        let arr = num.to_be_bytes();
+        BytesMut::from(&arr[..])
+    }
+
     /// Given two sequences, return the longest subsequence present in both of them
     /// and the indices in each sequence
     pub fn lcs(seq1: &BytesMut, seq2: &BytesMut) -> (BytesMut, Vec<(usize, usize)>) {

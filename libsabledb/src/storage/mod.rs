@@ -7,6 +7,7 @@ mod storage_rocksdb;
 mod storage_trait;
 mod string_db;
 mod write_cache;
+mod zset_db;
 
 pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
 pub use crate::storage::storage_adapter::{
@@ -22,6 +23,7 @@ pub use storage_rocksdb::StorageRocksDb;
 pub use storage_trait::{StorageIterator, StorageTrait};
 pub use string_db::StringsDb;
 pub use write_cache::{DbCacheEntry, DbWriteCache};
+pub use zset_db::*;
 
 #[macro_export]
 macro_rules! storage_rocksdb {

@@ -110,6 +110,9 @@ pub enum RedisCommandName {
     Multi,
     Exec,
     Discard,
+    // ZSet commands
+    Zadd,
+    Zcard,
     NotSupported(String),
 }
 
@@ -845,6 +848,18 @@ impl Default for CommandsManager {
                         .with_last_key(0)
                         .with_first_key(0)
                         .with_step(0),
+                ),
+                (
+                    "zadd",
+                    CommandMetadata::new(RedisCommandName::Zadd)
+                        .write()
+                        .with_arity(-4),
+                ),
+                (
+                    "zcard",
+                    CommandMetadata::new(RedisCommandName::Zcard)
+                        .read_only()
+                        .with_arity(2),
                 ),
             ]),
         }
