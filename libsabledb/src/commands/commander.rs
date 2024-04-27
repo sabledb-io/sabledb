@@ -113,6 +113,7 @@ pub enum RedisCommandName {
     // ZSet commands
     Zadd,
     Zcard,
+    Zincrby,
     NotSupported(String),
 }
 
@@ -860,6 +861,12 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zcard)
                         .read_only()
                         .with_arity(2),
+                ),
+                (
+                    "zincrby",
+                    CommandMetadata::new(RedisCommandName::Zincrby)
+                        .write()
+                        .with_arity(4),
                 ),
             ]),
         }

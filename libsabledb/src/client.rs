@@ -843,7 +843,7 @@ impl Client {
                     }
                 }
             }
-            RedisCommandName::Zadd | RedisCommandName::Zcard => {
+            RedisCommandName::Zadd | RedisCommandName::Zcard | RedisCommandName::Zincrby => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

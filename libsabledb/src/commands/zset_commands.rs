@@ -3,7 +3,7 @@ use crate::{
     client::ClientState,
     command_arg_at,
     commands::{HandleCommandResult, Strings},
-    storage::{ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetLenResult},
+    storage::{ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetScoreResult, ZSetLenResult},
     utils::RespBuilderV2,
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
@@ -26,6 +26,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zcard => {
                 Self::zcard(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zincrby => {
+                Self::zincrby(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -205,6 +208,54 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZINCRBY key increment member`
+    /// Increments the score of member in the sorted set stored at key by increment. If member does not exist in the
+    /// sorted set, it is added with increment as its score (as if its previous score was 0.0). If key does not exist,
+    /// a new sorted set with the specified member as its sole member is created.
+    async fn zincrby(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let incrby = command_arg_at!(command, 2);
+        let member = command_arg_at!(command, 3);
+
+        let builder = RespBuilderV2::default();
+        let Some(incrby) = Self::parse_score(incrby) else {
+            builder.error_string(response_buffer, Strings::VALUE_NOT_VALID_FLOAT);
+            return Ok(());
+        };
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let flags = ZAddFlags::Incr;
+
+        match zset_db.add(key, member, incrby, &flags)? {
+            ZSetAddMemberResult::WrongType => {
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
+            }
+            ZSetAddMemberResult::Some(_) => {
+                // get the score
+                match zset_db.get_score(key, member)? {
+                    ZSetGetScoreResult::WrongType | ZSetGetScoreResult::NotFound => {
+                        // this should not happen (type is chcked earlier + we just insert / updated this member)
+                        return Err(SableError::ClientInvalidState);
+                    }
+                    ZSetGetScoreResult::Score(sc) => {
+                        let score = format!("{:.2}", sc);
+                        builder.bulk_string(response_buffer, score.as_bytes());
+                    }
+                }
+            }
+        }
+        // commit the changes
+        zset_db.commit()?;
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -254,6 +305,13 @@ mod test {
         ("zadd myset 10 orisa 20 sigma", ":2\r\n"),
         ("zcard myset", ":4\r\n"),
     ]; "test_zcard")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zincrby mystr 1 value", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zincrby mystr 1", "-ERR wrong number of arguments for 'zincrby' command\r\n"),
+        ("zincrby myset 1 value", "$4\r\n1.00\r\n"),
+        ("zincrby myset 3.5 value", "$4\r\n4.50\r\n"),
+    ]; "test_zincrby")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

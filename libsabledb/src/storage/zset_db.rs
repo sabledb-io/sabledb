@@ -112,7 +112,8 @@ impl<'a> ZSetDb<'a> {
         Ok(ZSetLenResult::Some(zset.len() as usize))
     }
 
-    /// Add
+    /// Add. Return the number of items modified / inserted (depends on the `flags`) input
+    /// argument
     pub fn add(
         &self,
         user_key: &BytesMut,

@@ -78,11 +78,17 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 
 ![sb progress demo](/docs/images/sb-demo.gif)
 
-`set` test, on the same setup (local machine, WSL2 on Windows 10):
+`set` test, on the same set-up (local machine, WSL2 on Windows 10):
 
 ![sb set progress demo](/docs/images/sb-demo-set.gif)
 
 ## Supported commands
+
+
+**IMPORTANT**
+
+`SableDb` is under constant development, if you are missing a command, feel free to open an issue
+and visit this page again in couple of days
 
 ---
 
@@ -168,6 +174,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 |---|---|---|---|
 | zadd | ✓ |✓ |   |
 | zcard | ✓ |✓ |   |
+| zincrby | ✓ |✓ |   |
 
 ### Generic commands
 
