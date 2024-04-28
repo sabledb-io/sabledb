@@ -389,7 +389,7 @@ impl Client {
                 PreHandleCommandResult::CmdIsNotValidForTxn => {
                     resp_writer
                         .error_string(&format!(
-                            "command {} can not be used in a MULTI / EXEC block",
+                            "ERR command {} can not be used in a MULTI / EXEC block",
                             command.main_command()
                         ))
                         .await?;
@@ -398,7 +398,7 @@ impl Client {
                 }
                 PreHandleCommandResult::QueueCommand => {
                     // queue the command and reply with "QUEUED"
-                    client_state.txn_queue_command(command);
+                    client_state.add_txn_command(command);
                     resp_writer.status_string(Strings::QUEUED).await?;
                     resp_writer.flush().await?;
                     return Ok(ClientNextAction::NoAction);

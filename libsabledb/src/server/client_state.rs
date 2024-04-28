@@ -3,13 +3,40 @@ use crate::{
     server::{new_client_id, ServerState},
     storage::{ScanCursor, StorageAdapter},
 };
-use crossbeam::queue::SegQueue;
+
 use dashmap::DashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicU16, AtomicU32},
     Arc,
 };
+
+thread_local! {
+    pub static ACTIVE_TRANSACTIONS: RefCell<HashMap<u128, TransactionState>>
+        = RefCell::new(HashMap::<u128, TransactionState>::new());
+}
+
+#[derive(Default)]
+pub struct TransactionState {
+    commands: VecDeque<Rc<RedisCommand>>,
+}
+
+impl TransactionState {
+    /// Queue command for later execution
+    pub fn add_command(&mut self, command: Rc<RedisCommand>) {
+        self.commands.push_back(command);
+    }
+
+    pub fn commands(&self) -> &VecDeque<Rc<RedisCommand>> {
+        &self.commands
+    }
+
+    pub fn clear(&mut self) {
+        self.commands.clear();
+    }
+}
 
 pub struct ClientStateFlags {}
 
@@ -38,8 +65,6 @@ pub struct ClientState {
     attributes: DashMap<String, String>,
     flags: AtomicU32,
     cursors: DashMap<u64, Rc<ScanCursor>>,
-    /// Holds the commands to be executed while in the "MULTI" state
-    txn_commands: Arc<SegQueue<Rc<RedisCommand>>>,
 }
 
 impl ClientState {
@@ -58,28 +83,38 @@ impl ClientState {
             attributes: DashMap::<String, String>::default(),
             flags: AtomicU32::new(0),
             cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
-            txn_commands: Arc::<SegQueue<Rc<RedisCommand>>>::default(),
         }
     }
 
-    /// Return the queued commands queue
-    pub fn txn_commands(&self) -> Arc<SegQueue<Rc<RedisCommand>>> {
-        self.txn_commands.clone()
+    /// Return a clone of the transaction command queue
+    pub fn txn_commands_vec_cloned(&self) -> VecDeque<Rc<RedisCommand>> {
+        ACTIVE_TRANSACTIONS.with(|txs| {
+            if let Some(txn_state) = txs.borrow().get(&self.id()) {
+                txn_state.commands().clone()
+            } else {
+                VecDeque::<Rc<RedisCommand>>::default()
+            }
+        })
     }
 
-    /// Queue command for later execution
-    pub fn txn_queue_command(&self, command: Rc<RedisCommand>) {
-        self.txn_commands.push(command);
+    /// Return the length of the transaction command queue
+    pub fn txn_commands_vec_len(&self) -> usize {
+        ACTIVE_TRANSACTIONS.with(|txs| {
+            if let Some(txn_state) = txs.borrow().get(&self.id()) {
+                txn_state.commands().len()
+            } else {
+                0usize
+            }
+        })
     }
 
-    /// Return the queued command as a vector. This function consumes the queue
-    /// after which `self.queued_commands.is_empty() == true`
-    pub fn txn_take_commands(&self) -> Vec<Rc<RedisCommand>> {
-        let mut vec_commands = Vec::<Rc<RedisCommand>>::with_capacity(self.txn_commands.len());
-        while let Some(cmd) = self.txn_commands.pop() {
-            vec_commands.push(cmd);
-        }
-        vec_commands
+    /// Add command to the back of the transaction queue
+    pub fn add_txn_command(&self, command: Rc<RedisCommand>) {
+        ACTIVE_TRANSACTIONS.with(|txs| {
+            if let Some(txn_state) = txs.borrow_mut().get_mut(&self.id()) {
+                txn_state.add_command(command)
+            }
+        });
     }
 
     pub fn database(&self) -> &StorageAdapter {
@@ -139,11 +174,21 @@ impl ClientState {
         self.enable_client_flag(ClientStateFlags::TXN_MULTI, enabled)
     }
 
+    /// Start a transaction by adding new `TransactionState` for this client
+    pub fn start_txn(&self) {
+        ACTIVE_TRANSACTIONS.with_borrow_mut(|txs| {
+            txs.insert(self.id(), TransactionState::default());
+        })
+    }
+
+    /// Discard the transaction state for this client
     pub fn discard_transaction(&self) {
         self.enable_client_flag(ClientStateFlags::TXN_MULTI, false);
         self.enable_client_flag(ClientStateFlags::TXN_CALC_SLOTS, false);
         self.enable_client_flag(ClientStateFlags::TXN_EXEC, false);
-        let _ = self.txn_take_commands();
+        ACTIVE_TRANSACTIONS.with_borrow_mut(|txs| {
+            let _ = txs.remove(&self.id());
+        })
     }
 
     pub fn is_txn_state_multi(&self) -> bool {

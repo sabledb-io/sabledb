@@ -16,6 +16,23 @@ use crate::{
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
+/// A helper class for discarding a transaction when leaving the scope
+pub struct ScopedTranscation {
+    client_state: Rc<ClientState>,
+}
+
+impl ScopedTranscation {
+    pub fn new(client_state: Rc<ClientState>) -> Self {
+        ScopedTranscation { client_state }
+    }
+}
+
+impl Drop for ScopedTranscation {
+    fn drop(&mut self) {
+        self.client_state.discard_transaction();
+    }
+}
+
 pub struct TransactionCommands {}
 
 impl TransactionCommands {
@@ -43,6 +60,9 @@ impl TransactionCommands {
         let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
         expect_args_count_tx!(command, 1, resp_writer, HandleCommandResult::ResponseSent);
 
+        // Make sure that when we leave this scope, the transaction for this client is discarded
+        let _txn_guard = ScopedTranscation::new(client_state.clone());
+
         // Confirm that we are in the MULTI state
         if !client_state.is_txn_state_multi() {
             resp_writer
@@ -61,7 +81,7 @@ impl TransactionCommands {
         // Change the client state into "calculating slots"
         client_state.set_txn_state_calc_slots(true);
 
-        let queued_commands = client_state.txn_take_commands();
+        let queued_commands = client_state.txn_commands_vec_cloned();
         let mut slots = Vec::<u16>::with_capacity(queued_commands.len());
 
         for cmd in &queued_commands {
@@ -77,16 +97,13 @@ impl TransactionCommands {
                     slots.extend_from_slice(&command_slots);
                 }
                 Err(e) => {
-                    // other error occured, propogate it
-                    client_state.discard_transaction();
+                    // other error occurred, propagate it
                     return Err(e);
                 }
                 Ok(ClientNextAction::TerminateConnection) => {
-                    client_state.discard_transaction();
                     return Err(SableError::ConnectionClosed);
                 }
                 _ => {
-                    client_state.discard_transaction();
                     let inner_message = file_output.read_all().await?;
                     let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
                     resp_writer
@@ -119,9 +136,6 @@ impl TransactionCommands {
         // if we got here, everything was OK -> commit the transaction
         client_state.database().commit()?;
 
-        // Clear the txn state & send back the response
-        client_state.set_txn_state_exec(false);
-
         // write the array length
         let mut resp_writer = RespWriter::new(tx, 4096, client_state.clone());
         resp_writer.add_array_len(queued_commands.len()).await?;
@@ -143,6 +157,9 @@ impl TransactionCommands {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
         expect_args_count_tx!(command, 1, resp_writer, HandleCommandResult::ResponseSent);
 
+        // start a txn
+        client_state.start_txn();
+
         // set the client into the "MULTI" state
         client_state.set_txn_state_multi(true);
         resp_writer.ok().await?;
@@ -159,6 +176,8 @@ impl TransactionCommands {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
         expect_args_count_tx!(command, 1, resp_writer, HandleCommandResult::ResponseSent);
 
+        let _txn_guard = ScopedTranscation::new(client_state.clone());
+
         // Confirm that we are in the MULTI state
         if !client_state.is_txn_state_multi() {
             resp_writer
@@ -167,9 +186,6 @@ impl TransactionCommands {
             resp_writer.flush().await?;
             return Ok(HandleCommandResult::ResponseSent);
         }
-
-        // clear all the transaction details (state + command queue)
-        client_state.discard_transaction();
 
         resp_writer.ok().await?;
         resp_writer.flush().await?;
@@ -186,8 +202,10 @@ impl TransactionCommands {
 //
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::{
-        commands::Strings, tests::run_and_return_output, Client, ClientState, ServerState,
+        commands::Strings, server::SableError, tests::run_and_return_output, Client, ClientState,
+        ServerState,
     };
     use std::rc::Rc;
     use std::sync::Arc;
@@ -223,7 +241,9 @@ mod test {
             check_command(
                 client.inner(),
                 vec!["multi"],
-                RedisObject::Error("command multi can not be used in a MULTI / EXEC block".into()),
+                RedisObject::Error(
+                    "ERR command multi can not be used in a MULTI / EXEC block".into(),
+                ),
             )
             .await;
 
@@ -232,7 +252,7 @@ mod test {
                 client.inner(),
                 vec!["hgetall"],
                 RedisObject::Error(
-                    "command hgetall can not be used in a MULTI / EXEC block".into(),
+                    "ERR command hgetall can not be used in a MULTI / EXEC block".into(),
                 ),
             )
             .await;
@@ -254,7 +274,7 @@ mod test {
             .await;
 
             // we expect 2 commands in the queue
-            assert_eq!(client.inner().txn_commands().len(), 2);
+            assert_eq!(client.inner().txn_commands_vec_len(), 2);
 
             // Use the second client to confirm that the command was not executed
             check_command(client2.inner(), vec!["get", "k1"], RedisObject::NullString).await;
@@ -316,7 +336,7 @@ mod test {
             .await;
 
             // we expect 4 commands in the queue
-            assert_eq!(client.inner().txn_commands().len(), 4);
+            assert_eq!(client.inner().txn_commands_vec_len(), 4);
 
             check_command(
                 client.inner(),
@@ -332,7 +352,7 @@ mod test {
             check_command(client.inner(), vec!["get", "k1"], RedisObject::NullString).await;
             check_command(client.inner(), vec!["get", "k2"], RedisObject::NullString).await;
             check_command(client.inner(), vec!["get", "k3"], RedisObject::NullString).await;
-            assert_eq!(client.inner().txn_commands().len(), 0);
+            assert_eq!(client.inner().txn_commands_vec_len(), 0);
         });
     }
 
@@ -396,7 +416,7 @@ mod test {
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
-            assert_eq!(myclient.inner().txn_commands().len(), 5);
+            assert_eq!(myclient.inner().txn_commands_vec_len(), 5);
 
             check_command(
                 myclient.inner(),
@@ -469,7 +489,7 @@ mod test {
             .await;
 
             // we expect 4 commands in the queue
-            assert_eq!(client.inner().txn_commands().len(), 4);
+            assert_eq!(client.inner().txn_commands_vec_len(), 4);
 
             check_command(
                 client.inner(),
@@ -507,7 +527,7 @@ mod test {
                 RedisObject::Str("v3".into()),
             )
             .await;
-            assert_eq!(client.inner().txn_commands().len(), 0);
+            assert_eq!(client.inner().txn_commands_vec_len(), 0);
 
             // Run another command, this time we expect it to run without "EXEC"
             check_command(
@@ -525,5 +545,50 @@ mod test {
             )
             .await;
         });
+    }
+
+    #[test_case::test_case(vec![
+        ("MULTI", "+OK\r\n"),
+        ("MULTI", "-ERR command multi can not be used in a MULTI / EXEC block\r\n"),
+        ("set tanks rein", "+QUEUED\r\n"),
+        ("append tanks _orisa", "+QUEUED\r\n"),
+        ("append tanks _sigma", "+QUEUED\r\n"),
+        ("EXEC", "*3\r\n+OK\r\n:10\r\n:16\r\n"),
+        ("get tanks", "$16\r\nrein_orisa_sigma\r\n"),
+    ]; "test_multi")]
+    #[test_case::test_case(vec![
+        ("MULTI", "+OK\r\n"),
+        ("set tanks rein", "+QUEUED\r\n"),
+        ("append tanks _orisa", "+QUEUED\r\n"),
+        ("append tanks _sigma", "+QUEUED\r\n"),
+        ("DISCARD", "+OK\r\n"),
+        ("get tanks", "$-1\r\n"),
+        ("MULTI", "+OK\r\n"),
+    ]; "test_discard")]
+    fn test_txn_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            for (args, expected_value) in args {
+                let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+                let args = args.split(' ').collect();
+                let cmd = Rc::new(RedisCommand::for_test(args));
+                match Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                    .await
+                    .unwrap()
+                {
+                    ClientNextAction::NoAction => {
+                        assert_eq!(
+                            sink.read_all_as_string().await.unwrap().as_str(),
+                            expected_value
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
     }
 }
