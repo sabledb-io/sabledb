@@ -115,7 +115,7 @@ impl<'a> ZSetDb<'a> {
     /// Add. Return the number of items modified / inserted (depends on the `flags`) input
     /// argument
     pub fn add(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         member: &BytesMut,
         score: f64,
@@ -196,7 +196,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Commit the changes to the disk
-    pub fn commit(&self) -> Result<(), SableError> {
+    pub fn commit(&mut self) -> Result<(), SableError> {
         self.flush_cache()
     }
 
@@ -218,13 +218,8 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Apply the changes to the store and clear the cache
-    fn flush_cache(&self) -> Result<(), SableError> {
-        let batch = self.cache.to_write_batch();
-        if batch.is_empty() {
-            return Ok(());
-        }
-        self.cache.clear();
-        self.store.apply_batch(&batch)
+    fn flush_cache(&mut self) -> Result<(), SableError> {
+        self.cache.flush()
     }
 
     /// Given raw bytes (read from the db) return whether it represents a `ZSetValueMetadata`
@@ -244,14 +239,18 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Insert or replace a set entry in the database
-    fn create_metadata(&self, user_key: &BytesMut) -> Result<ZSetValueMetadata, SableError> {
+    fn create_metadata(&mut self, user_key: &BytesMut) -> Result<ZSetValueMetadata, SableError> {
         let md = ZSetValueMetadata::with_id(self.store.generate_id());
         self.put_metadata(user_key, &md)?;
         Ok(md)
     }
 
     /// Insert or replace a set entry in the database
-    fn put_metadata(&self, user_key: &BytesMut, md: &ZSetValueMetadata) -> Result<(), SableError> {
+    fn put_metadata(
+        &mut self,
+        user_key: &BytesMut,
+        md: &ZSetValueMetadata,
+    ) -> Result<(), SableError> {
         // serialise the hash value into bytes
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let mut buffer = BytesMut::with_capacity(ZSetValueMetadata::SIZE);
@@ -263,7 +262,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Delete the set
-    fn delete_metadata(&self, user_key: &BytesMut) -> Result<(), SableError> {
+    fn delete_metadata(&mut self, user_key: &BytesMut) -> Result<(), SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&encoded_key)?;
         Ok(())
@@ -271,7 +270,7 @@ impl<'a> ZSetDb<'a> {
 
     /// Put member
     fn put_member(
-        &self,
+        &mut self,
         set_id: u64,
         member: &[u8],
         score: f64,
@@ -334,7 +333,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Delete member from the set
-    fn delete_member(&self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
+    fn delete_member(&mut self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
         let key_by_member = self.encode_key_by_memebr(set_id, member);
         let Some(value) = self.cache.get(&key_by_member)? else {
             return Ok(false);
@@ -381,7 +380,7 @@ mod tests {
     fn test_zset_wrong_type() -> Result<(), SableError> {
         let (_deleter, db) = crate::tests::open_store();
         let zset_db = ZSetDb::with_storage(&db, 0);
-        let strings_db = crate::storage::StringsDb::with_storage(&db, 0);
+        let mut strings_db = crate::storage::StringsDb::with_storage(&db, 0);
         let string_md = crate::StringValueMetadata::default();
 
         let key = BytesMut::from("key");
@@ -400,7 +399,7 @@ mod tests {
     #[test]
     fn test_zset_get_score() -> Result<(), SableError> {
         let (_deleter, db) = crate::tests::open_store();
-        let zset_db = ZSetDb::with_storage(&db, 0);
+        let mut zset_db = ZSetDb::with_storage(&db, 0);
 
         let overwatch_tanks = BytesMut::from("overwatch_tanks");
 
@@ -448,7 +447,7 @@ mod tests {
     #[test]
     fn test_zset_add() -> Result<(), SableError> {
         let (_deleter, db) = crate::tests::open_store();
-        let zset_db = ZSetDb::with_storage(&db, 0);
+        let mut zset_db = ZSetDb::with_storage(&db, 0);
 
         // rank our tanks
         let overwatch_tanks = BytesMut::from("overwatch_tanks");

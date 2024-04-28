@@ -166,7 +166,7 @@ impl HashCommands {
         let key = command_arg_at!(command, 1);
         // Hash write updating 2 entries + doing read, so we need to exclusive lock it
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items_put = match hash_db.put_multi(key, &field_values)? {
             HashPutResult::Some(count) => count,
@@ -197,7 +197,7 @@ impl HashCommands {
 
         // Doing get+set -> requires exclusive lock
         let _unused = LockManager::lock_user_key_exclusive(hash_name, client_state.clone())?;
-        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         // Sanity
         match hash_db.field_exists(hash_name, field)? {
@@ -325,7 +325,7 @@ impl HashCommands {
 
         // Multiple db calls: exclusive lock
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items_put = match hash_db.delete(key, &fields)? {
             HashDeleteResult::Some(count) => count,
@@ -495,7 +495,7 @@ impl HashCommands {
 
         // Lock and delete
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let prev_value = match hash_db.get(key, field)? {
             HashGetResult::WrongType => {
@@ -543,7 +543,7 @@ impl HashCommands {
 
         // Lock and delete
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
+        let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let prev_value = match hash_db.get(key, field)? {
             HashGetResult::WrongType => {

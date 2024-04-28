@@ -25,48 +25,48 @@ impl<'a> StringsDb<'a> {
     /// Put or Replace key
     /// No locks involved here
     pub fn put(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         value: &BytesMut,
         metadata: &StringValueMetadata,
         put_flags: PutFlags,
     ) -> Result<(), SableError> {
         self.put_internal(user_key, value, metadata, &put_flags)?;
-        self.flush_cache()
+        self.cache.flush()
     }
 
     /// Get a string key from the underlying storage
     pub fn get(
-        &self,
+        &mut self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
         let result = self.get_internal(user_key)?;
-        self.flush_cache()?;
+        self.cache.flush()?;
         Ok(result)
     }
 
     /// Delete key. The key is assumed to be a user key (i.e. not encoded)
-    pub fn delete(&self, user_key: &BytesMut) -> Result<(), SableError> {
+    pub fn delete(&mut self, user_key: &BytesMut) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&internal_key)?;
-        self.flush_cache()
+        self.cache.flush()
     }
 
     /// Put multiple items in the store. On success, return `true`
     pub fn multi_put(
-        &self,
+        &mut self,
         user_keys_and_values: &[(&BytesMut, &BytesMut)],
         put_flags: PutFlags,
     ) -> Result<bool, SableError> {
         let metadata = StringValueMetadata::new();
 
         // Check for the flags first
-        for (key, value) in user_keys_and_values.iter() {
+        for (key, value) in user_keys_and_values {
             if !self.put_internal(key, value, &metadata, &put_flags)? {
                 return Ok(false);
             }
         }
-        self.flush_cache()?;
+        self.cache.flush()?;
         Ok(true)
     }
 
@@ -74,7 +74,7 @@ impl<'a> StringsDb<'a> {
     // Internal helpers
     // =========-------------------------------------------
     fn put_internal(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         value: &BytesMut,
         metadata: &StringValueMetadata,
@@ -104,7 +104,7 @@ impl<'a> StringsDb<'a> {
 
     /// Get a string key from the underlying storage
     fn get_internal(
-        &self,
+        &mut self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
@@ -124,15 +124,5 @@ impl<'a> StringsDb<'a> {
         } else {
             Ok(None)
         }
-    }
-
-    /// Apply the changes to the store and clear the cache
-    fn flush_cache(&self) -> Result<(), SableError> {
-        if self.cache.is_empty() {
-            return Ok(());
-        }
-        let batch = self.cache.to_write_batch();
-        self.cache.clear();
-        self.store.apply_batch(&batch)
     }
 }

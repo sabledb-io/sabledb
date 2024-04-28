@@ -1,6 +1,6 @@
 use crate::{storage::BatchUpdate, storage::PutFlags, SableError, StorageAdapter};
 use bytes::BytesMut;
-use dashmap::DashMap;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct DbCacheEntry {
@@ -35,25 +35,25 @@ impl DbCacheEntry {
 /// calling to `DbWriteCache::to_write_batch()` followed by `StroageAdapter::apply_batch` call
 pub struct DbWriteCache<'a> {
     store: &'a StorageAdapter,
-    changes: DashMap<BytesMut, Option<Rc<DbCacheEntry>>>,
+    changes: HashMap<BytesMut, Option<Rc<DbCacheEntry>>>,
 }
 
 impl<'a> DbWriteCache<'a> {
     pub fn with_storage(store: &'a StorageAdapter) -> Self {
         DbWriteCache {
             store,
-            changes: DashMap::<BytesMut, Option<Rc<DbCacheEntry>>>::default(),
+            changes: HashMap::<BytesMut, Option<Rc<DbCacheEntry>>>::default(),
         }
     }
 
-    pub fn put(&self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
+    pub fn put(&mut self, key: &BytesMut, value: BytesMut) -> Result<(), SableError> {
         let entry = Rc::new(DbCacheEntry::new(value, PutFlags::Override));
         let _ = self.changes.insert(key.clone(), Some(entry));
         Ok(())
     }
 
     pub fn put_flags(
-        &self,
+        &mut self,
         key: &BytesMut,
         value: BytesMut,
         flags: PutFlags,
@@ -66,7 +66,7 @@ impl<'a> DbWriteCache<'a> {
     /// Note that we do not remove the entry from the `changes` hash,
     /// instead we use a `None` marker to indicate that this entry
     /// should be converted into a `delete` operation
-    pub fn delete(&self, key: &BytesMut) -> Result<(), SableError> {
+    pub fn delete(&mut self, key: &BytesMut) -> Result<(), SableError> {
         let _ = self.changes.insert(key.clone(), None);
         Ok(())
     }
@@ -89,7 +89,7 @@ impl<'a> DbWriteCache<'a> {
         };
 
         // found an match in cache
-        if let Some(value) = value.value() {
+        if let Some(value) = value {
             // an actual value
             Ok(Some(value.data.clone()))
         } else {
@@ -100,16 +100,16 @@ impl<'a> DbWriteCache<'a> {
 
     pub fn to_write_batch(&self) -> BatchUpdate {
         let mut batch_update = BatchUpdate::default();
-        for entry in &self.changes {
-            match entry.value() {
-                None => batch_update.delete(entry.key().clone()),
-                Some(value) => batch_update.put(entry.key().clone(), value.data.clone()),
+        for (k, v) in &self.changes {
+            match v {
+                None => batch_update.delete(k.clone()),
+                Some(value) => batch_update.put(k.clone(), value.data.clone()),
             }
         }
         batch_update
     }
 
-    pub fn clear(&self) {
+    pub fn clear(&mut self) {
         self.changes.clear()
     }
 
@@ -119,6 +119,33 @@ impl<'a> DbWriteCache<'a> {
 
     pub fn len(&self) -> usize {
         self.changes.len()
+    }
+
+    /// Apply the cache to the disk as a single atomic operation
+    pub fn flush(&mut self) -> Result<(), SableError> {
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        if self.changes.len() == 1 {
+            // do not create a batch
+            for (k, v) in &self.changes {
+                match v {
+                    None => {
+                        self.store.delete(k)?;
+                    }
+                    Some(value) => {
+                        self.store.put(k, &value.data, PutFlags::Override)?;
+                    }
+                }
+            }
+        } else {
+            let updates = self.to_write_batch();
+            self.store.apply_batch(&updates)?;
+        }
+
+        self.changes.clear();
+        Ok(())
     }
 }
 
@@ -182,7 +209,7 @@ mod tests {
         }
 
         // Test that `get` accesses the storage
-        let db_cache = DbWriteCache::with_storage(&store);
+        let mut db_cache = DbWriteCache::with_storage(&store);
         for i in 0..10 {
             let key = BytesMut::from(format!("new_k{}", i).as_str());
             let value = BytesMut::from(format!("v{}", i).as_str());
@@ -225,7 +252,7 @@ mod tests {
         }
 
         // Test that `get` accesses the storage
-        let db_cache = DbWriteCache::with_storage(&store);
+        let mut db_cache = DbWriteCache::with_storage(&store);
         let mut expected_keys = std::collections::HashSet::<BytesMut>::with_capacity(50);
         for i in 0..50 {
             let key = BytesMut::from(format!("k{}", i).as_str());

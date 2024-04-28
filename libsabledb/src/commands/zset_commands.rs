@@ -189,7 +189,7 @@ impl ZSetCommands {
         }
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut items_added = 0usize;
         for (score, member) in pairs {
@@ -230,7 +230,7 @@ impl ZSetCommands {
         };
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
         let flags = ZAddFlags::Incr;
 
         match zset_db.add(key, member, incrby, &flags)? {

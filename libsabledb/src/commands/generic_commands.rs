@@ -78,7 +78,7 @@ impl GenericCommands {
                     deleted_items = deleted_items.saturating_add(1);
                 }
                 Some(Encoding::VALUE_LIST) => {
-                    let list = List::with_storage(client_state.database(), db_id);
+                    let mut list = List::with_storage(client_state.database(), db_id);
                     list.remove(
                         user_key,
                         None, // remove all items

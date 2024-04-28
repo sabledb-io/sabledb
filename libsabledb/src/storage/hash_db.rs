@@ -111,7 +111,7 @@ impl<'a> HashDb<'a> {
 
     /// Sets the specified fields to their respective values in the hash stored at `user_key`
     pub fn put_multi(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         field_vals: &[(&BytesMut, &BytesMut)],
     ) -> Result<HashPutResult, SableError> {
@@ -198,7 +198,7 @@ impl<'a> HashDb<'a> {
 
     /// Removes the specified fields from the hash stored at `user_key`
     pub fn delete(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         fields: &[&BytesMut],
     ) -> Result<HashDeleteResult, SableError> {
@@ -291,18 +291,13 @@ impl<'a> HashDb<'a> {
     ///=======================================================
 
     /// Apply the changes to the store and clear the cache
-    fn flush_cache(&self) -> Result<(), SableError> {
-        let batch = self.cache.to_write_batch();
-        if batch.is_empty() {
-            return Ok(());
-        }
-        self.cache.clear();
-        self.store.apply_batch(&batch)
+    fn flush_cache(&mut self) -> Result<(), SableError> {
+        self.cache.flush()
     }
 
     /// Put a hash entry in the database
     fn put_hash_metadata(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         hash_md: &HashValueMetadata,
     ) -> Result<(), SableError> {
@@ -318,7 +313,7 @@ impl<'a> HashDb<'a> {
     }
 
     /// Delete the hash metadata
-    fn delete_hash_metadata(&self, user_key: &BytesMut) -> Result<(), SableError> {
+    fn delete_hash_metadata(&mut self, user_key: &BytesMut) -> Result<(), SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&encoded_key)?;
         Ok(())
@@ -327,7 +322,10 @@ impl<'a> HashDb<'a> {
     /// Create or replace a hash entry in the database
     /// If `hash_id_opt` is `None`, create a new id and put it
     /// else, override the existing entry
-    fn create_hash_metadata(&self, user_key: &BytesMut) -> Result<HashValueMetadata, SableError> {
+    fn create_hash_metadata(
+        &mut self,
+        user_key: &BytesMut,
+    ) -> Result<HashValueMetadata, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let hash_md = HashValueMetadata::with_id(self.store.generate_id());
 
@@ -354,7 +352,11 @@ impl<'a> HashDb<'a> {
     }
 
     /// Delete hash field from the database
-    fn delete_hash_field_key(&self, hash_id: u64, user_field: &BytesMut) -> Result<(), SableError> {
+    fn delete_hash_field_key(
+        &mut self,
+        hash_id: u64,
+        user_field: &BytesMut,
+    ) -> Result<(), SableError> {
         let key = self.encode_hash_field_key(hash_id, user_field)?;
         self.cache.delete(&key)?;
         Ok(())
@@ -378,7 +380,7 @@ impl<'a> HashDb<'a> {
 
     /// Put the value for a hash field
     fn put_hash_field_value(
-        &self,
+        &mut self,
         hash_id: u64,
         user_field: &BytesMut,
         user_value: &BytesMut,
@@ -425,8 +427,8 @@ mod tests {
     #[test]
     fn test_hash_wrong_type() -> Result<(), SableError> {
         let (_deleter, db) = crate::tests::open_store();
-        let hash_db = HashDb::with_storage(&db, 0);
-        let strings_db = crate::storage::StringsDb::with_storage(&db, 0);
+        let mut hash_db = HashDb::with_storage(&db, 0);
+        let mut strings_db = crate::storage::StringsDb::with_storage(&db, 0);
 
         let string_md = crate::StringValueMetadata::default();
 
@@ -454,7 +456,7 @@ mod tests {
     #[test]
     fn test_hash_db() -> Result<(), SableError> {
         let (_deleter, db) = crate::tests::open_store();
-        let hash_db = HashDb::with_storage(&db, 0);
+        let mut hash_db = HashDb::with_storage(&db, 0);
 
         let hash_name = BytesMut::from("myhash");
         let hash_name_2 = BytesMut::from("myhash_2");

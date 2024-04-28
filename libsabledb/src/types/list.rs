@@ -105,12 +105,12 @@ impl<'a> List<'a> {
 
     /// Return the list size
     pub fn len(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
-        let list = list_or_size_0!(&self, list_name, response_buffer, builder);
+        let list = list_or_size_0!(self, list_name, response_buffer, builder);
         builder.number_u64(response_buffer, list.len());
         Ok(())
     }
@@ -119,7 +119,7 @@ impl<'a> List<'a> {
     /// If this function could not find a list with items,
     /// return `BlockingCommandResult::WouldBlock` to the caller
     pub fn blocking_pop(
-        &self,
+        &mut self,
         lists: &[&BytesMut],
         count: usize,
         response_buffer: &mut BytesMut,
@@ -149,7 +149,7 @@ impl<'a> List<'a> {
 
     /// Insert `element` after or before `pivot` element
     pub fn linsert(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         element: &BytesMut,
         pivot: &BytesMut,
@@ -197,7 +197,7 @@ impl<'a> List<'a> {
 
     /// First `count` elements from the non empty list from the `list_names`
     pub fn multi_pop(
-        &self,
+        &mut self,
         list_names: &[&BytesMut],
         count: usize,
         flags: ListFlags,
@@ -216,14 +216,14 @@ impl<'a> List<'a> {
     }
 
     pub fn pop(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         count: usize,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
-        let mut list = list_md_or_null_string!(&self, list_name, response_buffer, builder);
+        let mut list = list_md_or_null_string!(self, list_name, response_buffer, builder);
         let mut output_arr = Vec::<ListItem>::with_capacity(count);
         for _ in 0..count {
             let item_to_remove = if flags.intersects(ListFlags::FromLeft) {
@@ -266,7 +266,7 @@ impl<'a> List<'a> {
     /// Here, `-1` means the last element, `-2` means the penultimate and so forth.
     /// When the value at key is not a list, an error is returned
     pub fn index(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         index: i32,
         response_buffer: &mut BytesMut,
@@ -289,7 +289,7 @@ impl<'a> List<'a> {
 
     /// Update element at a given position with `user_value`
     pub fn set(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         index: i32,
         user_value: BytesMut,
@@ -308,7 +308,7 @@ impl<'a> List<'a> {
             IterResult::Some(item) => item,
         };
         item.borrow_mut().user_data = user_value;
-        item.borrow().save(&self.cache)?;
+        item.borrow_mut().save(&mut self.cache)?;
         self.flush_cache()?;
         builder.ok(response_buffer);
         Ok(())
@@ -318,7 +318,7 @@ impl<'a> List<'a> {
     /// If `count` is lower than `0`, remove from tail
     /// If the list is empty, delete it
     pub fn remove(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         element: Option<&BytesMut>,
         count: i32,
@@ -383,7 +383,7 @@ impl<'a> List<'a> {
     /// if `maxlen` is provided, limit the number of comparions to `maxlex`
     /// If rank is provided as negative number, scan backward
     pub fn lpos(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         user_value: &BytesMut,
         rank: Option<i32>,
@@ -427,7 +427,7 @@ impl<'a> List<'a> {
     }
 
     pub fn lrange(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         start: i32,
         end: i32,
@@ -492,7 +492,7 @@ impl<'a> List<'a> {
     }
 
     pub fn ltrim(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         start: i32,
         end: i32,
@@ -559,7 +559,7 @@ impl<'a> List<'a> {
     }
 
     pub fn push(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         elements: &[&BytesMut],
         response_buffer: &mut BytesMut,
@@ -599,7 +599,7 @@ impl<'a> List<'a> {
     /// If this function could not find a list with items,
     /// return `BlockingCommandResult::WouldBlock` to the caller
     fn blocking_pop_internal(
-        &self,
+        &mut self,
         lists: &[&BytesMut],
         count: usize,
         flags: ListFlags,
@@ -644,7 +644,7 @@ impl<'a> List<'a> {
     }
 
     fn pop_internal(
-        &self,
+        &mut self,
         list: &mut ListValueMetadata,
         mut count: usize,
         flags: &ListFlags,
@@ -701,7 +701,7 @@ impl<'a> List<'a> {
 
     /// Move item from `src` -> `target`
     pub async fn move_item(
-        &self,
+        &mut self,
         src_list_name: &BytesMut,
         target_list_name: &BytesMut,
         src_flags: ListFlags,
@@ -784,7 +784,7 @@ impl<'a> List<'a> {
     /// if `maxlen` is provided, limit the number of comparions to `maxlex`
     /// If rank is provided as negative number, scan backward
     fn pos(
-        &self,
+        &mut self,
         list_name: &BytesMut,
         user_value: &BytesMut,
         rank: Option<i32>,
@@ -869,7 +869,11 @@ impl<'a> List<'a> {
     }
 
     /// Find item by position
-    fn find_by_index(&self, list_name: &BytesMut, index: i32) -> Result<IterResult, SableError> {
+    fn find_by_index(
+        &mut self,
+        list_name: &BytesMut,
+        index: i32,
+    ) -> Result<IterResult, SableError> {
         let backward = index < 0;
         let pos: usize = if index < 0 {
             index
@@ -974,7 +978,7 @@ impl<'a> List<'a> {
     }
 
     fn push_internal(
-        &self,
+        &mut self,
         list: &mut ListValueMetadata,
         element: &BytesMut,
         flags: &ListFlags,
@@ -1001,11 +1005,11 @@ impl<'a> List<'a> {
 
     // Remove `item_id` from the list
     fn remove_internal(
-        &self,
+        &mut self,
         item_id: u64,
         list: &mut ListValueMetadata,
     ) -> Result<Option<ListItem>, SableError> {
-        let Some(to_be_removed) = self.get_list_item_by_key(list.id(), item_id)? else {
+        let Some(mut to_be_removed) = self.get_list_item_by_key(list.id(), item_id)? else {
             return Ok(None);
         };
 
@@ -1018,7 +1022,7 @@ impl<'a> List<'a> {
             if !left_item.has_next() {
                 list.set_tail(left_item.id());
             }
-            left_item.save(&self.cache)?;
+            left_item.save(&mut self.cache)?;
         }
 
         if to_be_removed.has_next() {
@@ -1031,18 +1035,18 @@ impl<'a> List<'a> {
             if !right_item.has_previous() {
                 list.set_head(right_item.id());
             }
-            right_item.save(&self.cache)?;
+            right_item.save(&mut self.cache)?;
         }
 
         list.set_len(list.len().saturating_sub(1));
 
         // delete the item
-        to_be_removed.delete(&self.cache)?;
+        to_be_removed.delete(&mut self.cache)?;
         Ok(Some(to_be_removed))
     }
 
     fn get_list_item_by_key(
-        &self,
+        &mut self,
         list_id: u64,
         item_id: u64,
     ) -> Result<Option<ListItem>, SableError> {
@@ -1053,7 +1057,7 @@ impl<'a> List<'a> {
     /// If `left_id` is `None`, the new `ListItem` becomes the first item in the list
     /// If `right_id` is `None`, the new `ListItem` becomes the last item in the list
     fn insert_internal(
-        &self,
+        &mut self,
         list: &mut ListValueMetadata,
         element: &BytesMut,
         left_id: Option<u64>,
@@ -1073,8 +1077,8 @@ impl<'a> List<'a> {
                     return Ok(InsertResult::NotFound);
                 };
                 new_item.insert_between(Some(&mut left_item), Some(&mut right_item))?;
-                left_item.save(&self.cache)?;
-                right_item.save(&self.cache)?;
+                left_item.save(&mut self.cache)?;
+                right_item.save(&mut self.cache)?;
             }
             (Some(left_id), None) => {
                 // new list
@@ -1087,7 +1091,7 @@ impl<'a> List<'a> {
                 list.set_tail(new_item.id());
 
                 // update the cache
-                left_item.save(&self.cache)?;
+                left_item.save(&mut self.cache)?;
             }
             (None, Some(right_id)) => {
                 let Some(mut right_item) = self.get_list_item_by_key(list.id(), right_id)? else {
@@ -1099,7 +1103,7 @@ impl<'a> List<'a> {
                 list.set_head(new_item.id());
 
                 // update the cache
-                right_item.save(&self.cache)?;
+                right_item.save(&mut self.cache)?;
             }
             (None, None) => {
                 // list is empty (probably a new list)
@@ -1112,7 +1116,7 @@ impl<'a> List<'a> {
         list.set_len(list.len().saturating_add(1));
 
         // store the new element
-        new_item.save(&self.cache)?;
+        new_item.save(&mut self.cache)?;
         Ok(InsertResult::Some(()))
     }
 
@@ -1121,7 +1125,7 @@ impl<'a> List<'a> {
     /// ---
 
     fn get_list_metadata_with_name(
-        &self,
+        &mut self,
         list_name: &BytesMut,
     ) -> Result<GetListMetadataResult, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
@@ -1148,7 +1152,7 @@ impl<'a> List<'a> {
     }
 
     /// Delete `ListValueMetadata` from the database
-    fn delete_list_metadata_internal(&self, list_name: &BytesMut) -> Result<(), SableError> {
+    fn delete_list_metadata_internal(&mut self, list_name: &BytesMut) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         self.cache.delete(&internal_key)?;
         Ok(())
@@ -1156,7 +1160,7 @@ impl<'a> List<'a> {
 
     /// Put `ListValueMetadata` into the database
     fn put_list_metadata_internal(
-        &self,
+        &mut self,
         metadata: &ListValueMetadata,
         list_name: &BytesMut,
     ) -> Result<(), SableError> {
@@ -1176,9 +1180,8 @@ impl<'a> List<'a> {
         md
     }
 
-    fn flush_cache(&self) -> Result<(), SableError> {
-        let updates = self.cache.to_write_batch();
-        self.store.apply_batch(&updates)
+    fn flush_cache(&mut self) -> Result<(), SableError> {
+        self.cache.flush()
     }
 }
 
@@ -1225,7 +1228,7 @@ impl ListItem {
     }
 
     /// Save the current list item into the database
-    pub fn save(&self, store: &DbWriteCache) -> Result<(), SableError> {
+    pub fn save(&mut self, store: &mut DbWriteCache) -> Result<(), SableError> {
         let (key, val) = self.serialise();
         store.put(&key, val)
     }
@@ -1259,7 +1262,7 @@ impl ListItem {
     }
 
     /// Delete the `ListItem` from the database
-    pub fn delete(&self, store: &DbWriteCache) -> Result<(), SableError> {
+    pub fn delete(&mut self, store: &mut DbWriteCache) -> Result<(), SableError> {
         // as the key, we use:
         // `key_type`, `list_id` and `item_id`
         // in as the value:
@@ -1486,9 +1489,9 @@ mod tests {
         src.prev = 10;
         src.next = 11;
 
-        let cache = DbWriteCache::with_storage(&store);
+        let mut cache = DbWriteCache::with_storage(&store);
         src.user_data = BytesMut::from("hello world");
-        src.save(&cache)?;
+        src.save(&mut cache)?;
 
         let mut target = ListItem::new(1975, 42);
         assert_eq!(target.load(&cache)?, true);
@@ -1522,7 +1525,7 @@ mod tests {
     fn test_push_pop() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_push_pop.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store, 0);
+        let mut list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1575,7 +1578,7 @@ mod tests {
     fn test_list_iterate_forward() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_iterate_list_forward.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store, 0);
+        let mut list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1614,7 +1617,7 @@ mod tests {
     fn test_list_iterate_backward() -> Result<(), SableError> {
         let store = prepare_db!("tests/test_iterate_list_backward.db");
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store, 0);
+        let mut list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1662,7 +1665,7 @@ mod tests {
     fn test_list_index(index: i32, element: Option<&'static str>) -> Result<(), SableError> {
         let store = prepare_db!(&format!("tests/test_list_index{}.db", index));
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store, 0);
+        let mut list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),
@@ -1703,7 +1706,7 @@ mod tests {
     ) -> Result<(), SableError> {
         let store = prepare_db!(&format!("tests/test_list_trim_{}_{}.db", start, end));
         let list_name = BytesMut::from("my list");
-        let list = List::with_storage(&store, 0);
+        let mut list = List::with_storage(&store, 0);
         let elements = [
             &BytesMut::from("hello"),
             &BytesMut::from("world"),

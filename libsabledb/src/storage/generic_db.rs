@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_generic_db() -> Result<(), SableError> {
         let store = open_database("test_generic_db");
-        let strings_db = StringsDb::with_storage(&store, 0);
+        let mut strings_db = StringsDb::with_storage(&store, 0);
         let generic_db = GenericDb::with_storage(&store, 0);
 
         // Write 10 entries using `StringDb`
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_updating_expiration() -> Result<(), SableError> {
         let store = open_database("test_updating_expiration");
-        let strings_db = StringsDb::with_storage(&store, 0);
+        let mut strings_db = StringsDb::with_storage(&store, 0);
         let generic_db = GenericDb::with_storage(&store, 0);
 
         let key = BytesMut::from("key");
