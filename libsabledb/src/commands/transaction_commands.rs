@@ -61,7 +61,7 @@ impl TransactionCommands {
         // Change the client state into "calculating slots"
         client_state.set_txn_state_calc_slots(true);
 
-        let queued_commands = client_state.take_queued_commands();
+        let queued_commands = client_state.txn_take_commands();
         let mut slots = Vec::<u16>::with_capacity(queued_commands.len());
 
         for cmd in &queued_commands {
@@ -254,7 +254,7 @@ mod test {
             .await;
 
             // we expect 2 commands in the queue
-            assert_eq!(client.inner().commands_queue().len(), 2);
+            assert_eq!(client.inner().txn_commands().len(), 2);
 
             // Use the second client to confirm that the command was not executed
             check_command(client2.inner(), vec!["get", "k1"], RedisObject::NullString).await;
@@ -316,7 +316,7 @@ mod test {
             .await;
 
             // we expect 4 commands in the queue
-            assert_eq!(client.inner().commands_queue().len(), 4);
+            assert_eq!(client.inner().txn_commands().len(), 4);
 
             check_command(
                 client.inner(),
@@ -332,7 +332,7 @@ mod test {
             check_command(client.inner(), vec!["get", "k1"], RedisObject::NullString).await;
             check_command(client.inner(), vec!["get", "k2"], RedisObject::NullString).await;
             check_command(client.inner(), vec!["get", "k3"], RedisObject::NullString).await;
-            assert_eq!(client.inner().commands_queue().len(), 0);
+            assert_eq!(client.inner().txn_commands().len(), 0);
         });
     }
 
@@ -396,7 +396,7 @@ mod test {
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
-            assert_eq!(myclient.inner().commands_queue().len(), 5);
+            assert_eq!(myclient.inner().txn_commands().len(), 5);
 
             check_command(
                 myclient.inner(),
@@ -469,7 +469,7 @@ mod test {
             .await;
 
             // we expect 4 commands in the queue
-            assert_eq!(client.inner().commands_queue().len(), 4);
+            assert_eq!(client.inner().txn_commands().len(), 4);
 
             check_command(
                 client.inner(),
@@ -507,7 +507,7 @@ mod test {
                 RedisObject::Str("v3".into()),
             )
             .await;
-            assert_eq!(client.inner().commands_queue().len(), 0);
+            assert_eq!(client.inner().txn_commands().len(), 0);
 
             // Run another command, this time we expect it to run without "EXEC"
             check_command(
