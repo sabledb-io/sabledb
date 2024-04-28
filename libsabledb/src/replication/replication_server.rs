@@ -1,6 +1,6 @@
 use crate::replication::prepare_std_socket;
-use crate::server_options::ServerOptions;
-use crate::telemetry::{ReplicaTelemetry, ReplicationTelemetry};
+use crate::server::ServerOptions;
+use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 
 use crate::utils;
 #[allow(unused_imports)]

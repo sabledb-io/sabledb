@@ -1,11 +1,11 @@
 use crate::replication::ReplicationServer;
-use crate::telemetry::ReplicationTelemetry;
+use crate::server::ReplicationTelemetry;
 
 #[allow(unused_imports)]
 use crate::{
     replication::{replication_thread_stop_all, ReplClientCommand, ReplicationClient, ServerRole},
-    server_options::ServerOptions,
-    Client, SableError, StorageAdapter, Telemetry, WorkerContext,
+    server::{Client, SableError, ServerOptions, Telemetry, WorkerContext},
+    storage::StorageAdapter,
 };
 
 pub type ReplicatorSender = tokio::sync::mpsc::Sender<ReplicationWorkerMessage>;

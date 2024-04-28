@@ -155,7 +155,7 @@ impl Worker {
                 .key
                 .clone()
                 .expect("None key file");
-            let tls_acceptor = crate::tls::create_tls_acceptor(cert, key);
+            let tls_acceptor = crate::net::create_tls_acceptor(cert, key);
 
             if let Ok(tls_acceptor) = tls_acceptor {
                 Some(Rc::new(tls_acceptor))

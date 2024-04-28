@@ -1,6 +1,6 @@
 use crate::{
-    client::ClientState,
     commands::{HandleCommandResult, Strings, TimeoutResponse},
+    server::ClientState,
     to_number,
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
@@ -1246,14 +1246,14 @@ mod tests {
                         println!("--> got Wait for duration of {:?}", duration);
                         let sw = crate::stopwatch::StopWatch::default();
                         let response = match Client::wait_for(rx, duration).await {
-                            crate::client::WaitResult::TryAgain => {
+                            crate::server::WaitResult::TryAgain => {
                                 println!(
                                     "--> got TryAgain after {}ms",
                                     sw.elapsed_micros().unwrap() / 1000
                                 );
                                 execute_command(client.inner(), cmd.clone()).await
                             }
-                            crate::client::WaitResult::Timeout => {
+                            crate::server::WaitResult::Timeout => {
                                 let builder = RespBuilderV2::default();
                                 let mut response = BytesMut::new();
                                 match timeout_response {
@@ -1347,7 +1347,7 @@ mod tests {
 
             // Try reading again now
             match Client::wait_for(rx, duration).await {
-                crate::client::WaitResult::TryAgain => {
+                crate::server::WaitResult::TryAgain => {
                     println!("consumer: got something - calling blpop again");
                     let response = execute_command(reader.inner(), read_cmd).await;
                     assert_eq!(
@@ -1355,7 +1355,7 @@ mod tests {
                         BytesMutUtils::to_string(&response).as_str()
                     );
                 }
-                crate::client::WaitResult::Timeout => {
+                crate::server::WaitResult::Timeout => {
                     assert!(false, "consumer: Expected `TryAagain` not a `Timeout`!");
                 }
             }

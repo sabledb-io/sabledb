@@ -1,4 +1,4 @@
-use crate::{client::ClientState, commands::BaseCommands, metadata::Encoding, storage::StringsDb};
+use crate::{commands::BaseCommands, metadata::Encoding, server::ClientState, storage::StringsDb};
 
 use crate::{
     check_args_count, check_value_type, command_arg_at, command_arg_at_as_str,

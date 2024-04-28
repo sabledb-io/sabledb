@@ -2,7 +2,7 @@ use crate::replication::{
     prepare_std_socket, BytesReader, BytesWriter, ReplicationMessage, TcpStreamBytesReader,
     TcpStreamBytesWriter,
 };
-use crate::server_options::ServerOptions;
+use crate::server::ServerOptions;
 use crate::{
     io::Archive,
     replication::{StorageUpdates, StorageUpdatesIterItem},

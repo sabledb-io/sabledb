@@ -16,7 +16,7 @@ pub enum SableError {
     SendCommanError(#[from] tokio::sync::mpsc::error::SendError<Rc<crate::RedisCommand>>),
     #[error("Failed to broadcast worker message. {0}")]
     BroadcastWorkerMessage(
-        #[from] tokio::sync::mpsc::error::SendError<crate::worker::WorkerMessage>,
+        #[from] tokio::sync::mpsc::error::SendError<crate::server::WorkerMessage>,
     ),
     #[error("Parse error. {0}")]
     Parser(#[from] ParserError),
