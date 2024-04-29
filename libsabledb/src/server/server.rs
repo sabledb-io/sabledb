@@ -13,13 +13,13 @@ use dashmap::DashMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::RwLock;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
+use tokio::sync::RwLock;
 
 // contains a table that maps a clientId -> Sender channel
 type BlockedClientTable = RwLock<HashMap<BytesMut, VecDeque<TokioSender<u8>>>>;
@@ -137,7 +137,7 @@ impl ServerState {
         {
             // Fast pass:
             // Obtain a read lock and check if there are any clients that needs to be waked up
-            let table = self.blocked_clients.read().expect("poisoned mutex");
+            let table = self.blocked_clients.read().await;
             if table.is_empty() || !table.contains_key(key) {
                 tracing::debug!("there are no blocked clients for key {:?}", key);
                 return;
@@ -150,7 +150,7 @@ impl ServerState {
         //==>
 
         // need to get a write lock
-        let mut table = self.blocked_clients.write().expect("poisoned mutex");
+        let mut table = self.blocked_clients.write().await;
 
         // double check the blocking client table now
         if table.is_empty() || !table.contains_key(key) {
@@ -198,7 +198,7 @@ impl ServerState {
         }
 
         // need to get a write lock
-        let mut table = self.blocked_clients.write().expect("poisoned mutex");
+        let mut table = self.blocked_clients.write().await;
 
         let (tx, rx) = tokio::sync::mpsc::channel(keys.len());
         for key in keys.iter() {
