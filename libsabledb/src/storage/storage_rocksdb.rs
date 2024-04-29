@@ -71,6 +71,11 @@ impl StorageRocksDb {
         write_opts.set_sync(false);
         write_opts.disable_wal(open_params.rocksdb.disable_wal);
 
+        tracing::info!(
+            "Opening RocksDb storage at: {}",
+            open_params.db_path.display()
+        );
+
         Ok(StorageRocksDb {
             store: Arc::new(store),
             write_opts,

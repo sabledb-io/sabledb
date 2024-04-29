@@ -9,9 +9,11 @@ use crate::{
     StorageAdapter,
 };
 use bytes::BytesMut;
-use crossbeam::queue::SegQueue;
 use dashmap::DashMap;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::RwLock;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -20,10 +22,7 @@ use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
 
 // contains a table that maps a clientId -> Sender channel
-type ChannelQueue = Arc<SegQueue<TokioSender<u8>>>;
-
-// Contains a table that maps between a `Key` and a list of channels (FIFO)
-type BlockedClientTable = DashMap<BytesMut, ChannelQueue>;
+type BlockedClientTable = RwLock<HashMap<BytesMut, VecDeque<TokioSender<u8>>>>;
 
 /// Possible output for block_client function
 #[derive(Debug)]
@@ -59,7 +58,7 @@ impl ServerState {
     pub fn new() -> Self {
         ServerState {
             telemetry: Arc::new(Mutex::new(Telemetry::default())),
-            blocked_clients: BlockedClientTable::new(),
+            blocked_clients: RwLock::new(HashMap::<BytesMut, VecDeque<TokioSender<u8>>>::default()),
             opts: ServerOptions::default(),
             role_primary: AtomicBool::new(true),
             replicator_context: None,
@@ -135,17 +134,34 @@ impl ServerState {
 
     /// If we have blocked clients waiting for `key` -> wake them up now
     pub async fn wakeup_clients(&self, key: &BytesMut, mut num_clients: usize) {
-        tracing::debug!("waking up {} client(s) for key: {:?}", num_clients, key);
-        if self.blocked_clients.is_empty() {
-            tracing::debug!("there are no blocked clients");
+        {
+            // Fast pass:
+            // Obtain a read lock and check if there are any clients that needs to be waked up
+            let table = self.blocked_clients.read().expect("poisoned mutex");
+            if table.is_empty() || !table.contains_key(key) {
+                tracing::debug!("there are no blocked clients for key {:?}", key);
+                return;
+            }
+        }
+
+        //==>
+        // Some other thread might have updated the table here, so double check the table before continuing
+        // but this time do this under a write-lock
+        //==>
+
+        // need to get a write lock
+        let mut table = self.blocked_clients.write().expect("poisoned mutex");
+
+        // double check the blocking client table now
+        if table.is_empty() || !table.contains_key(key) {
             return;
         }
 
         // based on num_clients, wakeup all the clients that are blocked by
         // this key
-        let remove_key = if let Some(channel_queue) = self.blocked_clients.get(key) {
+        let remove_key = if let Some(channel_queue) = table.get_mut(key) {
             while num_clients > 0 {
-                if let Some(client_channel) = channel_queue.pop() {
+                if let Some(client_channel) = channel_queue.pop_front() {
                     if let Err(e) = client_channel.send(0u8).await {
                         tracing::debug!(
                             "error while sending wakeup bit. client already timed out. {:?}",
@@ -166,7 +182,7 @@ impl ServerState {
 
         if remove_key {
             // we no longer have clients blocked by this key
-            let _ = self.blocked_clients.remove(key);
+            let _ = table.remove(key);
         }
     }
 
@@ -181,17 +197,18 @@ impl ServerState {
             return BlockClientResult::TxnActive;
         }
 
-        let (tx, rx) = tokio::sync::mpsc::channel(keys.len());
+        // need to get a write lock
+        let mut table = self.blocked_clients.write().expect("poisoned mutex");
 
+        let (tx, rx) = tokio::sync::mpsc::channel(keys.len());
         for key in keys.iter() {
-            if let Some(channel_queue) = self.blocked_clients.get(key) {
-                channel_queue.push(tx.clone());
+            if let Some(channel_queue) = table.get_mut(key) {
+                channel_queue.push_back(tx.clone());
             } else {
                 // first time
-                let channel_queue = Arc::new(SegQueue::<TokioSender<u8>>::new());
-                channel_queue.push(tx.clone());
-                self.blocked_clients
-                    .insert(key.clone(), channel_queue.clone());
+                let mut channel_queue = VecDeque::<TokioSender<u8>>::new();
+                channel_queue.push_back(tx.clone());
+                table.insert(key.clone(), channel_queue);
             };
         }
         BlockClientResult::Blocked(rx)
