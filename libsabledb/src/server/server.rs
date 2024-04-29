@@ -164,7 +164,7 @@ impl ServerState {
                 if let Some(client_channel) = channel_queue.pop_front() {
                     if let Err(e) = client_channel.send(0u8).await {
                         tracing::debug!(
-                            "error while sending wakeup bit. client already timed out. {:?}",
+                            "error while sending wakeup bit. client already timed out or terminated. {:?}",
                             e
                         );
                     } else {

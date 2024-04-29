@@ -221,6 +221,10 @@ impl ClientState {
         tracing::warn!("CLNT {}: {}", self.client_id, msg);
     }
 
+    pub fn info(&self, msg: &str) {
+        tracing::info!("CLNT {}: {}", self.client_id, msg);
+    }
+
     /// static version
     pub fn static_debug(client_id: u128, msg: &str) {
         tracing::debug!("CLNT {}: {}", client_id, msg);

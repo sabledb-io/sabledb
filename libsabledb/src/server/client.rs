@@ -75,7 +75,7 @@ impl Client {
     pub fn terminate_client(client_id: u128) -> bool {
         WORKER_CLIENTS.with(|clients| {
             if let Some(client_state) = clients.borrow().get(&client_id) {
-                tracing::info!("Client {} terminated", client_id);
+                tracing::debug!("Client {} terminated", client_id);
                 client_state.kill();
                 true
             } else {
@@ -185,7 +185,8 @@ impl Client {
                     if read_buffer.is_empty() {
                         // connection closed
                         if log_enabled!(Level::Debug) {
-                            client_state.debug("Connection closed");
+                            client_state.debug("Connection closed (by peer)");
+                            Client::terminate_client(client_state.id());
                         }
                         return Ok(());
                     }
@@ -259,6 +260,11 @@ impl Client {
                                     if log_enabled!(Level::Debug) {
                                         client_state.debug("timeout occurred");
                                     }
+                                    if !client_state.active() {
+                                        // Client is no longer active
+                                        tracing::debug!("Client terminated while waiting");
+                                        return Err(SableError::ConnectionClosed);
+                                    }
                                     // time-out occurred, build a proper response message and break out the inner loop
                                     let response_buffer = Self::handle_timeout(
                                         client_state.clone(),
@@ -274,6 +280,11 @@ impl Client {
                                     break;
                                 }
                                 WaitResult::TryAgain => {
+                                    if !client_state.active() {
+                                        // Client is no longer active
+                                        tracing::debug!("Client terminated while waiting");
+                                        return Err(SableError::ConnectionClosed);
+                                    }
                                     continue;
                                 }
                             }
