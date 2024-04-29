@@ -44,6 +44,8 @@ impl TransactionCommands {
         match command.metadata().name() {
             RedisCommandName::Multi => Self::multi(client_state, command, tx).await,
             RedisCommandName::Discard => Self::discard(client_state, command, tx).await,
+            RedisCommandName::Watch => Self::watch(client_state, command, tx).await,
+            RedisCommandName::Unwatch => Self::unwatch(client_state, command, tx).await,
             _ => Err(SableError::InvalidArgument(format!(
                 "Unexpected command {}",
                 command.main_command()
@@ -191,6 +193,58 @@ impl TransactionCommands {
         resp_writer.flush().await?;
         Ok(HandleCommandResult::ResponseSent)
     }
+
+    /// Marks the given keys to be watched for conditional execution of a transaction.
+    async fn watch(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<HandleCommandResult, SableError> {
+        let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
+        expect_args_count_tx!(command, 2, resp_writer, HandleCommandResult::ResponseSent);
+
+        // Confirm that we are NOT in MULTI state
+        if client_state.is_txn_state_multi() {
+            resp_writer
+                .error_string(Strings::WATCH_INSIDE_MULTI)
+                .await?;
+            resp_writer.flush().await?;
+            return Ok(HandleCommandResult::ResponseSent);
+        }
+
+        let mut iter = command.args_vec().iter();
+        iter.next();
+
+        // The actual code that marks keys as modified is done in the storage layer
+        // where keys are already encoded.
+        // So we need to convert the user keys into internal keys before adding them to the watch list
+        let mut user_keys = Vec::<&bytes::BytesMut>::with_capacity(command.arg_count());
+        for key in iter {
+            user_keys.push(key);
+        }
+
+        client_state.set_watched_keys(Some(&user_keys));
+
+        resp_writer.ok().await?;
+        resp_writer.flush().await?;
+        Ok(HandleCommandResult::ResponseSent)
+    }
+
+    /// Flushes all the previously watched keys for a transaction
+    async fn unwatch(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<HandleCommandResult, SableError> {
+        let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
+        expect_args_count_tx!(command, 1, resp_writer, HandleCommandResult::ResponseSent);
+
+        client_state.set_watched_keys(None);
+
+        resp_writer.ok().await?;
+        resp_writer.flush().await?;
+        Ok(HandleCommandResult::ResponseSent)
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -204,19 +258,24 @@ impl TransactionCommands {
 mod test {
     use super::*;
     use crate::{
-        commands::Strings, server::SableError, tests::run_and_return_output, Client, ClientState,
-        ServerState,
+        commands::Strings, server::SableError, server::WatchedKeys, tests::run_and_return_output,
+        Client, ClientState, ServerState,
     };
+    use bytes::BytesMut;
     use std::rc::Rc;
     use std::sync::Arc;
 
     async fn check_command(
         client_state: Rc<ClientState>,
-        vec_args: Vec<&'static str>,
+        command_str: &str,
         expected_output: RedisObject,
     ) {
         // Start a transaction
-        let args: Vec<String> = vec_args.iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = command_str
+            .split(' ')
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
         let output = run_and_return_output(args, client_state).await.unwrap();
         assert_eq!(output, expected_output);
     }
@@ -230,17 +289,12 @@ mod test {
             let client2 = Client::new(Arc::<ServerState>::default(), store, None);
 
             // Start a transaction
-            check_command(
-                client.inner(),
-                vec!["multi"],
-                RedisObject::Status("OK".into()),
-            )
-            .await;
+            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
 
             // No nested MULTI
             check_command(
                 client.inner(),
-                vec!["multi"],
+                "multi",
                 RedisObject::Error(
                     "ERR command multi can not be used in a MULTI / EXEC block".into(),
                 ),
@@ -250,7 +304,7 @@ mod test {
             // Check that commands marked with "no_transaction" are not accepted
             check_command(
                 client.inner(),
-                vec!["hgetall"],
+                "hgetall",
                 RedisObject::Error(
                     "ERR command hgetall can not be used in a MULTI / EXEC block".into(),
                 ),
@@ -260,7 +314,7 @@ mod test {
             // Check that commands marked with "no_transaction" are not accepted
             check_command(
                 client.inner(),
-                vec!["set", "k1", "v1"],
+                "set k1 v1",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -268,7 +322,7 @@ mod test {
             // Queue some valid commands
             check_command(
                 client.inner(),
-                vec!["set", "k2", "v2"],
+                "set k2 v2",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -277,8 +331,8 @@ mod test {
             assert_eq!(client.inner().txn_commands_vec_len(), 2);
 
             // Use the second client to confirm that the command was not executed
-            check_command(client2.inner(), vec!["get", "k1"], RedisObject::NullString).await;
-            check_command(client2.inner(), vec!["get", "k2"], RedisObject::NullString).await;
+            check_command(client2.inner(), "get k1", RedisObject::NullString).await;
+            check_command(client2.inner(), "get k2", RedisObject::NullString).await;
         });
     }
 
@@ -294,12 +348,7 @@ mod test {
             assert!(!client.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(
-                client.inner(),
-                vec!["multi"],
-                RedisObject::Status("OK".into()),
-            )
-            .await;
+            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(client.inner().is_txn_state_multi());
@@ -308,14 +357,14 @@ mod test {
 
             check_command(
                 client.inner(),
-                vec!["set", "k1", "v1"],
+                "set k1 v1",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
-                vec!["set", "k2", "v2"],
+                "set k2 v2",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -323,14 +372,14 @@ mod test {
             // We expect `hlen` to fail, but this will not break the transaction
             check_command(
                 client.inner(),
-                vec!["hlen", "k2"],
+                "hlen k2",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
-                vec!["set", "k3", "v3"],
+                "set k3 v3",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -338,20 +387,15 @@ mod test {
             // we expect 4 commands in the queue
             assert_eq!(client.inner().txn_commands_vec_len(), 4);
 
-            check_command(
-                client.inner(),
-                vec!["discard"],
-                RedisObject::Status("OK".into()),
-            )
-            .await;
+            check_command(client.inner(), "discard", RedisObject::Status("OK".into())).await;
 
             assert!(!client.inner().is_txn_state_multi());
             assert!(!client.inner().is_txn_state_exec());
             assert!(!client.inner().is_txn_state_calc_slots());
 
-            check_command(client.inner(), vec!["get", "k1"], RedisObject::NullString).await;
-            check_command(client.inner(), vec!["get", "k2"], RedisObject::NullString).await;
-            check_command(client.inner(), vec!["get", "k3"], RedisObject::NullString).await;
+            check_command(client.inner(), "get k1", RedisObject::NullString).await;
+            check_command(client.inner(), "get k2", RedisObject::NullString).await;
+            check_command(client.inner(), "get k3", RedisObject::NullString).await;
             assert_eq!(client.inner().txn_commands_vec_len(), 0);
         });
     }
@@ -368,12 +412,7 @@ mod test {
             assert!(!myclient.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(
-                myclient.inner(),
-                vec!["multi"],
-                RedisObject::Status("OK".into()),
-            )
-            .await;
+            check_command(myclient.inner(), "multi", RedisObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(myclient.inner().is_txn_state_multi());
@@ -382,37 +421,35 @@ mod test {
 
             check_command(
                 myclient.inner(),
-                vec!["blpop", "mylist", "100"],
+                "blpop mylist 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 myclient.inner(),
-                vec!["brpop", "mylist", "100"],
+                "brpop mylist 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 myclient.inner(),
-                vec!["brpoplpush", "mylist", "mylist2", "100"],
+                "brpoplpush mylist mylist2 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 myclient.inner(),
-                vec!["blmove", "mylist", "mylist2", "LEFT", "LEFT", "100"],
+                "blmove mylist mylist2 LEFT LEFT 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 myclient.inner(),
-                vec![
-                    "blmpop", "100", "2", "mylist2", "mylist3", "LEFT", "COUNT", "1",
-                ],
+                "blmpop 100 2 mylist2 mylist3 LEFT COUNT 1",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -420,7 +457,7 @@ mod test {
 
             check_command(
                 myclient.inner(),
-                vec!["exec"],
+                "exec",
                 RedisObject::Array(vec![
                     RedisObject::NullArray,
                     RedisObject::NullArray,
@@ -447,12 +484,7 @@ mod test {
             assert!(!client.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(
-                client.inner(),
-                vec!["multi"],
-                RedisObject::Status("OK".into()),
-            )
-            .await;
+            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(client.inner().is_txn_state_multi());
@@ -461,14 +493,14 @@ mod test {
 
             check_command(
                 client.inner(),
-                vec!["set", "k1", "v1"],
+                "set k1 v1",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
-                vec!["set", "k2", "v2"],
+                "set k2 v2",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -476,14 +508,14 @@ mod test {
             // We expect `hlen` to fail, but this will not break the transaction
             check_command(
                 client.inner(),
-                vec!["hlen", "k2"],
+                "hlen k2",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
-                vec!["set", "k3", "v3"],
+                "set k3 v3",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
@@ -493,7 +525,7 @@ mod test {
 
             check_command(
                 client.inner(),
-                vec!["exec"],
+                "exec",
                 RedisObject::Array(vec![
                     RedisObject::Status("OK".into()),
                     RedisObject::Status("OK".into()),
@@ -509,30 +541,15 @@ mod test {
             assert!(!client.inner().is_txn_state_exec());
             assert!(!client.inner().is_txn_state_calc_slots());
 
-            check_command(
-                client.inner(),
-                vec!["get", "k1"],
-                RedisObject::Str("v1".into()),
-            )
-            .await;
-            check_command(
-                client.inner(),
-                vec!["get", "k2"],
-                RedisObject::Str("v2".into()),
-            )
-            .await;
-            check_command(
-                client.inner(),
-                vec!["get", "k3"],
-                RedisObject::Str("v3".into()),
-            )
-            .await;
+            check_command(client.inner(), "get k1", RedisObject::Str("v1".into())).await;
+            check_command(client.inner(), "get k2", RedisObject::Str("v2".into())).await;
+            check_command(client.inner(), "get k3", RedisObject::Str("v3".into())).await;
             assert_eq!(client.inner().txn_commands_vec_len(), 0);
 
             // Run another command, this time we expect it to run without "EXEC"
             check_command(
                 client.inner(),
-                vec!["set", "no_cached", "value"],
+                "set no_cached value",
                 RedisObject::Status("OK".into()),
             )
             .await;
@@ -540,7 +557,7 @@ mod test {
             // Run another command, this time we expect it to run without "EXEC"
             check_command(
                 client.inner(),
-                vec!["get", "no_cached"],
+                "get no_cached",
                 RedisObject::Str("value".into()),
             )
             .await;
@@ -590,5 +607,63 @@ mod test {
             }
         });
         Ok(())
+    }
+
+    #[test]
+    fn test_watch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let client_state = client.inner();
+
+            // set the watched keys
+            check_command(
+                client_state.clone(),
+                "watch key1 key2",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+            assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 2);
+            assert_eq!(WatchedKeys::watchers_count(None), 1);
+
+            // update the watched keys
+            check_command(
+                client_state.clone(),
+                "watch key1 key2 key3",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+            assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 3);
+            assert_eq!(
+                client_state.watched_user_keys_cloned().unwrap(),
+                vec![
+                    BytesMut::from("key1"),
+                    BytesMut::from("key2"),
+                    BytesMut::from("key3"),
+                ]
+            );
+
+            check_command(
+                client_state.clone(),
+                "set key1 value",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+            assert!(WatchedKeys::is_user_key_modified(
+                &BytesMut::from("key1"),
+                0,
+                None
+            ));
+
+            check_command(
+                client_state.clone(),
+                "unwatch",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+            assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 0);
+            assert_eq!(WatchedKeys::watchers_count(None), 0);
+        });
     }
 }

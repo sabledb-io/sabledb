@@ -5,6 +5,7 @@ mod error_codes;
 mod server;
 mod server_options;
 mod telemetry;
+mod watchers;
 mod worker;
 mod worker_manager;
 
@@ -14,5 +15,6 @@ pub use error_codes::*;
 pub use server::*;
 pub use server_options::*;
 pub use telemetry::*;
+pub use watchers::*;
 pub use worker::*;
 pub use worker_manager::*;

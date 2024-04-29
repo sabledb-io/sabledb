@@ -26,4 +26,5 @@ impl Strings {
     pub const QUEUED: &'static str = "QUEUED";
     pub const EXEC_WITHOUT_MULTI: &'static str = "ERR EXEC without MULTI";
     pub const DISCARD_WITHOUT_MULTI: &'static str = "ERR DISCARD without MULTI";
+    pub const WATCH_INSIDE_MULTI: &'static str = "ERR WATCH inside MULTI is not allowed";
 }

@@ -620,7 +620,10 @@ impl Client {
                 // with `Exec`... (it is handled earlier in the Client::handle_command)
                 return Err(SableError::ClientInvalidState);
             }
-            RedisCommandName::Multi | RedisCommandName::Discard => {
+            RedisCommandName::Multi
+            | RedisCommandName::Discard
+            | RedisCommandName::Watch
+            | RedisCommandName::Unwatch => {
                 match TransactionCommands::handle_command(client_state.clone(), command, tx).await?
                 {
                     HandleCommandResult::Blocked(_) => {
@@ -686,5 +689,8 @@ impl Drop for Client {
         WORKER_CLIENTS.with(|clients| {
             let _ = clients.borrow_mut().remove(&self.state.id());
         });
+
+        // drop any transcation related info for this client
+        self.state.discard_transaction();
     }
 }

@@ -135,7 +135,7 @@ impl ServerState {
     /// If we have blocked clients waiting for `key` -> wake them up now
     pub async fn wakeup_clients(&self, key: &BytesMut, mut num_clients: usize) {
         {
-            // Fast pass:
+            // Fast path:
             // Obtain a read lock and check if there are any clients that needs to be waked up
             let table = self.blocked_clients.read().await;
             if table.is_empty() || !table.contains_key(key) {

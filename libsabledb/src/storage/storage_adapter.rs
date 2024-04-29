@@ -4,7 +4,7 @@ use crate::{
     utils, StorageRocksDb,
 };
 
-use crate::{storage::DbCacheEntry, SableError};
+use crate::{server::WatchedKeys, storage::DbCacheEntry, SableError};
 use bytes::BytesMut;
 use dashmap::DashMap;
 #[allow(unused_imports)]
@@ -183,6 +183,26 @@ impl BatchUpdate {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Return a list of keys to be modified by this batch
+    pub fn modified_keys(&self) -> Vec<&BytesMut> {
+        let mut keys = Vec::<&BytesMut>::with_capacity(self.len());
+        if let Some(put_keys) = &self.put_keys {
+            for (k, _) in put_keys {
+                keys.push(k);
+            }
+        }
+
+        if let Some(delete_keys) = &self.delete_keys {
+            for k in delete_keys {
+                keys.push(k);
+            }
+        }
+
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     pub fn len(&self) -> usize {
@@ -402,6 +422,7 @@ impl StorageAdapter {
             txn.put_flags(key, value.clone(), put_flags)?;
         } else {
             db.put(key, value, put_flags)?;
+            WatchedKeys::notify(key, None);
         }
         Ok(())
     }
@@ -432,7 +453,9 @@ impl StorageAdapter {
         if let Some(txn) = &self.txn {
             txn.delete(key)
         } else {
-            db.delete(key)
+            db.delete(key)?;
+            WatchedKeys::notify(key, None);
+            Ok(())
         }
     }
 
@@ -452,6 +475,8 @@ impl StorageAdapter {
             txn.apply_batch(update)?;
         } else {
             db.apply_batch(update)?;
+            let modified_keys = update.modified_keys();
+            WatchedKeys::notify_multi(&modified_keys, None);
         }
         Ok(())
     }

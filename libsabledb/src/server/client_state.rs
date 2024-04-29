@@ -1,9 +1,10 @@
 use crate::{
     commands::RedisCommand,
-    server::{new_client_id, ServerState},
+    server::{new_client_id, ServerState, WatchedKeys},
     storage::{ScanCursor, StorageAdapter},
 };
 
+use bytes::BytesMut;
 use dashmap::DashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -21,6 +22,7 @@ thread_local! {
 #[derive(Default)]
 pub struct TransactionState {
     commands: VecDeque<Rc<RedisCommand>>,
+    watched_keys: Vec<BytesMut>,
 }
 
 impl TransactionState {
@@ -33,8 +35,19 @@ impl TransactionState {
         &self.commands
     }
 
-    pub fn clear(&mut self) {
-        self.commands.clear();
+    /// Set the txn watched keys
+    pub fn set_watched_keys(&mut self, keys: &[&BytesMut]) {
+        self.watched_keys = keys.iter().map(|e| (*e).clone()).collect();
+    }
+
+    /// Clear the watched keys
+    pub fn clear_watched_keys(&mut self) {
+        self.watched_keys.clear();
+    }
+
+    /// Return list of **user** watched keys
+    pub fn watched_user_keys_cloned(&self) -> Vec<BytesMut> {
+        self.watched_keys.clone()
     }
 }
 
@@ -117,6 +130,43 @@ impl ClientState {
         });
     }
 
+    /// Set watched keys for this transaction. If there are already keys
+    /// being watched for this transaction, remove them
+    /// Calling this function with `None` removes any previsouly set watched commands
+    pub fn set_watched_keys(&self, user_keys: Option<&[&BytesMut]>) {
+        ACTIVE_TRANSACTIONS.with(|txs| {
+            if !txs.borrow().contains_key(&self.id()) {
+                let txn = TransactionState::default();
+                txs.borrow_mut().insert(self.id(), txn);
+            }
+
+            if let Some(txn_state) = txs.borrow_mut().get_mut(&self.id()) {
+                // remove old watched keys
+                let watched_keys = txn_state.watched_user_keys_cloned();
+                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().map(|e| e).collect();
+
+                WatchedKeys::remove_watcher(&watached_keys_ref, self.database_id(), None);
+                txn_state.clear_watched_keys();
+
+                if let Some(new_watched_keys) = user_keys {
+                    WatchedKeys::add_watcher(new_watched_keys, self.database_id(), None);
+                    txn_state.set_watched_keys(new_watched_keys);
+                }
+            }
+        });
+    }
+
+    /// Return the client watched keys
+    pub fn watched_user_keys_cloned(&self) -> Option<Vec<BytesMut>> {
+        ACTIVE_TRANSACTIONS.with(|txs| {
+            if let Some(txn_state) = txs.borrow().get(&self.id()) {
+                Some(txn_state.watched_user_keys_cloned())
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn database(&self) -> &StorageAdapter {
         if self.is_txn_state_exec() {
             &self.store_with_cache
@@ -177,7 +227,11 @@ impl ClientState {
     /// Start a transaction by adding new `TransactionState` for this client
     pub fn start_txn(&self) {
         ACTIVE_TRANSACTIONS.with_borrow_mut(|txs| {
-            txs.insert(self.id(), TransactionState::default());
+            // Check that we don't have a `TransactionState` object associated with this client
+            // (this can happen if user called `watch ...` before calling `multi`
+            if !txs.contains_key(&self.id()) {
+                txs.insert(self.id(), TransactionState::default());
+            }
         })
     }
 
@@ -187,7 +241,15 @@ impl ClientState {
         self.enable_client_flag(ClientStateFlags::TXN_CALC_SLOTS, false);
         self.enable_client_flag(ClientStateFlags::TXN_EXEC, false);
         ACTIVE_TRANSACTIONS.with_borrow_mut(|txs| {
-            let _ = txs.remove(&self.id());
+            if let Some(txn) = txs.get(&self.id()) {
+                // unwatch any keys by this transaction
+                let watched_keys = txn.watched_user_keys_cloned();
+                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().map(|e| e).collect();
+                WatchedKeys::remove_watcher(&watached_keys_ref, self.database_id(), None);
+
+                // And remove this transaction from the table
+                let _ = txs.remove(&self.id());
+            }
         })
     }
 

@@ -6,7 +6,7 @@ pub enum SableError {
     /// From system IO error
     #[error("I/O error. {0}")]
     StdIoError(#[from] std::io::Error),
-    #[error("Sled error. {0}")]
+    #[error("Mutex poison error. {0}")]
     StorageError(#[from] sled::Error),
     /// From tokio channel error
     #[error("Tokio channel error. {0}")]

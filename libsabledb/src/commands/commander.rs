@@ -110,6 +110,8 @@ pub enum RedisCommandName {
     Multi,
     Exec,
     Discard,
+    Watch,
+    Unwatch,
     // ZSet commands
     Zadd,
     Zcard,
@@ -827,8 +829,8 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Multi)
                         .read_only()
                         .with_arity(1)
-                        .with_last_key(0)
                         .with_first_key(0)
+                        .with_last_key(0)
                         .with_step(0)
                         .no_transaction(),
                 ),
@@ -837,8 +839,8 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Exec)
                         .read_only()
                         .with_arity(1)
-                        .with_last_key(0)
                         .with_first_key(0)
+                        .with_last_key(0)
                         .with_step(0),
                 ),
                 (
@@ -846,9 +848,27 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Discard)
                         .read_only()
                         .with_arity(1)
+                        .with_first_key(0)
+                        .with_last_key(0)
+                        .with_step(0),
+                ),
+                (
+                    "watch",
+                    CommandMetadata::new(RedisCommandName::Watch)
+                        .with_arity(-2)
+                        .with_first_key(1)
+                        .with_last_key(-1)
+                        .with_step(1)
+                        .no_transaction(),
+                ),
+                (
+                    "unwatch",
+                    CommandMetadata::new(RedisCommandName::Unwatch)
+                        .with_arity(1)
+                        .with_first_key(0)
                         .with_last_key(0)
                         .with_first_key(0)
-                        .with_step(0),
+                        .no_transaction(),
                 ),
                 (
                     "zadd",
