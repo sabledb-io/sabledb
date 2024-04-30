@@ -74,6 +74,14 @@ impl TransactionCommands {
             return Ok(HandleCommandResult::ResponseSent);
         }
 
+        // can this clien proceed with committing the txn?
+        // (this can happen if a watched key was modified)
+        if !client_state.can_commit_txn() {
+            resp_writer.null_array().await?;
+            resp_writer.flush().await?;
+            return Ok(HandleCommandResult::ResponseSent);
+        }
+
         // Clear the multi state
         client_state.set_txn_state_multi(false);
 
@@ -281,6 +289,7 @@ mod test {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_multi() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -337,6 +346,7 @@ mod test {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_discard() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -401,6 +411,7 @@ mod test {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_blocking_list_commands_in_multi() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -473,6 +484,7 @@ mod test {
     use crate::utils::RedisObject;
 
     #[test]
+    #[serial_test::serial]
     fn test_exec() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -610,7 +622,8 @@ mod test {
     }
 
     #[test]
-    fn test_watch() {
+    #[serial_test::serial]
+    fn test_watch_unwatch() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let (_guard, store) = crate::tests::open_store();
@@ -664,6 +677,168 @@ mod test {
             .await;
             assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 0);
             assert_eq!(WatchedKeys::watchers_count(None), 0);
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    // Create 2 clients:
+    // Client 1: watch "key1", start a txn modifying "key1" and attempting to commit it
+    // Client 2: modifies "key1"
+    // Confirm that the txn is aborted
+    fn test_exec_cancelled_with_watch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client_1 = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let client_1_state = client_1.inner();
+
+            let client_2 = Client::new(client_1_state.server_inner_state(), store.clone(), None);
+            let client_2_state = client_2.inner();
+
+            // set the watched keys
+            check_command(
+                client_1_state.clone(),
+                "watch key1 key2",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            // update the watched keys
+            check_command(
+                client_1_state.clone(),
+                "multi",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            check_command(
+                client_1_state.clone(),
+                "set key1 client_1_value",
+                RedisObject::Status("QUEUED".into()),
+            )
+            .await;
+
+            // Modify the watched key from another client
+            check_command(
+                client_2_state.clone(),
+                "Set key1 client_2_value",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            // Confirm that the value was indeed modified
+            check_command(
+                client_2_state.clone(),
+                "get key1",
+                RedisObject::Str("client_2_value".into()),
+            )
+            .await;
+
+            // Now attempt to commit client-1 transaction and confirm that it is aborted
+            check_command(client_1_state.clone(), "exec", RedisObject::NullArray).await;
+
+            // Confirm that no more keys are being watched for client-1
+            // and the transaction object was removed (getting a `None` watched user keys indicates that
+            // no `TransactionState` object was found the client)
+            assert_eq!(client_1_state.watched_user_keys_cloned(), None);
+            assert_eq!(WatchedKeys::watchers_count(None), 0);
+
+            // Check that the value was not modified (use `client_1` to read the value)
+            check_command(
+                client_1_state.clone(),
+                "get key1",
+                RedisObject::Str("client_2_value".into()),
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    // Create 2 clients:
+    // Client 1: watch "key1", unwatch "key1", start a txn modifying "key1" and attempting to commit it
+    // Client 2: modifies "key1"
+    // Confirm that the txn is committed
+    fn test_exec_not_affected_by_a_cancelled_watch() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client_1 = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let client_1_state = client_1.inner();
+
+            let client_2 = Client::new(client_1_state.server_inner_state(), store.clone(), None);
+            let client_2_state = client_2.inner();
+
+            // watch key1 + key2
+            check_command(
+                client_1_state.clone(),
+                "watch key1 key2",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            // Modify the watched key from another client
+            check_command(
+                client_2_state.clone(),
+                "set key1 client_2_value",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            // Confirm that the value was indeed modified
+            check_command(
+                client_2_state.clone(),
+                "get key1",
+                RedisObject::Str("client_2_value".into()),
+            )
+            .await;
+
+            // unwatch from client-1
+            check_command(
+                client_1_state.clone(),
+                "unwatch",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            // start a txn (client 1)
+            check_command(
+                client_1_state.clone(),
+                "multi",
+                RedisObject::Status("OK".into()),
+            )
+            .await;
+
+            check_command(
+                client_1_state.clone(),
+                "set key1 client_1_value",
+                RedisObject::Status("QUEUED".into()),
+            )
+            .await;
+
+            // Now attempt to commit client-1 transaction and confirm that it is aborted
+            check_command(
+                client_1_state.clone(),
+                "exec",
+                RedisObject::Array(vec![RedisObject::Status("OK".into())]),
+            )
+            .await;
+
+            // Confirm that no more keys are being watched for client-1
+            // and the transaction object was removed (getting a `None` watched user keys indicates that
+            // no `TransactionState` object was found the client)
+            assert_eq!(client_1_state.watched_user_keys_cloned(), None);
+            assert_eq!(WatchedKeys::watchers_count(None), 0);
+            assert_eq!(WatchedKeys::watched_keys_count(None), 0);
+
+            // Check that the value was not modified
+            check_command(
+                client_1_state.clone(),
+                "get key1",
+                RedisObject::Str("client_1_value".into()),
+            )
+            .await;
         });
     }
 }

@@ -203,6 +203,8 @@ and visit this page again in couple of days
 | multi | ✓ |✓ |   |
 | exec | ✓ |✓ |   |
 | discard | ✓ |✓ |   |
+| watch | ✓ |✓ |   |
+| unwatch | ✓ |✓ |   |
 
 ### Connection management commands
 

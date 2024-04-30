@@ -51,6 +51,11 @@ where
         self.flush_if_needed().await
     }
 
+    pub async fn null_array(&mut self) -> Result<(), SableError> {
+        self.resp_builder.null_array(&mut self.buffer);
+        self.flush_if_needed().await
+    }
+
     pub async fn add_empty_array(&mut self) -> Result<(), SableError> {
         self.resp_builder.add_empty_array(&mut self.buffer);
         self.flush_if_needed().await

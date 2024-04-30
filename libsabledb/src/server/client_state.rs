@@ -235,6 +235,23 @@ impl ClientState {
         })
     }
 
+    /// Can this client proceed with committing the transaction?
+    /// This function might return `false` if any of the watched keys was
+    /// modified while building the transaction
+    pub fn can_commit_txn(&self) -> bool {
+        ACTIVE_TRANSACTIONS.with_borrow(|txs| {
+            let Some(txn_state) = txs.get(&self.id()) else {
+                // no transaction active for this client...
+                return false;
+            };
+
+            // convert the watched keys into [&BytesMut]
+            let watched_keys = txn_state.watched_user_keys_cloned();
+            let watched_keys: Vec<&BytesMut> = watched_keys.iter().map(|k| k).collect();
+            !WatchedKeys::is_user_key_modified_multi(&watched_keys, self.database_id(), None)
+        })
+    }
+
     /// Discard the transaction state for this client
     pub fn discard_transaction(&self) {
         self.enable_client_flag(ClientStateFlags::TXN_MULTI, false);

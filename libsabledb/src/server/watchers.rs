@@ -82,6 +82,16 @@ impl WatchedKeys {
         table.watching_clients_count.load(Ordering::Relaxed) as usize
     }
 
+    /// Return the number of watched keys
+    pub fn watched_keys_count(watched_keys_table: Option<&WatchedKeysTable>) -> usize {
+        let table = watching_table!(watched_keys_table);
+        table
+            .watched_keys
+            .read()
+            .expect("Failed to read lock")
+            .len()
+    }
+
     /// Add `user_keys` to the watched table
     pub fn add_watcher(
         user_keys: &[&BytesMut],
