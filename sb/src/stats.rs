@@ -17,10 +17,10 @@ lazy_static! {
     static ref PROGRESS: ProgressBar = ProgressBar::new(10);
 }
 
-/// Increment the total number of requests by 1
-pub fn incr_requests() {
-    REQUESTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
-    PROGRESS.inc(1);
+/// Increment the total number of requests by `count`
+pub fn incr_requests(count: usize) {
+    REQUESTS_PROCESSED.fetch_add(count, Ordering::Relaxed);
+    PROGRESS.inc(count as u64);
 }
 
 /// Increment the total number of requests by 1

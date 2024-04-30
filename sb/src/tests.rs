@@ -25,13 +25,13 @@ pub async fn run_set(
         client.write_buffer(&mut stream, &buffer).await?;
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             let response = client.read_response(&mut stream).await?;
             if !response.eq(&status_ok) {
                 tracing::error!("Expected 'OK'");
             }
         }
 
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -60,7 +60,6 @@ pub async fn run_get(
 
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             match client.read_response(&mut stream).await? {
                 RedisObject::NullString => {}
                 RedisObject::Str(_value) => {
@@ -72,6 +71,7 @@ pub async fn run_get(
             }
         }
 
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -97,13 +97,13 @@ pub async fn run_ping(
         client.write_buffer(&mut stream, &buffer).await?;
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             let response = client.read_response(&mut stream).await?;
             if !response.eq(&status_pong) {
                 tracing::error!("Expected 'PONG'");
             }
         }
 
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -132,7 +132,6 @@ pub async fn run_incr(
 
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             match client.read_response(&mut stream).await? {
                 RedisObject::Integer(_val) => {
                     stats::incr_hits();
@@ -143,6 +142,7 @@ pub async fn run_incr(
             }
         }
 
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -172,7 +172,6 @@ pub async fn run_push(
         client.write_buffer(&mut stream, &buffer).await?;
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             match client.read_response(&mut stream).await? {
                 RedisObject::Integer(_list_length) => {}
                 other => {
@@ -180,7 +179,7 @@ pub async fn run_push(
                 }
             }
         }
-
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -210,7 +209,6 @@ pub async fn run_pop(
 
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             match client.read_response(&mut stream).await? {
                 RedisObject::NullString => {}
                 RedisObject::Str(_value) => {
@@ -222,6 +220,7 @@ pub async fn run_pop(
             }
         }
 
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
@@ -254,7 +253,6 @@ pub async fn run_hset(
 
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
-            stats::incr_requests(); // per response
             match client.read_response(&mut stream).await? {
                 RedisObject::NullString => {}
                 RedisObject::Integer(_num) => {
@@ -265,6 +263,8 @@ pub async fn run_hset(
                 }
             }
         }
+
+        stats::incr_requests(opts.pipeline);
         stats::record_latency(sw.elapsed_micros()?.try_into().unwrap_or(u64::MAX));
         requests_sent += opts.pipeline;
     }
