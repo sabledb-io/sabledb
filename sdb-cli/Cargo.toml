@@ -11,3 +11,4 @@ clap = { version = "4", features = ["derive"] }
 redis = { version = "0", features = ["tls-native-tls"] }
 libsabledb = { path = "../libsabledb" }
 bytes = "1"
+lazy_static = "1"

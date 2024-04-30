@@ -1,13 +1,18 @@
 use redis::Value;
 mod sdb_cli_options;
+use bytes::BytesMut;
 use clap::Parser;
 use sdb_cli_options::Options;
-
-use bytes::BytesMut;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 #[allow(unused_imports)]
 use redis::Commands;
 use rustyline::{Config, Editor};
+
+lazy_static::lazy_static! {
+    static ref INDENT_NEEDED: AtomicBool = AtomicBool::new(true);
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::fmt()
@@ -17,13 +22,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Options::parse();
-    let connection_string = if args.tls {
-        format!("rediss://{}:{}/#insecure", args.host, args.port)
+    let (connection_string, prompt) = if args.tls {
+        (
+            format!("rediss://{}:{}/#insecure", args.host, args.port),
+            format!("{}:{} (TLS) $ ", args.host, args.port),
+        )
     } else {
-        format!("redis://{}:{}/#insecure", args.host, args.port)
+        (
+            format!("redis://{}:{}", args.host, args.port),
+            format!("{}:{} $ ", args.host, args.port),
+        )
     };
 
-    tracing::info!("Connecting to {}..", connection_string);
+    println!("Connecting to {}..", connection_string);
     let client = redis::Client::open(connection_string.as_str())?;
     let mut conn = client.get_connection()?;
     let config = Config::builder().auto_add_history(true).build();
@@ -31,72 +42,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rustyline::sqlite_history::SQLiteHistory::open(config, ".sdb-cli-history.sqlite3")?;
     let mut rl: Editor<(), _> = Editor::with_history(config, history)?;
     loop {
-        let line = rl.readline("> ")?;
+        let Ok(line) = rl.readline(prompt.as_str()) else {
+            break;
+        };
         let mut line = BytesMut::from(line.as_str());
         line.extend_from_slice(b"\r\n");
         conn.send_packed_command(line.as_ref())?;
         match conn.recv_response() {
-            Err(e) => println!("{:#?}", e),
+            Err(e) => tracing::error!("{:#?}", e),
             Ok(response) => {
-                print_response_pretty(&response, 0);
+                INDENT_NEEDED.store(true, Ordering::Relaxed);
+                print_response_pretty(&response, 0, None);
             }
         }
     }
+    Ok(())
 }
 
-fn print_response_pretty(value: &Value, indent: usize) {
+fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
     match value {
         Value::Nil => {
-            if indent == 0 {
-                print_with_indent("NIL", indent);
-            } else {
-                print_with_indent("NIL,", indent);
-            }
+            print_sequence(seq);
+            println_value("(nil)");
         }
         Value::Int(val) => {
-            if indent == 0 {
-                print_with_indent(val, indent);
-            } else {
-                print_with_indent(format!("{},", val), indent);
-            }
+            print_sequence(seq);
+            println_value(format!("(integer) {}", val));
         }
         Value::Data(ref val) => {
             let s = String::from_utf8_lossy(val);
-            if indent == 0 {
-                print_with_indent(format!(r#""{}"#, s), indent);
-            } else {
-                print_with_indent(format!(r#""{}","#, s), indent);
-            }
+            print_sequence(seq);
+            println_value(format!(r#""{}""#, s));
         }
         Value::Bulk(ref values) => {
             if values.is_empty() {
-                print_with_indent(r#"[],"#, indent);
+                print_indent(indent);
+                print_sequence(seq);
+                println_value("(empty array)");
             } else {
-                print_with_indent("[", indent);
+                print_sequence(seq);
+                let mut new_seq = 1usize;
                 for val in values.iter() {
-                    print_response_pretty(val, indent + 1);
+                    print_indent(indent);
+                    print_response_pretty(val, indent + 5, Some(new_seq));
+                    new_seq += 1;
                 }
-                print_with_indent("],", indent);
             }
         }
         Value::Okay => {
-            if indent == 0 {
-                print_with_indent("OK", indent);
-            } else {
-                print_with_indent(r#""OK","#, indent);
-            }
+            print_sequence(seq);
+            println_value("OK");
         }
         Value::Status(ref s) => {
-            if indent == 0 {
-                print_with_indent(s, indent);
-            } else {
-                print_with_indent(format!(r#""{}","#, s), indent);
-            }
+            print_sequence(seq);
+            println_value(format!(r#""{}""#, s));
         }
     }
 }
 
-fn print_with_indent(val: impl std::fmt::Display, depth: usize) {
-    let indent = (0..depth).map(|_| " ").collect::<String>();
-    println!("{}{}", indent, val);
+fn print_indent(indent: usize) {
+    if !INDENT_NEEDED.load(Ordering::Relaxed) {
+        return;
+    }
+    let indent = (0..indent).map(|_| " ").collect::<String>();
+    print!("{}", indent);
+    INDENT_NEEDED.store(false, Ordering::Relaxed);
+}
+
+fn print_sequence(seq: Option<usize>) {
+    if let Some(seq) = seq {
+        print!("{: >3}) ", seq);
+    }
+}
+
+fn println_value(val: impl std::fmt::Display) {
+    println!("{}", val);
+    INDENT_NEEDED.store(true, Ordering::Relaxed);
 }
