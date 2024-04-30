@@ -523,11 +523,9 @@ impl StorageAdapter {
             {
                 // flush is needed
                 db.flush_wal()?;
-                tracing::trace!("flushing WAL file...");
             } else {
                 // restore the old value from the global parameter so other threads might flush it
                 LAST_WAL_FLUSH_TIMESTAMP.swap(old_ts, Ordering::Relaxed);
-                tracing::trace!("No need to flush WAL file...");
             }
         }
         Ok(())

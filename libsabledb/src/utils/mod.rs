@@ -171,7 +171,7 @@ impl TimeUtils {
                 "failed to retrieve std::time::UNIX_EPOCH".to_string(),
             ));
         };
-        Ok(u64::try_from(timestamp_ms.as_millis()).unwrap_or(u64::MAX))
+        Ok(timestamp_ms.as_millis().try_into().unwrap_or(u64::MAX))
     }
 
     /// Return milliseconds elapsed since EPOCH
@@ -182,7 +182,7 @@ impl TimeUtils {
                 "failed to retrieve std::time::UNIX_EPOCH".to_string(),
             ));
         };
-        Ok(u64::try_from(timestamp_ms.as_micros()).unwrap_or(u64::MAX))
+        Ok(timestamp_ms.as_micros().try_into().unwrap_or(u64::MAX))
     }
 }
 

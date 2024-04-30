@@ -1,4 +1,4 @@
-use crate::{Client, SableError, ServerState, StorageAdapter, Telemetry};
+use crate::{Client, SableError, ServerState, StorageAdapter, Telemetry, TimeUtils};
 use rand::Rng;
 use std::net::TcpStream;
 use std::rc::Rc;
@@ -36,6 +36,8 @@ pub struct Worker {
     rx_channel: WorkerReceiver,
     /// The store
     store: StorageAdapter,
+    /// Statistics merge interval
+    stats_merge_interval: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +128,7 @@ impl Worker {
             rx_channel: rx,
             server_state,
             store,
+            stats_merge_interval: 0,
         }
     }
 
@@ -175,6 +178,14 @@ impl Worker {
             secs, nanos
         );
 
+        self.stats_merge_interval = tokio::time::Duration::new(secs, nanos)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+
+        let mut last_flush = TimeUtils::epoch_ms().expect("failed to get timestamp!");
+        let mut last_merge = last_flush;
+
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
@@ -203,29 +214,41 @@ impl Worker {
                         None => {}
                     }
                 }
-
-                _ = tokio::time::sleep(tokio::time::Duration::new(secs, nanos)) => {
-                    // update this worker telemetry
-                    self.server_state
-                        .shared_telemetry()
-                        .lock()
-                        .expect("mutex")
-                        .merge_worker_telemetry(Telemetry::clone());
-                    Telemetry::clear();
-
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                    self.tick(&mut last_flush, &mut last_merge);
                 }
-                _ = tokio::time::sleep(
-                        tokio::time::Duration::from_millis(
-                            self.store.open_params()
-                                .rocksdb
-                                .manual_wal_flush_interval_ms as u64
-                        )
-                    ) => {
-                    if let Err(e) = self.store.flush_wal() {
-                        // log this error every 5 minutes
-                        crate::error_with_throttling!(300, "Failed to flush WAL. {:?}", e);
-                    }
-                }
+            }
+        }
+    }
+
+    /// Handle idle event
+    fn tick(&self, last_flush: &mut u64, last_merge: &mut u64) {
+        let Ok(cur_ts) = TimeUtils::epoch_ms() else {
+            crate::error_with_throttling!(300, "unable to get timestamp from system");
+            return;
+        };
+
+        let flush_interval = self
+            .server_state
+            .options()
+            .open_params
+            .rocksdb
+            .manual_wal_flush_interval_ms as u64;
+
+        // update this worker telemetry
+        if cur_ts - *last_merge > self.stats_merge_interval {
+            *last_merge = cur_ts;
+            self.server_state
+                .shared_telemetry()
+                .lock()
+                .expect("mutex")
+                .merge_worker_telemetry(Telemetry::clone());
+            Telemetry::clear();
+        }
+
+        if cur_ts - *last_flush > flush_interval {
+            if let Err(e) = self.store.flush_wal() {
+                crate::error_with_throttling!(300, "Failed to flush WAL. {:?}", e);
             }
         }
     }

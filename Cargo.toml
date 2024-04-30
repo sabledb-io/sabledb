@@ -1,5 +1,5 @@
 [workspace]
-members = ["libsabledb", "sabledb", "sb"]
+members = ["libsabledb", "sabledb", "sb", "sdb-cli"]
 resolver = "2"
 
 [profile.release]
