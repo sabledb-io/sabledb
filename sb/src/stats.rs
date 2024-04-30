@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 lazy_static! {
+    static ref TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
     static ref REQUESTS_PROCESSED: AtomicUsize = AtomicUsize::new(0);
     static ref HITS: AtomicUsize = AtomicUsize::new(0);
     static ref RUNNING_THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -15,6 +16,16 @@ lazy_static! {
     static ref HIST: Mutex<Histogram<u64>>
         = Mutex::new(Histogram::<u64>::new_with_bounds(1, 600000000, 2).unwrap());
     static ref PROGRESS: ProgressBar = ProgressBar::new(10);
+}
+
+/// Sets the number of requests to execute during this test
+pub fn set_tests_requests_count(count: usize) {
+    TOTAL_REQUESTS.store(count, Ordering::Relaxed);
+}
+
+/// Sets the number of requests to execute during this test
+pub fn is_test_done() -> bool {
+    REQUESTS_PROCESSED.load(Ordering::Relaxed) == TOTAL_REQUESTS.load(Ordering::Relaxed)
 }
 
 /// Increment the total number of requests by 1

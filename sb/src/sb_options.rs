@@ -47,6 +47,10 @@ pub struct Options {
     /// use TLS
     #[arg(long, default_value = "false")]
     pub tls: bool,
+
+    /// Pipeline size
+    #[arg(long, default_value = "1")]
+    pub pipeline: usize,
 }
 
 impl Options {

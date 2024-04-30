@@ -143,7 +143,7 @@ impl ClientState {
             if let Some(txn_state) = txs.borrow_mut().get_mut(&self.id()) {
                 // remove old watched keys
                 let watched_keys = txn_state.watched_user_keys_cloned();
-                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().map(|e| e).collect();
+                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().collect();
 
                 WatchedKeys::remove_watcher(&watached_keys_ref, self.database_id(), None);
                 txn_state.clear_watched_keys();
@@ -159,11 +159,9 @@ impl ClientState {
     /// Return the client watched keys
     pub fn watched_user_keys_cloned(&self) -> Option<Vec<BytesMut>> {
         ACTIVE_TRANSACTIONS.with(|txs| {
-            if let Some(txn_state) = txs.borrow().get(&self.id()) {
-                Some(txn_state.watched_user_keys_cloned())
-            } else {
-                None
-            }
+            txs.borrow()
+                .get(&self.id())
+                .map(|txn_state| txn_state.watched_user_keys_cloned())
         })
     }
 
@@ -229,9 +227,7 @@ impl ClientState {
         ACTIVE_TRANSACTIONS.with_borrow_mut(|txs| {
             // Check that we don't have a `TransactionState` object associated with this client
             // (this can happen if user called `watch ...` before calling `multi`
-            if !txs.contains_key(&self.id()) {
-                txs.insert(self.id(), TransactionState::default());
-            }
+            txs.entry(self.id()).or_default();
         })
     }
 
@@ -247,7 +243,7 @@ impl ClientState {
 
             // convert the watched keys into [&BytesMut]
             let watched_keys = txn_state.watched_user_keys_cloned();
-            let watched_keys: Vec<&BytesMut> = watched_keys.iter().map(|k| k).collect();
+            let watched_keys: Vec<&BytesMut> = watched_keys.iter().collect();
             !WatchedKeys::is_user_key_modified_multi(&watched_keys, self.database_id(), None)
         })
     }
@@ -261,7 +257,7 @@ impl ClientState {
             if let Some(txn) = txs.get(&self.id()) {
                 // unwatch any keys by this transaction
                 let watched_keys = txn.watched_user_keys_cloned();
-                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().map(|e| e).collect();
+                let watached_keys_ref: Vec<&BytesMut> = watched_keys.iter().collect();
                 WatchedKeys::remove_watcher(&watached_keys_ref, self.database_id(), None);
 
                 // And remove this transaction from the table
