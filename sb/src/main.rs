@@ -1,6 +1,5 @@
 mod bench_utils;
 mod redis_client;
-mod response_validators;
 mod sb_options;
 mod stats;
 mod tests;
@@ -36,43 +35,38 @@ async fn thread_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
 /// Client main function
 async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     const LIST_KEY_RANGE: usize = 1000;
-    let mut tx = crate::redis_client::SBClient::connect(
-        opts.host.clone(),
-        opts.port as u16,
-        opts.tls,
-        opts.pipeline,
-    )
-    .await?;
+    let stream =
+        crate::redis_client::RedisClient::connect(opts.host.clone(), opts.port as u16, opts.tls)
+            .await?;
     match opts.test.as_str() {
-        "set" => tests::run_set(&mut tx, opts).await?,
-        "get" => tests::run_get(&mut tx, opts).await?,
-        "ping" => tests::run_ping(&mut tx, opts).await?,
-        "incr" => tests::run_incr(&mut tx, opts).await?,
+        "set" => tests::run_set(stream, opts).await?,
+        "get" => tests::run_get(stream, opts).await?,
+        "ping" => tests::run_ping(stream, opts).await?,
+        "incr" => tests::run_incr(stream, opts).await?,
         "rpush" => {
             opts.key_range = LIST_KEY_RANGE;
-            tests::run_push(&mut tx, true, opts).await?;
+            tests::run_push(stream, true, opts).await?;
         }
         "rpop" => {
             opts.key_range = LIST_KEY_RANGE;
-            tests::run_pop(&mut tx, true, opts).await?;
+            tests::run_pop(stream, true, opts).await?;
         }
         "lpush" => {
             opts.key_range = LIST_KEY_RANGE;
-            tests::run_push(&mut tx, false, opts).await?;
+            tests::run_push(stream, false, opts).await?;
         }
         "lpop" => {
             opts.key_range = LIST_KEY_RANGE;
-            tests::run_pop(&mut tx, false, opts).await?;
+            tests::run_pop(stream, false, opts).await?;
         }
         "hset" => {
             opts.key_range = LIST_KEY_RANGE;
-            tests::run_hset(&mut tx, opts).await?;
+            tests::run_hset(stream, opts).await?;
         }
         _ => {
             panic!("don't know how to run test: `{}`", opts.test);
         }
     }
-    drop(tx);
     Ok(())
 }
 
@@ -108,9 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("Key size: {}", args.key_size);
     tracing::debug!("Data size: {}", args.data_size);
 
-    let total_requests = args.thread_clients() * args.client_requests() * args.threads;
-    stats::set_tests_requests_count(total_requests);
-    stats::finalise_progress_setup(total_requests as u64);
+    stats::finalise_progress_setup(args.num_requests as u64);
 
     // Launch the threads. In turn, each thread will launch a N clients each running
     // within a dedicated tokio's task
@@ -146,19 +138,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // calculate the RPS
     let millis = (sw.elapsed_micros()? / 1000) as f64; // duration in MS
-    let total_requests = stats::requests_processed() as f64;
+    let count = stats::requests_processed() as f64;
     let hits = stats::total_hits() as f64;
 
-    let requests_per_ms = total_requests / millis;
-    let requests_per_secs = (requests_per_ms * 1000.0) as usize;
-    //let requests_per_ms: usize = requests_per_ms as usize;
+    let mut requests_per_ms = count / millis;
+    requests_per_ms *= 1000.0;
+    let requests_per_ms: usize = requests_per_ms as usize;
     println!(
-        "    RPS: {} / {}ms => {} requests / seconds",
-        total_requests,
-        millis / 1000.0,
-        requests_per_secs.to_formatted_string(&Locale::en)
+        "    RPS: {}",
+        requests_per_ms.to_formatted_string(&Locale::en)
     );
-    println!("    Hit rate: {}%", hits / total_requests * 100.0);
+    println!("    Hit rate: {}%", hits / count * 100.0);
     stats::print_latency();
     Ok(())
 }

@@ -48,7 +48,7 @@ pub struct Options {
     #[arg(long, default_value = "false")]
     pub tls: bool,
 
-    /// Pipeline size
+    /// Pipeline
     #[arg(long, default_value = "1")]
     pub pipeline: usize,
 }

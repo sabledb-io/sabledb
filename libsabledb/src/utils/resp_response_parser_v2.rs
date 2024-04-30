@@ -19,33 +19,7 @@ pub enum RedisObject {
     Integer(u64),
 }
 
-/// Similar to the above, but just using the type
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum RedisObjectType {
-    Status,
-    StatusOk,
-    Error,
-    Str,
-    Array,
-    NullArray,
-    NullString,
-    Integer,
-}
-
 impl RedisObject {
-    pub fn redis_object_type(&self) -> RedisObjectType {
-        match self {
-            Self::Integer(_) => RedisObjectType::Integer,
-            Self::Status(msg) if msg.eq("OK") => RedisObjectType::StatusOk,
-            Self::Status(_) => RedisObjectType::Status,
-            Self::Error(_) => RedisObjectType::Error,
-            Self::Str(_) => RedisObjectType::Str,
-            Self::NullArray => RedisObjectType::NullArray,
-            Self::NullString => RedisObjectType::NullString,
-            Self::Array(_) => RedisObjectType::Array,
-        }
-    }
-
     pub fn integer(&self) -> Result<u64, SableError> {
         match self {
             Self::Integer(num) => Ok(*num),
