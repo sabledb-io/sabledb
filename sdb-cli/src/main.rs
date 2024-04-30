@@ -84,7 +84,7 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
                 let mut new_seq = 1usize;
                 for val in values.iter() {
                     print_indent(indent);
-                    print_response_pretty(val, indent + 5, Some(new_seq));
+                    print_response_pretty(val, indent + 4, Some(new_seq));
                     new_seq += 1;
                 }
             }
@@ -111,7 +111,7 @@ fn print_indent(indent: usize) {
 
 fn print_sequence(seq: Option<usize>) {
     if let Some(seq) = seq {
-        print!("{: >3}) ", seq);
+        print!("{: >2}) ", seq);
     }
 }
 
