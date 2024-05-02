@@ -769,8 +769,7 @@ impl Default for CommandsManager {
                     "hgetall",
                     CommandMetadata::new(RedisCommandName::Hgetall)
                         .read_only()
-                        .with_arity(2)
-                        .no_transaction(), // uses iterator
+                        .with_arity(2),
                 ),
                 (
                     "hincrbyfloat",
@@ -812,8 +811,7 @@ impl Default for CommandsManager {
                     "hscan",
                     CommandMetadata::new(RedisCommandName::Hscan)
                         .read_only()
-                        .with_arity(-3)
-                        .no_transaction(), // uses iterator
+                        .with_arity(-3),
                 ),
                 (
                     "hsetnx",
@@ -895,8 +893,7 @@ impl Default for CommandsManager {
                     "zrangebyscore",
                     CommandMetadata::new(RedisCommandName::Zrangebyscore)
                         .read_only()
-                        .with_arity(-4)
-                        .no_transaction(), // uses iterator
+                        .with_arity(-4),
                 ),
                 (
                     "zcount",

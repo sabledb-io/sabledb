@@ -310,17 +310,14 @@ mod test {
             )
             .await;
 
-            // Check that commands marked with "no_transaction" are not accepted
+            // Queue some commands
             check_command(
                 client.inner(),
                 "hgetall",
-                RedisObject::Error(
-                    "ERR command hgetall can not be used in a MULTI / EXEC block".into(),
-                ),
+                RedisObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
-            // Check that commands marked with "no_transaction" are not accepted
             check_command(
                 client.inner(),
                 "set k1 v1",
@@ -337,7 +334,7 @@ mod test {
             .await;
 
             // we expect 2 commands in the queue
-            assert_eq!(client.inner().txn_commands_vec_len(), 2);
+            assert_eq!(client.inner().txn_commands_vec_len(), 3);
 
             // Use the second client to confirm that the command was not executed
             check_command(client2.inner(), "get k1", RedisObject::NullString).await;
