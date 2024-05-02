@@ -183,6 +183,113 @@ macro_rules! writer_return_value_not_int {
     };
 }
 
+#[macro_export]
+macro_rules! writer_return_min_max_not_float {
+    ($writer:expr) => {
+        $writer
+            .error_string(Strings::ZERR_MIN_MAX_NOT_FLOAT)
+            .await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_empty_array {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.empty_array($response_buffer);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_syntax_error {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::SYNTAX_ERROR);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_value_not_int {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_min_max_not_float {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::ZERR_MIN_MAX_NOT_FLOAT);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_number {
+    ($builder:expr, $response_buffer:expr, $num:expr) => {
+        $builder.number_usize($response_buffer, $num);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! zset_md_or_nil {
+    ($zset_db:expr, $key:expr,  $writer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $writer.error_string(Strings::WRONGTYPE).await?;
+                $writer.flush().await?;
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $writer.empty_array().await?;
+                $writer.flush().await?;
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
+#[macro_export]
+macro_rules! zset_md_or_nil_builder {
+    ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $builder.empty_array($response_buffer);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
+#[macro_export]
+macro_rules! zset_md_or_0_builder {
+    ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $builder.number_usize($response_buffer, 0);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
 bitflags::bitflags! {
 pub struct SetFlags: u32  {
     const None = 0;

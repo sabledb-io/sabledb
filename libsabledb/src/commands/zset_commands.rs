@@ -1,5 +1,4 @@
 use crate::{
-    check_args_count, command_arg_at,
     commands::{HandleCommandResult, Strings},
     io::RespWriter,
     metadata::ZSetKeyByScore,
@@ -9,35 +8,11 @@ use crate::{
         ZSetLenResult,
     },
     utils::RespBuilderV2,
-    writer_return_empty_array, writer_return_syntax_error, writer_return_value_not_int,
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
-
-//== ---------------------
-// Set specific macros
-//== ---------------------
-
-macro_rules! get_zset_metadata {
-    ($zset_db:expr, $key:expr,  $writer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
-                $writer.error_string(Strings::WRONGTYPE).await?;
-                $writer.flush().await?;
-                return Ok(());
-            }
-            ZSetGetMetadataResult::NotFound => {
-                $writer.empty_array().await?;
-                $writer.flush().await?;
-                return Ok(());
-            }
-            ZSetGetMetadataResult::Some(md) => md,
-        };
-        md
-    }};
-}
 
 pub struct ZSetCommands {}
 
@@ -57,6 +32,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zincrby => {
                 Self::zincrby(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zcount => {
+                Self::zcount(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -291,6 +269,103 @@ impl ZSetCommands {
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
     /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
     /// equal to min or max). The elements are considered to be ordered from low to high scores
+    async fn zcount(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let min = command_arg_at!(command, 2);
+        let max = command_arg_at!(command, 3);
+
+        let builder = RespBuilderV2::default();
+        let Some((start_score, include_start_score)) = Self::parse_score_index(min) else {
+            builder_return_min_max_not_float!(builder, response_buffer);
+        };
+
+        let Some((end_score, include_end_score)) = Self::parse_score_index(max) else {
+            builder_return_min_max_not_float!(builder, response_buffer);
+        };
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = zset_md_or_0_builder!(zset_db, key, builder, response_buffer);
+
+        // empty set? empty array
+        if md.is_empty() {
+            builder.number_usize(response_buffer, 0);
+            return Ok(());
+        }
+
+        // Determine the starting score
+        let prefix = md.prefix_by_score(None);
+        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        if !db_iter.valid() {
+            // invalud iterator
+            builder_return_number!(builder, response_buffer, 0);
+        }
+
+        // Find the first item in the set that complies with the start condition
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                builder_return_number!(builder, response_buffer, 0);
+            };
+
+            if !key.starts_with(&prefix) {
+                builder_return_number!(builder, response_buffer, 0);
+            }
+
+            let set_item = ZSetKeyByScore::from_bytes(key)?;
+            if (include_start_score && set_item.score() >= start_score)
+                || (!include_start_score && set_item.score() > start_score)
+            {
+                let prefix = md.prefix_by_score(Some(set_item.score()));
+                // place the iterator on the range start
+                db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                break;
+            }
+            db_iter.next();
+        }
+
+        // All items must start with `zset_prefix` regardless of the user conditions
+        let zset_prefix = md.prefix_by_score(None);
+
+        let mut matched_entries = 0usize;
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&zset_prefix) {
+                // reached the set limit
+                break;
+            }
+
+            let field = ZSetKeyByScore::from_bytes(key)?;
+
+            // Check end condition
+            if (include_end_score && field.score() > end_score)
+                || (!include_end_score && field.score() >= end_score)
+            {
+                break;
+            }
+
+            // Store the member + score
+            matched_entries = matched_entries.saturating_add(1);
+            db_iter.next();
+        }
+
+        builder_return_number!(builder, response_buffer, matched_entries);
+    }
+
+    /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
+    /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
+    /// equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zrangebyscore(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -366,7 +441,7 @@ impl ZSetCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = get_zset_metadata!(zset_db, key, writer);
+        let md = zset_md_or_nil!(zset_db, key, writer);
 
         // empty set? empty array
         if md.is_empty() {
@@ -381,7 +456,7 @@ impl ZSetCommands {
             writer_return_empty_array!(writer);
         }
 
-        // Find the first item in the set the complies with the start condition
+        // Find the first item in the set that complies with the start condition
         while db_iter.valid() {
             // get the key & value
             let Some((key, _)) = db_iter.key_value() else {
@@ -478,7 +553,6 @@ impl ZSetCommands {
         }
     }
 
-    #[allow(dead_code)]
     /// `index` can be `-inf` or `+inf`, denoting the negative and positive infinities, respectively.
     /// This means that you are not required to know the highest or lowest score in the sorted set to get all elements
     /// from or up to a certain score. By default, the score intervals specified by <start> and <stop> are closed
@@ -574,6 +648,19 @@ mod test {
         // all of score 1 but dva & rein (empty array)
         ("zrangebyscore tanks 1 1 LIMIT 2 -1", "*0\r\n"),
     ]; "test_zrangebyscore")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zcount mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zcount mystr 1", "-ERR wrong number of arguments for 'zcount' command\r\n"),
+        ("zadd tanks 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("zcount no_such_zset -inf +inf", ":0\r\n"),
+        ("zcount tanks -inf +inf", ":6\r\n"),
+        ("zcount tanks (1 (3", ":2\r\n"),
+        ("zcount tanks 1 3", ":6\r\n"),
+        ("zcount tanks 1 (3", ":4\r\n"),
+        ("zcount tanks (1 3", ":4\r\n"),
+        ("zcount tanks 10 8", ":0\r\n"),
+    ]; "test_zcount")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

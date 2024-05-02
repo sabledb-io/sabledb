@@ -172,10 +172,11 @@ and visit this page again in couple of days
 
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
-| zadd | ✓ |✓ |   |
-| zcard | ✓ |✓ |   |
-| zincrby | ✓ |✓ |   |
-| zrangebyscore | ✓ |✓ |   |
+| zadd | ✓ |✓ | |
+| zcard | ✓ |✓ | |
+| zincrby | ✓ |✓ | |
+| zcount | ✓ |✓ | |
+| zrangebyscore | ✓ |✓ | |
 
 ### Generic commands
 
