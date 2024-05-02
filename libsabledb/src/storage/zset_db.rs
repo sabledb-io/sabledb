@@ -9,7 +9,7 @@ use bytes::BytesMut;
 
 // Internal enum
 #[derive(Debug, PartialEq, Eq)]
-pub enum GetZSetMetadataResult {
+pub enum ZSetGetMetadataResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// A match was found
@@ -101,13 +101,13 @@ impl<'a> ZSetDb<'a> {
     /// Return the size of the set
     pub fn len(&self, user_key: &BytesMut) -> Result<ZSetLenResult, SableError> {
         let zset = match self.get_metadata(user_key)? {
-            GetZSetMetadataResult::WrongType => {
+            ZSetGetMetadataResult::WrongType => {
                 return Ok(ZSetLenResult::WrongType);
             }
-            GetZSetMetadataResult::NotFound => {
+            ZSetGetMetadataResult::NotFound => {
                 return Ok(ZSetLenResult::Some(0));
             }
-            GetZSetMetadataResult::Some(zset) => zset,
+            ZSetGetMetadataResult::Some(zset) => zset,
         };
         Ok(ZSetLenResult::Some(zset.len() as usize))
     }
@@ -123,12 +123,12 @@ impl<'a> ZSetDb<'a> {
     ) -> Result<ZSetAddMemberResult, SableError> {
         // locate the hash
         let mut md = match self.get_metadata(user_key)? {
-            GetZSetMetadataResult::WrongType => return Ok(ZSetAddMemberResult::WrongType),
-            GetZSetMetadataResult::NotFound => {
+            ZSetGetMetadataResult::WrongType => return Ok(ZSetAddMemberResult::WrongType),
+            ZSetGetMetadataResult::NotFound => {
                 // Create a new set
                 self.create_metadata(user_key)?
             }
-            GetZSetMetadataResult::Some(hash) => hash,
+            ZSetGetMetadataResult::Some(hash) => hash,
         };
 
         let mut items_added = 0usize;
@@ -179,13 +179,13 @@ impl<'a> ZSetDb<'a> {
         member: &[u8],
     ) -> Result<ZSetGetScoreResult, SableError> {
         let md = match self.get_metadata(user_key)? {
-            GetZSetMetadataResult::WrongType => {
+            ZSetGetMetadataResult::WrongType => {
                 return Ok(ZSetGetScoreResult::WrongType);
             }
-            GetZSetMetadataResult::NotFound => {
+            ZSetGetMetadataResult::NotFound => {
                 return Ok(ZSetGetScoreResult::NotFound);
             }
-            GetZSetMetadataResult::Some(md) => md,
+            ZSetGetMetadataResult::Some(md) => md,
         };
 
         if let Some(score) = self.get_member_score(md.id(), member)? {
@@ -200,22 +200,22 @@ impl<'a> ZSetDb<'a> {
         self.flush_cache()
     }
 
-    //=== ----------------------------
-    // Private methods
-    //=== ----------------------------
-
     /// Load zset value metadata from the store
-    fn get_metadata(&self, user_key: &BytesMut) -> Result<GetZSetMetadataResult, SableError> {
+    pub fn get_metadata(&self, user_key: &BytesMut) -> Result<ZSetGetMetadataResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(GetZSetMetadataResult::NotFound);
+            return Ok(ZSetGetMetadataResult::NotFound);
         };
 
         match self.try_decode_zset_value_metadata(&value)? {
-            None => Ok(GetZSetMetadataResult::WrongType),
-            Some(zset_md) => Ok(GetZSetMetadataResult::Some(zset_md)),
+            None => Ok(ZSetGetMetadataResult::WrongType),
+            Some(zset_md) => Ok(ZSetGetMetadataResult::Some(zset_md)),
         }
     }
+
+    //=== ----------------------------
+    // Private methods
+    //=== ----------------------------
 
     /// Apply the changes to the store and clear the cache
     fn flush_cache(&mut self) -> Result<(), SableError> {
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(zset_db.len(&key).unwrap(), ZSetLenResult::WrongType);
         assert_eq!(
             zset_db.get_metadata(&key).unwrap(),
-            GetZSetMetadataResult::WrongType
+            ZSetGetMetadataResult::WrongType
         );
         Ok(())
     }

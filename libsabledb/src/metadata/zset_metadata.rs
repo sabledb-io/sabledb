@@ -83,22 +83,28 @@ impl ZSetValueMetadata {
     }
 
     /// Create a prefix for iterating all items belonged to this zset by score
-    pub fn prefix_by_score(&self) -> BytesMut {
+    pub fn prefix_by_score(&self, score: Option<f64>) -> BytesMut {
         let mut buffer =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
         builder.write_u8(Encoding::KEY_ZSET_SCORE_ITEM);
         builder.write_u64(self.id());
+        if let Some(score) = score {
+            builder.write_f64(score);
+        }
         buffer
     }
 
     /// Create a prefix for iterating all items belonged to this zset by member
-    pub fn prefix_by_member(&self) -> BytesMut {
+    pub fn prefix_by_member(&self, member: Option<&[u8]>) -> BytesMut {
         let mut buffer =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
         builder.write_u8(Encoding::KEY_ZSET_MEMBER_ITEM);
         builder.write_u64(self.id());
+        if let Some(member) = member {
+            builder.write_bytes(member);
+        }
         buffer
     }
 }

@@ -116,6 +116,7 @@ pub enum RedisCommandName {
     Zadd,
     Zcard,
     Zincrby,
+    Zrangebyscore,
     NotSupported(String),
 }
 
@@ -767,7 +768,7 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hgetall)
                         .read_only()
                         .with_arity(2)
-                        .no_transaction(),
+                        .no_transaction(), // uses iterator
                 ),
                 (
                     "hincrbyfloat",
@@ -810,7 +811,7 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Hscan)
                         .read_only()
                         .with_arity(-3)
-                        .no_transaction(),
+                        .no_transaction(), // uses iterator
                 ),
                 (
                     "hsetnx",
@@ -887,6 +888,13 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zincrby)
                         .write()
                         .with_arity(4),
+                ),
+                (
+                    "zrangebyscore",
+                    CommandMetadata::new(RedisCommandName::Zrangebyscore)
+                        .read_only()
+                        .with_arity(-4)
+                        .no_transaction(), // uses iterator
                 ),
             ]),
         }

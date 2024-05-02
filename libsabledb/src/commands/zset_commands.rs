@@ -1,22 +1,51 @@
 use crate::{
     check_args_count, command_arg_at,
     commands::{HandleCommandResult, Strings},
+    io::RespWriter,
+    metadata::ZSetKeyByScore,
     server::ClientState,
-    storage::{ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetScoreResult, ZSetLenResult},
+    storage::{
+        ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult,
+        ZSetLenResult,
+    },
     utils::RespBuilderV2,
+    writer_return_empty_array, writer_return_syntax_error, writer_return_value_not_int,
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
-
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
+//== ---------------------
+// Set specific macros
+//== ---------------------
+
+macro_rules! get_zset_metadata {
+    ($zset_db:expr, $key:expr,  $writer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $writer.error_string(Strings::WRONGTYPE).await?;
+                $writer.flush().await?;
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $writer.empty_array().await?;
+                $writer.flush().await?;
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
 pub struct ZSetCommands {}
+
 impl ZSetCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
@@ -28,6 +57,10 @@ impl ZSetCommands {
             }
             RedisCommandName::Zincrby => {
                 Self::zincrby(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zrangebyscore => {
+                Self::zrangebyscore(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -255,6 +288,186 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
+    /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
+    /// equal to min or max). The elements are considered to be ordered from low to high scores
+    async fn zrangebyscore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 4, tx);
+
+        let key = command_arg_at!(command, 1);
+        let min = command_arg_at!(command, 2);
+        let max = command_arg_at!(command, 3);
+
+        let mut writer = RespWriter::new(tx, 4096, client_state.clone());
+        let Some((start_score, include_start_score)) = Self::parse_score_index(min) else {
+            writer.error_string(Strings::ZERR_MIN_MAX_NOT_FLOAT).await?;
+            writer.flush().await?;
+            return Ok(());
+        };
+
+        let Some((end_score, include_end_score)) = Self::parse_score_index(max) else {
+            writer.error_string(Strings::ZERR_MIN_MAX_NOT_FLOAT).await?;
+            writer.flush().await?;
+            return Ok(());
+        };
+
+        // parse the remaining arguments
+        let mut iter = command.args_vec().iter();
+
+        // Skip mandatory arguments
+        iter.next(); // ZRANGEBYSCORE
+        iter.next(); // key
+        iter.next(); // min
+        iter.next(); // max
+
+        let mut with_scores = false;
+        let mut offset = 0u64;
+        let mut count = u64::MAX;
+        while let Some(arg) = iter.next() {
+            let arg_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            match arg_lowercase.as_str() {
+                "withscores" => {
+                    with_scores = true;
+                }
+                "limit" => {
+                    // The following 2 arguments should the offset and limit
+                    let (Some(start_index), Some(limit)) = (iter.next(), iter.next()) else {
+                        writer_return_syntax_error!(writer);
+                    };
+
+                    let Some(start_index) = BytesMutUtils::parse::<u64>(start_index) else {
+                        writer_return_value_not_int!(writer);
+                    };
+
+                    let Some(limit) = BytesMutUtils::parse::<i64>(limit) else {
+                        writer_return_value_not_int!(writer);
+                    };
+
+                    // Negative value means: all items
+                    count = match limit {
+                        0 => {
+                            writer_return_empty_array!(writer);
+                        }
+                        num if num < 0 => u64::MAX,
+                        _ => limit as u64,
+                    };
+                    offset = start_index;
+                }
+                _ => {
+                    writer_return_syntax_error!(writer);
+                }
+            }
+        }
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = get_zset_metadata!(zset_db, key, writer);
+
+        // empty set? empty array
+        if md.is_empty() {
+            writer_return_empty_array!(writer);
+        }
+
+        // Determine the starting score
+        let prefix = md.prefix_by_score(None);
+        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        if !db_iter.valid() {
+            // invalud iterator
+            writer_return_empty_array!(writer);
+        }
+
+        // Find the first item in the set the complies with the start condition
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                writer_return_empty_array!(writer);
+            };
+
+            if !key.starts_with(&prefix) {
+                writer_return_empty_array!(writer);
+            }
+
+            let set_item = ZSetKeyByScore::from_bytes(key)?;
+            if (include_start_score && set_item.score() >= start_score)
+                || (!include_start_score && set_item.score() > start_score)
+            {
+                let prefix = md.prefix_by_score(Some(set_item.score()));
+                // place the iterator on the range start
+                db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                break;
+            }
+            db_iter.next();
+        }
+
+        // Apply the LIMIT <OFFSET> <COUNT> condition
+        while offset > 0 && db_iter.valid() {
+            db_iter.next();
+            offset = offset.saturating_sub(1);
+        }
+
+        // Sanity checks
+        if offset != 0 || !db_iter.valid() {
+            writer_return_empty_array!(writer);
+        }
+
+        enum MatchValue {
+            Member(BytesMut),
+            Score(f64),
+        }
+
+        // All items must start with `zset_prefix` regardless of the user conditions
+        let zset_prefix = md.prefix_by_score(None);
+
+        let mut response = Vec::<MatchValue>::new();
+        while db_iter.valid() && count > 0 {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&zset_prefix) {
+                // reached the set limit
+                break;
+            }
+
+            let field = ZSetKeyByScore::from_bytes(key)?;
+
+            // Check end condition
+            if (include_end_score && field.score() > end_score)
+                || (!include_end_score && field.score() >= end_score)
+            {
+                break;
+            }
+
+            // Store the member + score
+            response.push(MatchValue::Member(BytesMut::from(field.member())));
+            if with_scores {
+                response.push(MatchValue::Score(field.score()));
+            }
+            db_iter.next();
+            count = count.saturating_sub(1);
+        }
+
+        if response.is_empty() {
+            writer_return_empty_array!(writer);
+        } else {
+            writer.add_array_len(response.len()).await?;
+            for v in response {
+                match v {
+                    MatchValue::Score(sc) => writer.add_number::<f64>(sc).await?,
+                    MatchValue::Member(member) => writer.add_bulk_string(&member).await?,
+                }
+            }
+            writer.flush().await?;
+        }
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -263,6 +476,34 @@ impl ZSetCommands {
             "-inf" => Some(f64::MIN),
             _ => BytesMutUtils::parse::<f64>(score),
         }
+    }
+
+    #[allow(dead_code)]
+    /// `index` can be `-inf` or `+inf`, denoting the negative and positive infinities, respectively.
+    /// This means that you are not required to know the highest or lowest score in the sorted set to get all elements
+    /// from or up to a certain score. By default, the score intervals specified by <start> and <stop> are closed
+    /// (inclusive). It is possible to specify an open interval (exclusive) by prefixing the score with the character `(`
+    ///
+    /// Returns
+    /// If parsed correctly, returns a tupple with the index value and whether or not it is included in the range
+    /// (`result.0 => score value`)
+    /// (`result.1 => inclusive?`)
+    fn parse_score_index(index: &BytesMut) -> Option<(f64, bool)> {
+        let exclude_index = index.starts_with(b"(");
+        let mod_index = if exclude_index {
+            &index[1..] // skip the `(` char
+        } else {
+            &index[..]
+        };
+
+        Self::parse_score(&BytesMut::from(mod_index)).map(|val| (val, !exclude_index))
+    }
+
+    #[allow(dead_code)]
+    /// Valid `indx` must start with `(` or `[`, in order to specify whether the range interval is exclusive
+    /// or inclusive, respectively.
+    fn parse_lex_range(_index: &BytesMut) -> Option<(f64, bool)> {
+        unimplemented!();
     }
 }
 
@@ -311,6 +552,28 @@ mod test {
         ("zincrby myset 1 value", "$4\r\n1.00\r\n"),
         ("zincrby myset 3.5 value", "$4\r\n4.50\r\n"),
     ]; "test_zincrby")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zrangebyscore mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd tanks 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        // everything without knowing their ranks
+        ("zrangebyscore tanks -inf +inf", "*6\r\n$3\r\ndva\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
+        ("zrangebyscore tanks -inf 1", "*2\r\n$3\r\ndva\r\n$4\r\nrein\r\n"),
+        ("zrangebyscore tanks -inf (1", "*0\r\n"),
+        ("zrangebyscore tanks 1 2", "*4\r\n$3\r\ndva\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n"),
+        ("zrangebyscore tanks 1 (2", "*2\r\n$3\r\ndva\r\n$4\r\nrein\r\n"),
+        ("zrangebyscore tanks (1 (1", "*0\r\n"),
+        ("zrangebyscore tanks (1 1", "*0\r\n"),
+        ("zrangebyscore tanks 10 1", "*0\r\n"),
+        ("zrangebyscore tanks 1 3", "*6\r\n$3\r\ndva\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
+        ("zrangebyscore tanks 1 3 WITHSCORES", "*12\r\n$3\r\ndva\r\n:1\r\n$4\r\nrein\r\n:1\r\n$5\r\norisa\r\n:2\r\n$5\r\nsigma\r\n:2\r\n$5\r\nmauga\r\n:3\r\n$3\r\nram\r\n:3\r\n"),
+        // exclude dva
+        ("zrangebyscore tanks 1 3 LIMIT 1 5", "*5\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
+        // only rein
+        ("zrangebyscore tanks 1 3 LIMIT 1 1", "*1\r\n$4\r\nrein\r\n"),
+        // all of score 1 but dva & rein (empty array)
+        ("zrangebyscore tanks 1 1 LIMIT 2 -1", "*0\r\n"),
+    ]; "test_zrangebyscore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

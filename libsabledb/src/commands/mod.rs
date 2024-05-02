@@ -153,6 +153,36 @@ macro_rules! test_assert {
     }};
 }
 
+// Macros for shortening code
+#[macro_export]
+macro_rules! writer_return_empty_array {
+    ($writer:expr) => {
+        $writer.empty_array().await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! writer_return_syntax_error {
+    ($writer:expr) => {
+        $writer.error_string(Strings::SYNTAX_ERROR).await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! writer_return_value_not_int {
+    ($writer:expr) => {
+        $writer
+            .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+            .await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
 bitflags::bitflags! {
 pub struct SetFlags: u32  {
     const None = 0;

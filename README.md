@@ -175,6 +175,7 @@ and visit this page again in couple of days
 | zadd | ✓ |✓ |   |
 | zcard | ✓ |✓ |   |
 | zincrby | ✓ |✓ |   |
+| zrangebyscore | ✓ |✓ |   |
 
 ### Generic commands
 
