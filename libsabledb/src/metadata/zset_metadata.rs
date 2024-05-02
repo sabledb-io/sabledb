@@ -111,7 +111,7 @@ impl ZSetValueMetadata {
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
-pub struct ZSetKeyByScore<'a> {
+pub struct ZSetScoreItem<'a> {
     kind: u8,
     zset_id: u64,
     score: f64,
@@ -119,13 +119,13 @@ pub struct ZSetKeyByScore<'a> {
 }
 
 #[allow(dead_code)]
-impl<'a> ZSetKeyByScore<'a> {
+impl<'a> ZSetScoreItem<'a> {
     // SIZE contain only the serialisable items
     pub const SIZE: usize =
         std::mem::size_of::<u8>() + std::mem::size_of::<u64>() + std::mem::size_of::<f64>();
 
     pub fn new(zset_id: u64, score: f64, member: &'a [u8]) -> Self {
-        ZSetKeyByScore {
+        ZSetScoreItem {
             kind: Encoding::KEY_ZSET_SCORE_ITEM,
             zset_id,
             score,
@@ -147,7 +147,7 @@ impl<'a> ZSetKeyByScore<'a> {
         let zset_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let score = reader.read_f64().ok_or(SableError::SerialisationError)?;
         let member = &buff[reader.consumed()..];
-        Ok(ZSetKeyByScore {
+        Ok(ZSetScoreItem {
             kind,
             zset_id,
             score,
@@ -174,20 +174,20 @@ impl<'a> ZSetKeyByScore<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-pub struct ZSetKeyByMember<'a> {
+pub struct ZSetMemberItem<'a> {
     kind: u8,
     zset_id: u64,
     member: &'a [u8],
 }
 
 #[allow(dead_code)]
-impl<'a> ZSetKeyByMember<'a> {
+impl<'a> ZSetMemberItem<'a> {
     // SIZE contain only the serialisable items
     pub const SIZE: usize =
         std::mem::size_of::<u8>() + std::mem::size_of::<u64>() + std::mem::size_of::<f64>();
 
     pub fn new(zset_id: u64, member: &'a [u8]) -> Self {
-        ZSetKeyByMember {
+        ZSetMemberItem {
             kind: Encoding::KEY_ZSET_MEMBER_ITEM,
             zset_id,
             member,
@@ -206,7 +206,7 @@ impl<'a> ZSetKeyByMember<'a> {
         let kind = reader.read_u8().ok_or(SableError::SerialisationError)?;
         let zset_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let member = &buff[reader.consumed()..];
-        Ok(ZSetKeyByMember {
+        Ok(ZSetMemberItem {
             kind,
             zset_id,
             member,
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     pub fn test_zset_key_by_member_serialization() -> Result<(), SableError> {
         let field_key = BytesMut::from("field_key");
-        let zset_item = ZSetKeyByMember::new(42, &field_key);
+        let zset_item = ZSetMemberItem::new(42, &field_key);
         let kk = BytesMut::from(zset_item.member);
         assert_eq!(kk, BytesMut::from("field_key"),);
         assert_eq!(zset_item.zset_id(), 42);
@@ -250,7 +250,7 @@ mod tests {
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         zset_item.to_bytes(&mut reader);
 
-        let deserialised = ZSetKeyByMember::from_bytes(&buffer).unwrap();
+        let deserialised = ZSetMemberItem::from_bytes(&buffer).unwrap();
         assert_eq!(deserialised, zset_item);
         Ok(())
     }
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     pub fn test_zset_key_by_score_serialization() -> Result<(), SableError> {
         let field_key = BytesMut::from("field_key");
-        let zset_item = ZSetKeyByScore::new(42, 0.75, &field_key);
+        let zset_item = ZSetScoreItem::new(42, 0.75, &field_key);
         let kk = BytesMut::from(zset_item.member);
         assert_eq!(kk, BytesMut::from("field_key"),);
         assert_eq!(zset_item.zset_id(), 42);
@@ -269,7 +269,7 @@ mod tests {
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         zset_item.to_bytes(&mut reader);
 
-        let deserialised = ZSetKeyByScore::from_bytes(&buffer).unwrap();
+        let deserialised = ZSetScoreItem::from_bytes(&buffer).unwrap();
         assert_eq!(deserialised, zset_item);
         Ok(())
     }

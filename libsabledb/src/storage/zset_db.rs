@@ -1,6 +1,6 @@
 /// A database accessor that does not really care about the value
 use crate::{
-    metadata::{ZSetKeyByMember, ZSetKeyByScore, ZSetValueMetadata},
+    metadata::{ZSetMemberItem, ZSetScoreItem, ZSetValueMetadata},
     storage::DbWriteCache,
     CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
@@ -213,6 +213,20 @@ impl<'a> ZSetDb<'a> {
         }
     }
 
+    /// Decode the score from `score_as_bytes`
+    pub fn score_from_bytes(&self, score_as_bytes: &[u8]) -> Result<f64, SableError> {
+        let mut reader = U8ArrayReader::with_buffer(score_as_bytes);
+        reader.read_f64().ok_or(SableError::SerialisationError)
+    }
+
+    /// Encode `f64` (AKA score) into `BytesMut`
+    pub fn encode_score(&self, score: f64) -> BytesMut {
+        let mut buffer = BytesMut::with_capacity(std::mem::size_of::<f64>());
+        let mut writer = U8ArrayBuilder::with_buffer(&mut buffer);
+        writer.write_f64(score);
+        buffer
+    }
+
     //=== ----------------------------
     // Private methods
     //=== ----------------------------
@@ -304,10 +318,7 @@ impl<'a> ZSetDb<'a> {
             }
         };
 
-        let mut score_as_bytes = BytesMut::new();
-        let mut writer = U8ArrayBuilder::with_buffer(&mut score_as_bytes);
-        writer.write_f64(score);
-
+        let score_as_bytes = self.encode_score(score);
         self.cache.put(&key_by_member, score_as_bytes)?;
         self.cache.put(&key_by_score, BytesMut::new())?;
         Ok(result)
@@ -348,7 +359,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     fn encode_key_by_score(&self, set_id: u64, score: f64, member: &[u8]) -> BytesMut {
-        let key_by_score = ZSetKeyByScore::new(set_id, score, member);
+        let key_by_score = ZSetScoreItem::new(set_id, score, member);
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         key_by_score.to_bytes(&mut reader);
@@ -356,7 +367,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     fn encode_key_by_memebr(&self, set_id: u64, member: &[u8]) -> BytesMut {
-        let key_by_member = ZSetKeyByMember::new(set_id, member);
+        let key_by_member = ZSetMemberItem::new(set_id, member);
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         key_by_member.to_bytes(&mut reader);

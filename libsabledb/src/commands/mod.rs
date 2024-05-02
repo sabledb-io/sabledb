@@ -36,6 +36,30 @@ macro_rules! check_args_count {
 }
 
 #[macro_export]
+macro_rules! writer_return_wrong_args_count {
+    ($writer:expr, $cmd_name:expr) => {
+        $writer
+            .error_string(
+                format!("ERR wrong number of arguments for '{}' command", $cmd_name).as_str(),
+            )
+            .await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_wrong_args_count {
+    ($builder:expr, $response_buffer:expr, $cmd_name:expr) => {
+        $builder.error_string(
+            $response_buffer,
+            format!("ERR wrong number of arguments for '{}' command", $cmd_name).as_str(),
+        );
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! check_args_count_tx {
     ($cmd:expr, $expected_args_count:expr, $tx:expr) => {{
         let builder = RespBuilderV2::default();
@@ -206,6 +230,14 @@ macro_rules! builder_return_empty_array {
 macro_rules! builder_return_syntax_error {
     ($builder:expr, $response_buffer:expr) => {
         $builder.error_string($response_buffer, Strings::SYNTAX_ERROR);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_wrong_type {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::WRONGTYPE);
         return Ok(());
     };
 }

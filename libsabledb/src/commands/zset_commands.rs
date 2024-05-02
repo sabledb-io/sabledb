@@ -1,7 +1,7 @@
 use crate::{
     commands::{HandleCommandResult, Strings},
     io::RespWriter,
-    metadata::ZSetKeyByScore,
+    metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
         ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult,
@@ -11,8 +11,23 @@ use crate::{
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
 use bytes::BytesMut;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
+
+#[derive(PartialEq, Debug)]
+enum IterateResult {
+    Ok,
+    WrongType,
+    NotFound,
+}
+
+#[derive(PartialEq, Debug)]
+enum IterateCallbackResult {
+    Continue,
+    Break,
+}
 
 pub struct ZSetCommands {}
 
@@ -35,6 +50,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zcount => {
                 Self::zcount(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zdiff => {
+                Self::zdiff(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -319,7 +337,7 @@ impl ZSetCommands {
                 builder_return_number!(builder, response_buffer, 0);
             }
 
-            let set_item = ZSetKeyByScore::from_bytes(key)?;
+            let set_item = ZSetScoreItem::from_bytes(key)?;
             if (include_start_score && set_item.score() >= start_score)
                 || (!include_start_score && set_item.score() > start_score)
             {
@@ -346,7 +364,7 @@ impl ZSetCommands {
                 break;
             }
 
-            let field = ZSetKeyByScore::from_bytes(key)?;
+            let field = ZSetScoreItem::from_bytes(key)?;
 
             // Check end condition
             if (include_end_score && field.score() > end_score)
@@ -361,6 +379,93 @@ impl ZSetCommands {
         }
 
         builder_return_number!(builder, response_buffer, matched_entries);
+    }
+
+    /// `ZDIFF numkeys key [key ...]`
+    /// Computes the difference between the first and all successive input sorted sets
+    async fn zdiff(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let numkeys = command_arg_at!(command, 1);
+        let builder = RespBuilderV2::default();
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // Now that we have the number of keys, make sure that we have all the keys we need
+        if numkeys.saturating_add(2) != command.arg_count() {
+            builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+        }
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // zdiff
+        iter.next(); // numkeys
+        let user_keys: Vec<&BytesMut> = iter.collect();
+        if user_keys.len() == 1 {
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
+        let mut iter = user_keys.iter();
+        let Some(main_key) = iter.next() else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
+
+        // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
+        let result_set = Rc::new(RefCell::new(BTreeSet::<BytesMut>::new()));
+
+        // collect the main set members
+        let main_items_clone = result_set.clone();
+        let iter_result = Self::iterate_by_member_and_apply(
+            client_state.clone(),
+            main_key,
+            move |member, _score| {
+                main_items_clone.borrow_mut().insert(BytesMut::from(member));
+                Ok(IterateCallbackResult::Continue)
+            },
+        )?;
+
+        if iter_result == IterateResult::WrongType {
+            builder_return_wrong_type!(builder, response_buffer);
+        }
+
+        // loop over the other sets, removing duplicate items from the main set
+        for set_name in iter {
+            if result_set.borrow().is_empty() {
+                // No need to continue
+                break;
+            }
+            let main_items_clone = result_set.clone();
+            let iter_result = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                set_name,
+                move |member, _score| {
+                    if main_items_clone.borrow().contains(member) {
+                        // remove `member` from the result
+                        main_items_clone.borrow_mut().remove(member);
+                        if main_items_clone.borrow().is_empty() {
+                            return Ok(IterateCallbackResult::Break);
+                        }
+                    }
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            if iter_result == IterateResult::WrongType {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        }
+
+        builder.add_array_len(response_buffer, result_set.borrow().len());
+        for key in result_set.borrow().iter() {
+            builder.add_bulk_string(response_buffer, key);
+        }
+        Ok(())
     }
 
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
@@ -467,7 +572,7 @@ impl ZSetCommands {
                 writer_return_empty_array!(writer);
             }
 
-            let set_item = ZSetKeyByScore::from_bytes(key)?;
+            let set_item = ZSetScoreItem::from_bytes(key)?;
             if (include_start_score && set_item.score() >= start_score)
                 || (!include_start_score && set_item.score() > start_score)
             {
@@ -510,7 +615,7 @@ impl ZSetCommands {
                 break;
             }
 
-            let field = ZSetKeyByScore::from_bytes(key)?;
+            let field = ZSetScoreItem::from_bytes(key)?;
 
             // Check end condition
             if (include_end_score && field.score() > end_score)
@@ -578,6 +683,43 @@ impl ZSetCommands {
     /// or inclusive, respectively.
     fn parse_lex_range(_index: &BytesMut) -> Option<(f64, bool)> {
         unimplemented!();
+    }
+
+    /// Iterate over all items of `set_name` and apply callback on them
+    fn iterate_by_member_and_apply<F>(
+        client_state: Rc<ClientState>,
+        set_name: &BytesMut,
+        mut callback: F,
+    ) -> Result<IterateResult, SableError>
+    where
+        F: FnMut(&[u8], f64) -> Result<IterateCallbackResult, SableError>,
+    {
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let md = match zset_db.get_metadata(set_name)? {
+            ZSetGetMetadataResult::WrongType => return Ok(IterateResult::WrongType),
+            ZSetGetMetadataResult::NotFound => return Ok(IterateResult::NotFound),
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+
+        let prefix = md.prefix_by_member(None);
+        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        while db_iter.valid() {
+            let Some((key, value)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            let item = ZSetMemberItem::from_bytes(key)?;
+            match callback(item.member(), zset_db.score_from_bytes(value)?)? {
+                IterateCallbackResult::Continue => {}
+                IterateCallbackResult::Break => break,
+            }
+            db_iter.next();
+        }
+        Ok(IterateResult::Ok)
     }
 }
 
@@ -661,6 +803,17 @@ mod test {
         ("zcount tanks (1 3", ":4\r\n"),
         ("zcount tanks 10 8", ":0\r\n"),
     ]; "test_zcount")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zadd tanks_1 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("zadd tanks_2 1 rein 1 roadhog 1 doomfist 5 mei", ":4\r\n"),
+        ("zadd tanks_3 2 orisa 3 ram", ":2\r\n"),
+        ("zdiff 2 tanks_1 mystr", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zdiff 2 mystr tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zdiff 2 tanks_1 tanks_2", "*5\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\norisa\r\n$3\r\nram\r\n$5\r\nsigma\r\n"),
+        ("zdiff 2 tanks_2 tanks_1", "*3\r\n$8\r\ndoomfist\r\n$3\r\nmei\r\n$7\r\nroadhog\r\n"),
+        ("zdiff 3 tanks_1 tanks_2 tanks_3", "*3\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n"),
+    ]; "test_zdiff")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
