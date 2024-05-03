@@ -12,7 +12,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -396,14 +396,26 @@ impl ZSetCommands {
             builder_return_value_not_int!(builder, response_buffer);
         };
 
+        let with_scores = matches!(command.args_vec().last(), Some(value) if value.to_ascii_uppercase().eq(b"WITHSCORES"));
+
+        // The keys are located starting from position [2..] of the command vector,
+        // however if the last token in the vector is "WITHVALUES" it will be [2..len - 1]
+        let keys_vec = if with_scores {
+            let keys_vec = &command.args_vec()[2usize..];
+            let Some((_last, keys_vec)) = keys_vec.split_last() else {
+                builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+            };
+            keys_vec
+        } else {
+            &command.args_vec()[2usize..]
+        };
+
         // Now that we have the number of keys, make sure that we have all the keys we need
-        if numkeys.saturating_add(2) != command.arg_count() {
+        if numkeys != keys_vec.len() {
             builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
         }
 
-        let mut iter = command.args_vec().iter();
-        iter.next(); // zdiff
-        iter.next(); // numkeys
+        let iter = keys_vec.iter();
         let user_keys: Vec<&BytesMut> = iter.collect();
         if user_keys.len() == 1 {
             builder_return_empty_array!(builder, response_buffer);
@@ -417,15 +429,17 @@ impl ZSetCommands {
         };
 
         // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
-        let result_set = Rc::new(RefCell::new(BTreeSet::<BytesMut>::new()));
+        let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
 
         // collect the main set members
         let main_items_clone = result_set.clone();
         let iter_result = Self::iterate_by_member_and_apply(
             client_state.clone(),
             main_key,
-            move |member, _score| {
-                main_items_clone.borrow_mut().insert(BytesMut::from(member));
+            move |member, score| {
+                main_items_clone
+                    .borrow_mut()
+                    .insert(BytesMut::from(member), score);
                 Ok(IterateCallbackResult::Continue)
             },
         )?;
@@ -445,7 +459,7 @@ impl ZSetCommands {
                 client_state.clone(),
                 set_name,
                 move |member, _score| {
-                    if main_items_clone.borrow().contains(member) {
+                    if main_items_clone.borrow().contains_key(member) {
                         // remove `member` from the result
                         main_items_clone.borrow_mut().remove(member);
                         if main_items_clone.borrow().is_empty() {
@@ -461,9 +475,20 @@ impl ZSetCommands {
             }
         }
 
-        builder.add_array_len(response_buffer, result_set.borrow().len());
-        for key in result_set.borrow().iter() {
+        let array_len = result_set.borrow().len();
+        builder.add_array_len(
+            response_buffer,
+            if with_scores {
+                array_len.saturating_mul(2)
+            } else {
+                array_len
+            },
+        );
+        for (key, score) in result_set.borrow().iter() {
             builder.add_bulk_string(response_buffer, key);
+            if with_scores {
+                builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
+            }
         }
         Ok(())
     }
@@ -639,7 +664,11 @@ impl ZSetCommands {
             writer.add_array_len(response.len()).await?;
             for v in response {
                 match v {
-                    MatchValue::Score(sc) => writer.add_number::<f64>(sc).await?,
+                    MatchValue::Score(score) => {
+                        writer
+                            .add_bulk_string(format!("{score:.2}").as_bytes())
+                            .await?
+                    }
                     MatchValue::Member(member) => writer.add_bulk_string(&member).await?,
                 }
             }
@@ -782,7 +811,7 @@ mod test {
         ("zrangebyscore tanks (1 1", "*0\r\n"),
         ("zrangebyscore tanks 10 1", "*0\r\n"),
         ("zrangebyscore tanks 1 3", "*6\r\n$3\r\ndva\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
-        ("zrangebyscore tanks 1 3 WITHSCORES", "*12\r\n$3\r\ndva\r\n:1\r\n$4\r\nrein\r\n:1\r\n$5\r\norisa\r\n:2\r\n$5\r\nsigma\r\n:2\r\n$5\r\nmauga\r\n:3\r\n$3\r\nram\r\n:3\r\n"),
+        ("zrangebyscore tanks 1 3 WITHSCORES", "*12\r\n$3\r\ndva\r\n$4\r\n1.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$3\r\nram\r\n$4\r\n3.00\r\n"),
         // exclude dva
         ("zrangebyscore tanks 1 3 LIMIT 1 5", "*5\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
         // only rein
@@ -813,6 +842,7 @@ mod test {
         ("zdiff 2 tanks_1 tanks_2", "*5\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\norisa\r\n$3\r\nram\r\n$5\r\nsigma\r\n"),
         ("zdiff 2 tanks_2 tanks_1", "*3\r\n$8\r\ndoomfist\r\n$3\r\nmei\r\n$7\r\nroadhog\r\n"),
         ("zdiff 3 tanks_1 tanks_2 tanks_3", "*3\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n"),
+        ("zdiff 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*6\r\n$3\r\ndva\r\n$4\r\n1.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n"),
     ]; "test_zdiff")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
