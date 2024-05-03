@@ -1,5 +1,5 @@
 use crate::{
-    metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
+    metadata::{CommonValueMetadata, Expiration},
     SableError, U8ArrayBuilder, U8ArrayReader,
 };
 
@@ -37,11 +37,9 @@ impl StringValueMetadata {
     pub fn expiration_mut(&mut self) -> &mut Expiration {
         self.common.expiration_mut()
     }
-}
 
-impl ValueTypeIs for StringValueMetadata {
-    fn is_type(&self, type_bit: u8) -> bool {
-        self.common.value_type() == type_bit
+    pub fn common_metadata(&self) -> &CommonValueMetadata {
+        &self.common
     }
 }
 

@@ -59,6 +59,20 @@ impl<'a> GenericDb<'a> {
         self.store.contains(&internal_key)
     }
 
+    /// Each complex data type (List, Hash, Set, ZSet) are encoded with a unique ID
+    /// in a fixed position within the value. This function returns this ID.
+    pub fn get_complex_type_uid(&self, user_key: &BytesMut) -> Result<Option<u64>, SableError> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        if !self.store.contains(&internal_key)? {
+            return Ok(None);
+        }
+
+        let Some((_, common_md)) = self.get_internal(user_key)? else {
+            return Ok(None);
+        };
+        Ok(Some(common_md.uid()))
+    }
+
     /// Return the expiration properties of a `user_key`
     pub fn get_expiration(&self, user_key: &BytesMut) -> Result<Option<Expiration>, SableError> {
         let Some((_, common_md)) = self.get_internal(user_key)? else {
@@ -134,7 +148,11 @@ impl<'a> GenericDb<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{metadata::Encoding, storage::StringsDb, StorageOpenParams, StringValueMetadata};
+    use crate::{
+        metadata::ValueType,
+        storage::{StringGetResult, StringsDb},
+        StorageOpenParams, StringValueMetadata,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -179,7 +197,7 @@ mod tests {
             let max_bound: u64 = i * 10;
             let lower_bound: u64 = max_bound - 1;
             // check that we were able to read the common metadata properly
-            assert_eq!(md.value_type(), Encoding::VALUE_STRING);
+            assert_eq!(md.value_type(), ValueType::Str);
             assert!(md.expiration().ttl_in_seconds()? <= max_bound);
             assert!(md.expiration().ttl_in_seconds()? >= lower_bound);
 
@@ -195,7 +213,9 @@ mod tests {
             let key = BytesMut::from(key.as_bytes());
             let expected_value = BytesMut::from(expected_value.as_bytes());
 
-            let (value, md) = strings_db.get(&key)?.unwrap();
+            let StringGetResult::Some((value, md)) = strings_db.get(&key)? else {
+                panic!("failed to get value");
+            };
             let max_bound: u64 = i * 10;
             let lower_bound: u64 = max_bound - 1;
 
@@ -233,7 +253,9 @@ mod tests {
         assert_eq!(updated_expiration, expiration);
 
         // confirm that updating the expiration, does not affect the value
-        let (db_value, _) = strings_db.get(&key)?.unwrap();
+        let StringGetResult::Some((db_value, _)) = strings_db.get(&key)? else {
+            panic!("failed to get value");
+        };
         assert_eq!(db_value, value);
         Ok(())
     }

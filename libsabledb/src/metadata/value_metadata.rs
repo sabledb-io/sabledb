@@ -1,40 +1,41 @@
-use crate::{metadata::Encoding, Expiration, SableError, U8ArrayBuilder, U8ArrayReader};
+use crate::{
+    metadata::encoding::{FromRaw, ValueType},
+    Expiration, SableError, U8ArrayBuilder, U8ArrayReader,
+};
 
 /// Contains information regarding the String type metadata
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CommonValueMetadata {
-    value_encoding: u8,
+    // u8
+    value_encoding: ValueType,
+    /// The type UID (for strings, this is always 0)
+    unique_id: u64,
     /// Value ttl information
     expiration: Expiration,
 }
 
-impl Default for CommonValueMetadata {
-    fn default() -> Self {
-        CommonValueMetadata {
-            value_encoding: Encoding::VALUE_STRING,
-            expiration: Expiration::default(),
-        }
-    }
-}
-
 #[allow(dead_code)]
 impl CommonValueMetadata {
-    pub const SIZE: usize = std::mem::size_of::<u8>() + Expiration::SIZE;
+    pub const SIZE: usize =
+        std::mem::size_of::<ValueType>() + std::mem::size_of::<u64>() + Expiration::SIZE;
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.value_encoding);
+        builder.write_u8(self.value_encoding as u8);
+        builder.write_u64(self.unique_id);
         self.expiration.to_bytes(builder);
     }
 
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
-        let Some(value_type) = reader.read_u8() else {
-            return Err(SableError::SerialisationError);
-        };
+        let value_type = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        let unique_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
 
         let expiration = Expiration::from_bytes(reader)?;
+        let value_encoding =
+            ValueType::from_u8(value_type).ok_or(SableError::SerialisationError)?;
         Ok(CommonValueMetadata {
-            value_encoding: value_type,
+            value_encoding,
+            unique_id,
             expiration,
         })
     }
@@ -48,49 +49,57 @@ impl CommonValueMetadata {
     }
 
     pub fn is_string(&self) -> bool {
-        self.value_encoding == Encoding::VALUE_STRING
+        self.value_encoding == ValueType::Str
     }
 
     pub fn is_list(&self) -> bool {
-        self.value_encoding == Encoding::VALUE_LIST
+        self.value_encoding == ValueType::List
     }
 
     pub fn is_hash(&self) -> bool {
-        self.value_encoding == Encoding::VALUE_HASH
+        self.value_encoding == ValueType::Hash
     }
 
     pub fn is_zset(&self) -> bool {
-        self.value_encoding == Encoding::VALUE_ZSET
+        self.value_encoding == ValueType::Zset
     }
 
-    pub fn value_type(&self) -> u8 {
+    pub fn value_type(&self) -> ValueType {
         self.value_encoding
     }
 
     pub fn set_string(mut self) -> Self {
-        self.value_encoding = Encoding::VALUE_STRING;
+        self.value_encoding = ValueType::Str;
         self
     }
 
     pub fn set_list(mut self) -> Self {
-        self.value_encoding = Encoding::VALUE_LIST;
+        self.value_encoding = ValueType::List;
         self
     }
 
     pub fn set_hash(mut self) -> Self {
-        self.value_encoding = Encoding::VALUE_HASH;
+        self.value_encoding = ValueType::Hash;
         self
     }
 
     pub fn set_zset(mut self) -> Self {
-        self.value_encoding = Encoding::VALUE_ZSET;
+        self.value_encoding = ValueType::Zset;
         self
     }
-}
 
-pub trait ValueTypeIs {
-    /// Return true if this instance type equals the `type_bit`
-    fn is_type(&self, type_bit: u8) -> bool;
+    pub fn with_uid(mut self, id: u64) -> Self {
+        self.unique_id = id;
+        self
+    }
+
+    pub fn set_uid(&mut self, id: u64) {
+        self.unique_id = id;
+    }
+
+    pub fn uid(&self) -> u64 {
+        self.unique_id
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -111,7 +120,7 @@ mod test {
         let mut arr = bytes::BytesMut::with_capacity(CommonValueMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut arr);
         md.expiration_mut().set_ttl_millis(30)?;
-
+        md.set_uid(1234);
         md.to_bytes(&mut builder);
         assert_eq!(arr.len(), CommonValueMetadata::SIZE);
 
@@ -136,6 +145,7 @@ mod test {
             TimeUtils::epoch_ms()?,
             deserialized_md,
         );
+        assert_eq!(deserialized_md.uid(), 1234);
         assert!(deserialized_md.expiration().is_expired()? == false);
         assert_eq!(&arr[..], &[5, 5]);
         Ok(())

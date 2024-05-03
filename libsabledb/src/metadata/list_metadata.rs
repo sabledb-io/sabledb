@@ -1,5 +1,5 @@
 use crate::{
-    metadata::{CommonValueMetadata, Expiration, ValueTypeIs},
+    metadata::{CommonValueMetadata, Expiration},
     SableError, U8ArrayBuilder, U8ArrayReader,
 };
 
@@ -11,20 +11,18 @@ pub struct ListValueMetadata {
     head_id: u64,
     tail_id: u64,
     list_size: u64,
-    list_id: u64,
 }
 
 #[allow(dead_code)]
 impl ListValueMetadata {
-    pub const SIZE: usize = 4 * std::mem::size_of::<u64>() + CommonValueMetadata::SIZE;
+    pub const SIZE: usize = 3 * std::mem::size_of::<u64>() + CommonValueMetadata::SIZE;
 
     pub fn new() -> Self {
         ListValueMetadata {
-            common: CommonValueMetadata::default().set_list(),
+            common: CommonValueMetadata::default().set_list().with_uid(0),
             head_id: 0,
             tail_id: 0,
             list_size: 0,
-            list_id: 0,
         }
     }
 
@@ -34,30 +32,19 @@ impl ListValueMetadata {
         builder.write_u64(self.head_id);
         builder.write_u64(self.tail_id);
         builder.write_u64(self.list_size);
-        builder.write_u64(self.list_id);
     }
 
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
         let common = CommonValueMetadata::from_bytes(reader)?;
 
-        let Some(head_id) = reader.read_u64() else {
-            return Err(SableError::SerialisationError);
-        };
-        let Some(tail_id) = reader.read_u64() else {
-            return Err(SableError::SerialisationError);
-        };
-        let Some(list_size) = reader.read_u64() else {
-            return Err(SableError::SerialisationError);
-        };
-        let Some(list_id) = reader.read_u64() else {
-            return Err(SableError::SerialisationError);
-        };
+        let head_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        let tail_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
+        let list_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
         Ok(ListValueMetadata {
             common,
             head_id,
             tail_id,
             list_size,
-            list_id,
         })
     }
 
@@ -78,11 +65,11 @@ impl ListValueMetadata {
     }
 
     pub fn id(&self) -> u64 {
-        self.list_id
+        self.common.uid()
     }
 
     pub fn set_id(&mut self, list_id: u64) {
-        self.list_id = list_id;
+        self.common.set_uid(list_id);
     }
 
     pub fn set_head(&mut self, item_id: u64) {
@@ -109,12 +96,6 @@ impl ListValueMetadata {
 impl Default for ListValueMetadata {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ValueTypeIs for ListValueMetadata {
-    fn is_type(&self, type_bit: u8) -> bool {
-        self.common.value_type() == type_bit
     }
 }
 

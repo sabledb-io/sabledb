@@ -118,6 +118,7 @@ pub enum RedisCommandName {
     Zincrby,
     Zcount,
     Zdiff,
+    Zdiffstore,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -909,6 +910,15 @@ impl Default for CommandsManager {
                         .with_first_key(0)
                         .with_last_key(0)
                         .with_step(0),
+                ),
+                (
+                    "zdiffstore",
+                    CommandMetadata::new(RedisCommandName::Zdiffstore)
+                        .write()
+                        .with_arity(-4)
+                        .with_first_key(1)
+                        .with_last_key(1)
+                        .with_step(1),
                 ),
             ]),
         }

@@ -4,8 +4,8 @@ use crate::{
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
-        ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult,
-        ZSetLenResult,
+        GenericDb, ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult,
+        ZSetGetScoreResult, ZSetLenResult,
     },
     utils::RespBuilderV2,
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
@@ -53,6 +53,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zdiff => {
                 Self::zdiff(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zdiffstore => {
+                Self::zdiffstore(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -493,6 +496,107 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZDIFFSTORE destination numkeys key [key ...]`
+    /// Computes the difference between the first and all successive input sorted sets and stores the result in
+    /// destination. The total number of input keys is specified by numkeys
+    async fn zdiffstore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let destination = command_arg_at!(command, 1);
+        let numkeys = command_arg_at!(command, 2);
+        let builder = RespBuilderV2::default();
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // The keys are located starting from position [3..] of the command vector,
+        // however if the last token in the vector is "WITHVALUES" it will be [2..len - 1]
+        let keys_vec = &command.args_vec()[3usize..];
+
+        // Now that we have the number of keys, make sure that we have all the keys we need
+        if numkeys != keys_vec.len() {
+            builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+        }
+
+        let iter = keys_vec.iter();
+        let user_keys: Vec<&BytesMut> = iter.collect();
+        if user_keys.len() == 1 {
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
+        let mut iter = user_keys.iter();
+        let Some(main_key) = iter.next() else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
+
+        // Check if this key already exists
+        let generic_db =
+            GenericDb::with_storage(client_state.database(), client_state.database_id());
+
+        // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
+        let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
+
+        // collect the main set members
+        let main_items_clone = result_set.clone();
+        let iter_result = Self::iterate_by_member_and_apply(
+            client_state.clone(),
+            main_key,
+            move |member, score| {
+                main_items_clone
+                    .borrow_mut()
+                    .insert(BytesMut::from(member), score);
+                Ok(IterateCallbackResult::Continue)
+            },
+        )?;
+
+        if iter_result == IterateResult::WrongType {
+            builder_return_wrong_type!(builder, response_buffer);
+        }
+
+        // loop over the other sets, removing duplicate items from the main set
+        for set_name in iter {
+            if result_set.borrow().is_empty() {
+                // No need to continue
+                break;
+            }
+            let main_items_clone = result_set.clone();
+            let iter_result = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                set_name,
+                move |member, _score| {
+                    if main_items_clone.borrow().contains_key(member) {
+                        // remove `member` from the result
+                        main_items_clone.borrow_mut().remove(member);
+                        if main_items_clone.borrow().is_empty() {
+                            return Ok(IterateCallbackResult::Break);
+                        }
+                    }
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            if iter_result == IterateResult::WrongType {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        }
+
+        // Zdiffstore overrides
+        generic_db.delete(destination)?;
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        for (key, score) in result_set.borrow().iter() {
+            zset_db.add(destination, key, *score, &ZAddFlags::None)?;
+        }
+        zset_db.commit()?;
+        builder.number_usize(response_buffer, result_set.borrow().len());
+        Ok(())
+    }
+
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
     /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
     /// equal to min or max). The elements are considered to be ordered from low to high scores
@@ -844,6 +948,18 @@ mod test {
         ("zdiff 3 tanks_1 tanks_2 tanks_3", "*3\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n"),
         ("zdiff 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*6\r\n$3\r\ndva\r\n$4\r\n1.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n"),
     ]; "test_zdiff")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zadd tanks_1 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("zadd tanks_2 1 rein 1 roadhog 1 doomfist 5 mei", ":4\r\n"),
+        ("zadd tanks_3 2 orisa 3 ram", ":2\r\n"),
+        ("zdiffstore diff_2_1 2 tanks_2 tanks_1", ":3\r\n"),
+        ("zcard diff_2_1", ":3\r\n"),
+        // to get the content, we just diff it against a non existing set
+        ("zdiff 2 diff_2_1 no_such_zset", "*3\r\n$8\r\ndoomfist\r\n$3\r\nmei\r\n$7\r\nroadhog\r\n"),
+        ("zdiffstore diff_3_none 2 tanks_3 no_such_zset", ":2\r\n"),
+        ("zdiff 2 diff_3_none no_such_zset", "*2\r\n$5\r\norisa\r\n$3\r\nram\r\n"),
+    ]; "test_zdiffstore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

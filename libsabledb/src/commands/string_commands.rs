@@ -1,10 +1,13 @@
-use crate::{commands::BaseCommands, metadata::Encoding, server::ClientState, storage::StringsDb};
+use crate::{
+    commands::BaseCommands,
+    server::ClientState,
+    storage::{StringGetResult, StringsDb},
+};
 
 use crate::{
-    check_args_count, check_value_type, command_arg_at, command_arg_at_as_str,
+    check_args_count, command_arg_at, command_arg_at_as_str,
     commands::SetFlags,
     commands::{HandleCommandResult, Strings},
-    metadata::ValueTypeIs,
     parse_string_to_number,
     storage::PutFlags,
     to_number, to_number_ex, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
@@ -181,18 +184,21 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
-        if let Some((mut value, md)) = strings_db.get(key)? {
-            // doing append
-            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
-
-            value.extend_from_slice(str_to_append);
-            strings_db.put(key, &value, &md, PutFlags::Override)?;
-            builder.number_usize(response_buffer, value.len());
-        } else {
-            // new value
-            let metadata = StringValueMetadata::new();
-            strings_db.put(key, str_to_append, &metadata, PutFlags::Override)?;
-            builder.number_usize(response_buffer, str_to_append.len());
+        match strings_db.get(key)? {
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            StringGetResult::None => {
+                // new value
+                let metadata = StringValueMetadata::new();
+                strings_db.put(key, str_to_append, &metadata, PutFlags::Override)?;
+                builder.number_usize(response_buffer, str_to_append.len());
+            }
+            StringGetResult::Some((mut value, md)) => {
+                value.extend_from_slice(str_to_append);
+                strings_db.put(key, &value, &md, PutFlags::Override)?;
+                builder.number_usize(response_buffer, value.len());
+            }
         }
         Ok(())
     }
@@ -215,12 +221,14 @@ impl StringCommands {
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         match strings_db.get(key)? {
-            Some((value, metadata)) => {
-                check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            StringGetResult::Some((value, _)) => {
                 Telemetry::inc_db_hit();
                 builder.bulk_string(response_buffer, &value);
             }
-            None => {
+            StringGetResult::None => {
                 Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
             }
@@ -243,14 +251,19 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
-        if let Some((old_value, metadata)) = strings_db.get(key)? {
-            check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
-            builder.bulk_string(response_buffer, &old_value);
+        match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => {
+                builder.bulk_string(response_buffer, &old_value);
 
-            // delete the old value
-            strings_db.delete(key)?;
-        } else {
-            builder.null_string(response_buffer);
+                // delete the old value
+                strings_db.delete(key)?;
+            }
+            StringGetResult::None => {
+                builder.null_string(response_buffer);
+            }
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         }
         Ok(())
     }
@@ -272,13 +285,17 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
-        if let Some((old_value, metadata)) = strings_db.get(key)? {
-            check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
-            builder.bulk_string(response_buffer, &old_value);
-        } else {
-            builder.null_string(response_buffer);
+        match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => {
+                builder.bulk_string(response_buffer, &old_value);
+            }
+            StringGetResult::None => {
+                builder.null_string(response_buffer);
+            }
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         }
-
         strings_db.put(
             key,
             new_value,
@@ -304,10 +321,7 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
-            Some((value, mut metadata)) => {
-                // ensure the key is of type string
-                check_value_type!(metadata, Encoding::VALUE_STRING, response_buffer);
-
+            StringGetResult::Some((value, mut metadata)) => {
                 Telemetry::inc_db_hit();
                 builder.bulk_string(response_buffer, &value);
 
@@ -350,9 +364,12 @@ impl StringCommands {
                     (_, _) => {}
                 }
             }
-            None => {
+            StringGetResult::None => {
                 Telemetry::inc_db_miss();
                 builder.null_string(response_buffer);
+            }
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
             }
         }
         Ok(())
@@ -377,7 +394,7 @@ impl StringCommands {
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         let result = strings_db.get(key)?;
         match result {
-            Some((value, _)) => {
+            StringGetResult::Some((value, _)) => {
                 let start = command_arg_at!(command, 2);
                 let end = command_arg_at!(command, 3);
                 let start_index = to_number!(start, i64, response_buffer, Ok(()));
@@ -395,11 +412,13 @@ impl StringCommands {
                     }
                 }
             }
-            None => {
+            StringGetResult::None => {
                 builder.empty_string(response_buffer);
             }
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         }
-
         Ok(())
     }
 
@@ -419,23 +438,25 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
-        let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
-            Self::incr_by_internal::<i64>(
+        let result = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 -1,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
-        } else {
-            Self::incr_by_internal::<i64>(
+            ),
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            StringGetResult::None => Self::incr_by_internal::<i64>(
                 None,
                 -1,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
+            ),
         };
 
         if let Some(result) = result {
@@ -465,25 +486,26 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
-        let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
-            Self::incr_by_internal::<i64>(
+        let result = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 1,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
-        } else {
-            Self::incr_by_internal::<i64>(
+            ),
+            StringGetResult::None => Self::incr_by_internal::<i64>(
                 None,
                 1,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
+            ),
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         };
-
         if let Some(result) = result {
             strings_db.put(
                 key,
@@ -513,23 +535,25 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
-        let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
-            Self::incr_by_internal::<i64>(
+        let result = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => Self::incr_by_internal::<i64>(
                 Some(&old_value),
                 -decrement,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
-        } else {
-            Self::incr_by_internal::<i64>(
+            ),
+            StringGetResult::None => Self::incr_by_internal::<i64>(
                 None,
                 -decrement,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
+            ),
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         };
 
         if let Some(result) = result {
@@ -555,29 +579,29 @@ impl StringCommands {
         check_args_count!(command, 3, response_buffer);
         let key = command_arg_at!(command, 1);
         let interval = command_arg_at!(command, 2);
-
-        let decrement = to_number!(interval, i64, response_buffer, Ok(()));
+        let increment = to_number!(interval, i64, response_buffer, Ok(()));
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
-
-        let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
-            Self::incr_by_internal::<i64>(
+        let result = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => Self::incr_by_internal::<i64>(
                 Some(&old_value),
-                decrement,
+                increment,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
-        } else {
-            Self::incr_by_internal::<i64>(
+            ),
+            StringGetResult::None => Self::incr_by_internal::<i64>(
                 None,
-                decrement,
+                increment,
                 response_buffer,
                 false,
                 Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
-            )
+            ),
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         };
 
         if let Some(result) = result {
@@ -603,7 +627,7 @@ impl StringCommands {
         check_args_count!(command, 3, response_buffer);
         let key = command_arg_at!(command, 1);
         let interval = command_arg_at!(command, 2);
-        let decrement = to_number_ex!(
+        let increment = to_number_ex!(
             interval,
             f64,
             response_buffer,
@@ -614,24 +638,25 @@ impl StringCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
-
-        let result = if let Some((old_value, old_md)) = strings_db.get(key)? {
-            check_value_type!(old_md, Encoding::VALUE_STRING, response_buffer);
-            Self::incr_by_internal::<f64>(
+        let result = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => Self::incr_by_internal::<f64>(
                 Some(&old_value),
-                decrement,
+                increment,
                 response_buffer,
-                true,
+                false,
                 Strings::VALUE_NOT_VALID_FLOAT,
-            )
-        } else {
-            Self::incr_by_internal::<f64>(
+            ),
+            StringGetResult::None => Self::incr_by_internal::<f64>(
                 None,
-                decrement,
+                increment,
                 response_buffer,
-                true,
+                false,
                 Strings::VALUE_NOT_VALID_FLOAT,
-            )
+            ),
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         };
 
         if let Some(result) = result {
@@ -664,14 +689,34 @@ impl StringCommands {
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         // read the values for key1 and key2
-        let Some((value1, _)) = strings_db.get(key1)? else {
-            builder.empty_string(response_buffer);
-            return Ok(());
+        let value1 = match strings_db.get(key1)? {
+            StringGetResult::Some((value, _)) => value,
+            StringGetResult::WrongType => {
+                builder.error_string(
+                    response_buffer,
+                    "ERR The specified keys must contain string values",
+                );
+                return Ok(());
+            }
+            StringGetResult::None => {
+                builder.empty_string(response_buffer);
+                return Ok(());
+            }
         };
 
-        let Some((value2, _)) = strings_db.get(key2)? else {
-            builder.empty_string(response_buffer);
-            return Ok(());
+        let value2 = match strings_db.get(key2)? {
+            StringGetResult::Some((value, _)) => value,
+            StringGetResult::WrongType => {
+                builder.error_string(
+                    response_buffer,
+                    "ERR The specified keys must contain string values",
+                );
+                return Ok(());
+            }
+            StringGetResult::None => {
+                builder.empty_string(response_buffer);
+                return Ok(());
+            }
         };
 
         const MINMATCHLEN: &str = "minmatchlen";
@@ -747,10 +792,7 @@ impl StringCommands {
         let _ = iter.next(); // skip the first param which is the command name
 
         // build the list of keys to lock
-        let mut user_keys = Vec::<&BytesMut>::with_capacity(command.arg_count());
-        for key in iter {
-            user_keys.push(key);
-        }
+        let user_keys: Vec<&BytesMut> = iter.collect();
 
         // obtain a shared lock on the keys
         let _unused = LockManager::lock_user_keys_shared(&user_keys, client_state.clone())?;
@@ -758,15 +800,10 @@ impl StringCommands {
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
         for key in user_keys.iter() {
-            if let Some((value, metadata)) = strings_db.get(key)? {
-                if metadata.is_type(Encoding::VALUE_STRING) {
-                    builder.add_bulk_string(response_buffer, &value);
-                } else {
-                    // not a string value
-                    builder.add_null_string(response_buffer);
-                }
+            if let StringGetResult::Some((value, _)) = strings_db.get(key)? {
+                builder.add_bulk_string(response_buffer, &value);
             } else {
-                // key is not found
+                // key is not found or of wrong type
                 builder.add_null_string(response_buffer);
             }
         }
@@ -959,11 +996,17 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
-        let new_value = if let Some((old_value, md)) = strings_db.get(key)? {
-            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
-            Self::setrange_internal(key, Some(&old_value), Some(value), offset, response_buffer)
-        } else {
-            Self::setrange_internal(key, None, Some(value), offset, response_buffer)
+        let new_value = match strings_db.get(key)? {
+            StringGetResult::Some((old_value, _)) => {
+                Self::setrange_internal(key, Some(&old_value), Some(value), offset, response_buffer)
+            }
+            StringGetResult::None => {
+                Self::setrange_internal(key, None, Some(value), offset, response_buffer)
+            }
+            StringGetResult::WrongType => {
+                let builder = RespBuilderV2::default();
+                builder_return_wrong_type!(builder, response_buffer);
+            }
         };
 
         if let Some(new_value) = new_value {
@@ -992,12 +1035,15 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
-        if let Some((value, md)) = strings_db.get(key)? {
-            check_value_type!(md, Encoding::VALUE_STRING, response_buffer);
-            builder.number::<usize>(response_buffer, value.len(), false);
-        } else {
-            builder.number_u64(response_buffer, 0);
-        }
+        match strings_db.get(key)? {
+            StringGetResult::Some((value, _)) => {
+                builder.number::<usize>(response_buffer, value.len(), false)
+            }
+            StringGetResult::None => builder.number_u64(response_buffer, 0),
+            StringGetResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        };
         Ok(())
     }
 
@@ -1057,29 +1103,34 @@ impl StringCommands {
                 | SetFlags::SetIfExists
                 | SetFlags::SetIfNotExists,
         ) {
-            if let Some((old_value, old_metadata)) = strings_db.get(user_key)? {
-                // key exists
-                if flags.intersects(SetFlags::SetIfNotExists) {
-                    // key exists, but `SetIfNotExists` is set
-                    return Ok(SetInternalReturnValue::KeyExistsErr);
-                }
-                // keep the old ttl?
-                if flags.intersects(SetFlags::KeepTtl) {
-                    metadata
-                        .expiration_mut()
-                        .set_ttl_millis(old_metadata.expiration().ttl_in_millis()?)?;
-                }
-
-                // return the old value?
-                if flags.intersects(SetFlags::ReturnOldValue) {
-                    if !old_metadata.is_type(Encoding::VALUE_STRING) {
-                        return Ok(SetInternalReturnValue::WrongType);
+            match strings_db.get(user_key)? {
+                StringGetResult::Some((old_value, old_metadata)) => {
+                    // key exists
+                    if flags.intersects(SetFlags::SetIfNotExists) {
+                        // key exists, but `SetIfNotExists` is set
+                        return Ok(SetInternalReturnValue::KeyExistsErr);
                     }
-                    return_value = Some(old_value);
+                    // keep the old ttl?
+                    if flags.intersects(SetFlags::KeepTtl) {
+                        metadata
+                            .expiration_mut()
+                            .set_ttl_millis(old_metadata.expiration().ttl_in_millis()?)?;
+                    }
+
+                    // return the old value?
+                    if flags.intersects(SetFlags::ReturnOldValue) {
+                        return_value = Some(old_value);
+                    }
                 }
-            } else if flags.intersects(SetFlags::SetIfExists) {
-                // key does not exists, but `SetIfExists` is set
-                return Ok(SetInternalReturnValue::KeyDoesNotExistErr);
+                StringGetResult::None => {
+                    if flags.intersects(SetFlags::SetIfExists) {
+                        // key does not exists, but `SetIfExists` is set
+                        return Ok(SetInternalReturnValue::KeyDoesNotExistErr);
+                    }
+                }
+                StringGetResult::WrongType => {
+                    return Ok(SetInternalReturnValue::WrongType);
+                }
             }
         }
 
@@ -1206,9 +1257,14 @@ impl StringCommands {
         number += incr_by;
 
         // build the response buffer
-        let number_as_bytes = BytesMutUtils::from(&number);
-        builder.number::<N>(response_buffer, number, is_float);
-        Some(number_as_bytes)
+        let reply = if is_float {
+            format!("{number:.17}")
+        } else {
+            format!("{number}")
+        };
+
+        builder.add_bulk_string(response_buffer, reply.as_bytes());
+        Some(BytesMut::from(reply.as_bytes()))
     }
 }
 
@@ -1246,21 +1302,21 @@ mod test {
         (vec!["get", "test_getdel_key"], "$-1\r\n"),
         ], "getdel"; "getdel")]
     #[test_case(vec![
-        (vec!["decrby", "test_decr_by_counter", "10"], ":-10\r\n"),
-        (vec!["decrby", "test_decr_by_counter", "5"], ":-15\r\n"),
-        (vec!["decrby", "test_decr_by_counter", "-5"], ":-10\r\n"),
+        (vec!["decrby", "test_decr_by_counter", "10"], "$3\r\n-10\r\n"),
+        (vec!["decrby", "test_decr_by_counter", "5"], "$3\r\n-15\r\n"),
+        (vec!["decrby", "test_decr_by_counter", "-5"], "$3\r\n-10\r\n"),
         ], "decrby"; "decrby")]
     #[test_case(vec![
-        (vec!["incrby", "test_incr_by_counter", "10"], ":10\r\n"),
-        (vec!["incrby", "test_incr_by_counter", "5"], ":15\r\n"),
+        (vec!["incrby", "test_incr_by_counter", "10"], "$2\r\n10\r\n"),
+        (vec!["incrby", "test_incr_by_counter", "5"], "$2\r\n15\r\n"),
     ], "incrby"; "incrby")]
     #[test_case(vec![
-        (vec!["incr", "no_such_incr_counter"], ":1\r\n"),
-        (vec!["incr", "no_such_incr_counter"], ":2\r\n"),
+        (vec!["incr", "no_such_incr_counter"], "$1\r\n1\r\n"),
+        (vec!["incr", "no_such_incr_counter"], "$1\r\n2\r\n"),
     ], "incr"; "incr")]
     #[test_case(vec![
-        (vec!["decr", "no_such_decr_counter"], ":-1\r\n"),
-        (vec!["decr", "no_such_decr_counter"], ":-2\r\n"),
+        (vec!["decr", "no_such_decr_counter"], "$2\r\n-1\r\n"),
+        (vec!["decr", "no_such_decr_counter"], "$2\r\n-2\r\n"),
     ], "decr"; "decr")]
     #[test_case(vec![
         (vec!["set", "getex_key", "value"], "+OK\r\n"),
@@ -1284,8 +1340,8 @@ mod test {
         (vec!["getset", "getset_2nd_key"], "-ERR wrong number of arguments for 'getset' command\r\n"),
     ], "getset"; "getset")]
     #[test_case(vec![
-        (vec!["incrbyfloat", "incrbyfloat_no_such_key", "0.1"], ",0.1\r\n"),
-        (vec!["incrbyfloat", "incrbyfloat_no_such_key", "1.2"], ",1.3\r\n"),
+        (vec!["incrbyfloat", "incrbyfloat_no_such_key", "0.1"], "$3\r\n0.1\r\n"),
+        (vec!["incrbyfloat", "incrbyfloat_no_such_key", "1.2"], "$3\r\n1.3\r\n"),
         (vec!["set", "incrbyfloat_string", "hello"], "+OK\r\n"),
         (vec!["incrbyfloat", "incrbyfloat_string", "9.9"], "-ERR value is not a valid float\r\n"),
         (vec!["incrbyfloat", "incrbyfloat_string"], "-ERR wrong number of arguments for 'incrbyfloat' command\r\n"),
@@ -1377,12 +1433,64 @@ mod test {
             for (args, expected_value) in args_vec {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
                 let cmd = Rc::new(RedisCommand::for_test(args));
+                match Client::handle_command(client.inner(), cmd.clone(), &mut sink.fp)
+                    .await
+                    .unwrap()
+                {
+                    ClientNextAction::NoAction => {
+                        if sink.read_all().await.as_str() != expected_value {
+                            let iter = cmd.args_vec().iter();
+                            let strings: Vec<String> =
+                                iter.map(|d| BytesMutUtils::to_string(d)).collect();
+                            println!("Error in command: {}", strings.join(" "));
+                        }
+                        assert_eq!(sink.read_all().await.as_str(), expected_value);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
+    }
+
+    #[test_case(vec![
+        ("ZADD tanks_1 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("GETRANGE tanks_1 0 -1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("GET tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("GETDEL tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("GETSET tanks_1 new_val", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("APPEND tanks_1 new_val", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("DECR tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("DECRBY tanks_1 1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("GETEX tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("INCRBYFLOAT tanks_1 0.1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("INCRBY tanks_1 1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("INCR tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("set string_key value", "+OK\r\n"),
+        ("LCS tanks_1 string_key", "-ERR The specified keys must contain string values\r\n"),
+        ("MGET tanks_1 string_key", "*2\r\n$-1\r\n$5\r\nvalue\r\n"),
+        ("SUBSTR tanks_1 0 -1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("STRLEN tanks_1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+    ]; "test_string_simple_ops_on_wrong_type")]
+    fn test_string_commands_2(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            for (args, expected_value) in args {
+                let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+                let args = args.split(' ').collect();
+                let cmd = Rc::new(RedisCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
                 {
                     ClientNextAction::NoAction => {
-                        assert_eq!(sink.read_all().await.as_str(), expected_value);
+                        assert_eq!(
+                            sink.read_all_as_string().await.unwrap().as_str(),
+                            expected_value
+                        );
                     }
                     _ => {}
                 }

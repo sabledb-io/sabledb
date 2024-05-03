@@ -9,7 +9,6 @@ use bytes::BytesMut;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashValueMetadata {
     common: CommonValueMetadata,
-    hash_id: u64,
     hash_size: u64,
 }
 
@@ -19,8 +18,7 @@ impl HashValueMetadata {
 
     pub fn with_id(hash_id: u64) -> Self {
         HashValueMetadata {
-            common: CommonValueMetadata::default().set_hash(),
-            hash_id,
+            common: CommonValueMetadata::default().set_hash().with_uid(hash_id),
             hash_size: 0,
         }
     }
@@ -45,7 +43,7 @@ impl HashValueMetadata {
 
     /// Return the hash unique ID
     pub fn id(&self) -> u64 {
-        self.hash_id
+        self.common.uid()
     }
 
     /// Return the hash unique ID
@@ -59,27 +57,20 @@ impl HashValueMetadata {
 
     /// Set the hash ID
     pub fn set_id(&mut self, hash_id: u64) {
-        self.hash_id = hash_id
+        self.common.set_uid(hash_id);
     }
 
     /// Serialise the hash value metadata into bytes
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         self.common.to_bytes(builder);
-        builder.write_u64(self.hash_id);
         builder.write_u64(self.hash_size);
     }
 
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
         let common = CommonValueMetadata::from_bytes(reader)?;
-
-        let hash_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let hash_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
 
-        Ok(HashValueMetadata {
-            common,
-            hash_id,
-            hash_size,
-        })
+        Ok(HashValueMetadata { common, hash_size })
     }
 
     /// Create a prefix for iterating all items belonged to this hash

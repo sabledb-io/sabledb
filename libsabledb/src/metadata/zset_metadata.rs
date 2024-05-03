@@ -9,18 +9,16 @@ use bytes::BytesMut;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZSetValueMetadata {
     common: CommonValueMetadata,
-    zset_id: u64,
     zset_size: u64,
 }
 
 #[allow(dead_code)]
 impl ZSetValueMetadata {
-    pub const SIZE: usize = 2 * std::mem::size_of::<u64>() + CommonValueMetadata::SIZE;
+    pub const SIZE: usize = CommonValueMetadata::SIZE + std::mem::size_of::<u64>();
 
     pub fn with_id(zset_id: u64) -> Self {
         ZSetValueMetadata {
-            common: CommonValueMetadata::default().set_zset(),
-            zset_id,
+            common: CommonValueMetadata::default().set_zset().with_uid(zset_id),
             zset_size: 0,
         }
     }
@@ -45,7 +43,7 @@ impl ZSetValueMetadata {
 
     /// Return the zset unique ID
     pub fn id(&self) -> u64 {
-        self.zset_id
+        self.common.uid()
     }
 
     /// Return the zset unique ID
@@ -57,29 +55,16 @@ impl ZSetValueMetadata {
         self.zset_size = self.zset_size.saturating_sub(diff);
     }
 
-    /// Set the zset ID
-    pub fn set_id(&mut self, zset_id: u64) {
-        self.zset_id = zset_id
-    }
-
     /// Serialise the zset value metadata into bytes
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
         self.common.to_bytes(builder);
-        builder.write_u64(self.zset_id);
         builder.write_u64(self.zset_size);
     }
 
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
         let common = CommonValueMetadata::from_bytes(reader)?;
-
-        let zset_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let zset_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
-
-        Ok(ZSetValueMetadata {
-            common,
-            zset_id,
-            zset_size,
-        })
+        Ok(ZSetValueMetadata { common, zset_size })
     }
 
     /// Create a prefix for iterating all items belonged to this zset by score

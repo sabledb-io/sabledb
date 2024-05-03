@@ -177,6 +177,7 @@ and visit this page again in couple of days
 | zincrby | ✓ |✓ | |
 | zcount | ✓ |✓ | |
 | zdiff | ✓ |✓ | |
+| zdiffstore | ✓ |✓ | |
 | zrangebyscore | ✓ |✓ | |
 
 ### Generic commands

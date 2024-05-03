@@ -4,7 +4,7 @@ use crate::{
     check_args_count, check_value_type, command_arg_at,
     commands::{HandleCommandResult, StringCommands},
     metadata::CommonValueMetadata,
-    metadata::Encoding,
+    metadata::{Encoding, ValueType},
     parse_string_to_number,
     server::ClientState,
     storage::GenericDb,
@@ -71,12 +71,13 @@ impl GenericCommands {
             let key_type =
                 Self::query_key_type(client_state.clone(), command.clone(), user_key).await?;
             match key_type {
-                Some(Encoding::VALUE_STRING) => {
+                Some(ValueType::Str) => {
                     let generic_db = GenericDb::with_storage(client_state.database(), db_id);
                     generic_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
-                Some(Encoding::VALUE_LIST) => {
+                Some(ValueType::List) => {
+                    // TODO : delete sub-items
                     let mut list = List::with_storage(client_state.database(), db_id);
                     list.remove(
                         user_key,
@@ -86,17 +87,19 @@ impl GenericCommands {
                     )?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
-                Some(unknown_type) => {
-                    tracing::warn!(
-                        "Deleting unknown type found in database for key `{:?}`. type=`{}`",
-                        user_key,
-                        unknown_type
-                    );
+                Some(ValueType::Hash) => {
+                    // TODO : delete sub-items
                     let generic_db = GenericDb::with_storage(client_state.database(), db_id);
                     generic_db.delete(user_key)?;
                     deleted_items = deleted_items.saturating_add(1);
                 }
-                _ => {}
+                Some(ValueType::Zset) => {
+                    // TODO : delete sub-items
+                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
+                    generic_db.delete(user_key)?;
+                    deleted_items = deleted_items.saturating_add(1);
+                }
+                None => {}
             }
         }
 
@@ -170,7 +173,7 @@ impl GenericCommands {
         client_state: Rc<ClientState>,
         _command: Rc<RedisCommand>,
         user_key: &BytesMut,
-    ) -> Result<Option<u8>, SableError> {
+    ) -> Result<Option<ValueType>, SableError> {
         let generic_db =
             GenericDb::with_storage(client_state.database(), client_state.database_id());
         let Some((_, md)) = generic_db.get(user_key)? else {

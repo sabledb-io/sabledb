@@ -4,9 +4,14 @@ use crate::{
 };
 use bytes::{Buf, BytesMut};
 
-#[allow(dead_code)]
+pub enum StringGetResult {
+    None,
+    Some((BytesMut, StringValueMetadata)),
+    WrongType,
+}
 
 /// This class handles String command database access
+#[allow(dead_code)]
 pub struct StringsDb<'a> {
     store: &'a StorageAdapter,
     db_id: u16,
@@ -36,10 +41,7 @@ impl<'a> StringsDb<'a> {
     }
 
     /// Get a string key from the underlying storage
-    pub fn get(
-        &mut self,
-        user_key: &BytesMut,
-    ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
+    pub fn get(&mut self, user_key: &BytesMut) -> Result<StringGetResult, SableError> {
         let result = self.get_internal(user_key)?;
         self.cache.flush()?;
         Ok(result)
@@ -103,10 +105,7 @@ impl<'a> StringsDb<'a> {
     }
 
     /// Get a string key from the underlying storage
-    fn get_internal(
-        &mut self,
-        user_key: &BytesMut,
-    ) -> Result<Option<(BytesMut, StringValueMetadata)>, SableError> {
+    fn get_internal(&mut self, user_key: &BytesMut) -> Result<StringGetResult, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
 
         let raw_value = self.cache.get(&internal_key)?;
@@ -114,15 +113,20 @@ impl<'a> StringsDb<'a> {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let md = StringValueMetadata::from_bytes(&mut reader)?;
 
+            // Not a string
+            if !md.common_metadata().is_string() {
+                return Ok(StringGetResult::WrongType);
+            }
+
             if md.expiration().is_expired()? {
                 self.cache.delete(&internal_key)?;
-                Ok(None)
+                Ok(StringGetResult::None)
             } else {
                 value.advance(StringValueMetadata::SIZE);
-                Ok(Some((value, md)))
+                Ok(StringGetResult::Some((value, md)))
             }
         } else {
-            Ok(None)
+            Ok(StringGetResult::None)
         }
     }
 }
