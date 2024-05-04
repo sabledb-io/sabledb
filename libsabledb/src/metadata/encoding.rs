@@ -1,5 +1,6 @@
 pub trait FromRaw {
-    fn from_u8(v: u8) -> Option<ValueType>
+    type Item;
+    fn from_u8(v: u8) -> Option<Self::Item>
     where
         Self: Sized;
 }
@@ -20,7 +21,8 @@ impl Default for ValueType {
 }
 
 impl FromRaw for ValueType {
-    fn from_u8(v: u8) -> Option<Self> {
+    type Item = ValueType;
+    fn from_u8(v: u8) -> Option<Self::Item> {
         match v {
             0 => Some(Self::Str),
             1 => Some(Self::List),
@@ -31,21 +33,35 @@ impl FromRaw for ValueType {
     }
 }
 
-pub struct Encoding {}
+#[repr(u8)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum KeyType {
+    /// Used internally to track all complex records
+    Bookkeeping = 0,
+    PrimaryKey = 1,
+    ListItem = 2,
+    HashItem = 3,
+    ZsetMemberItem = 4,
+    ZsetScoreItem = 5,
+}
 
-/// Encoding represents the first byte (u8) used for every data type (and some values)
-/// that we store in the database
-impl Encoding {
-    // All primary data types are encoded using `0u8` as their
-    // first byte.
-    pub const KEY_STRING: u8 = 0u8;
-    pub const KEY_LIST: u8 = 0u8;
-    pub const KEY_HASH: u8 = 0u8;
-    pub const KEY_ZSET: u8 = 0u8;
+impl Default for KeyType {
+    fn default() -> Self {
+        Self::PrimaryKey
+    }
+}
 
-    // Secondary data type keys encoding
-    pub const KEY_LIST_ITEM: u8 = 1u8;
-    pub const KEY_HASH_ITEM: u8 = 2u8;
-    pub const KEY_ZSET_SCORE_ITEM: u8 = 3u8;
-    pub const KEY_ZSET_MEMBER_ITEM: u8 = 4u8;
+impl FromRaw for KeyType {
+    type Item = KeyType;
+    fn from_u8(v: u8) -> Option<Self::Item> {
+        match v {
+            0 => Some(Self::Bookkeeping),
+            1 => Some(Self::PrimaryKey),
+            2 => Some(Self::ListItem),
+            3 => Some(Self::HashItem),
+            4 => Some(Self::ZsetMemberItem),
+            5 => Some(Self::ZsetScoreItem),
+            _ => None,
+        }
+    }
 }

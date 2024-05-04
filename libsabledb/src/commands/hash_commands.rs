@@ -2,13 +2,12 @@
 use crate::{
     check_args_count, check_value_type, command_arg_at,
     commands::{HandleCommandResult, StringCommands, Strings},
-    metadata::Encoding,
     metadata::{CommonValueMetadata, HashFieldKey, HashValueMetadata},
     parse_string_to_number,
     server::ClientState,
     storage::{
-        GenericDb, GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult,
-        HashGetMultiResult, HashGetResult, HashLenResult, HashPutResult, ScanCursor,
+        GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
+        HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
     types::{DataType, List},
     utils::RespBuilderV2,

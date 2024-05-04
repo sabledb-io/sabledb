@@ -1,6 +1,6 @@
 /// A database accessor that does not really care about the value
 use crate::{
-    metadata::{ZSetMemberItem, ZSetScoreItem, ZSetValueMetadata},
+    metadata::{Bookkeeping, ValueType, ZSetMemberItem, ZSetScoreItem, ZSetValueMetadata},
     storage::DbWriteCache,
     CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
@@ -56,7 +56,7 @@ pub enum ZSetGetScoreResult {
 }
 
 bitflags::bitflags! {
-pub struct ZAddFlags: u32  {
+pub struct ZWriteFlags: u32  {
     const None = 0;
     /// Only update elements that already exist. Don't add new elements.
     const Xx = 1 << 0;
@@ -72,8 +72,6 @@ pub struct ZAddFlags: u32  {
     const Ch = 1 << 4;
     /// When this option is specified ZADD acts like ZINCRBY. Only one score-element pair can be specified in this mode
     const Incr = 1 << 5;
-    /// When set, commit the changes to the disk
-    const Commit = 1 << 6;
 }
 }
 
@@ -119,7 +117,8 @@ impl<'a> ZSetDb<'a> {
         user_key: &BytesMut,
         member: &BytesMut,
         score: f64,
-        flags: &ZAddFlags,
+        flags: &ZWriteFlags,
+        flush_cache: bool,
     ) -> Result<ZSetAddMemberResult, SableError> {
         // locate the hash
         let mut md = match self.get_metadata(user_key)? {
@@ -134,7 +133,7 @@ impl<'a> ZSetDb<'a> {
         let mut items_added = 0usize;
         let mut return_value = 0usize;
 
-        let new_score = if flags.intersects(ZAddFlags::Incr) {
+        let new_score = if flags.intersects(ZWriteFlags::Incr) {
             match self.get_member_score(md.id(), member)? {
                 Some(mut old_value) => {
                     old_value += score;
@@ -148,7 +147,7 @@ impl<'a> ZSetDb<'a> {
 
         match self.put_member(md.id(), member, new_score, flags)? {
             PutMemberResult::Updated(_) => {
-                if flags.intersects(ZAddFlags::Ch) {
+                if flags.intersects(ZWriteFlags::Ch) {
                     return_value = return_value.saturating_add(1);
                 }
             }
@@ -165,11 +164,21 @@ impl<'a> ZSetDb<'a> {
         }
 
         // flush the changes
-        if flags.intersects(ZAddFlags::Commit) {
+        if flush_cache {
             self.flush_cache()?;
         }
 
         Ok(ZSetAddMemberResult::Some(return_value))
+    }
+
+    /// Delete key (we don't care about the children or the type of the key)
+    pub fn delete(&mut self, user_key: &BytesMut, flush_cache: bool) -> Result<(), SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        self.cache.delete(&encoded_key)?;
+        if flush_cache {
+            self.flush_cache()?;
+        }
+        Ok(())
     }
 
     /// Returns the score of `member` in the sorted set at `user_key`
@@ -256,6 +265,13 @@ impl<'a> ZSetDb<'a> {
     fn create_metadata(&mut self, user_key: &BytesMut) -> Result<ZSetValueMetadata, SableError> {
         let md = ZSetValueMetadata::with_id(self.store.generate_id());
         self.put_metadata(user_key, &md)?;
+
+        // Add a bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(md.id())
+            .with_value_type(ValueType::Zset)
+            .to_bytes();
+        self.cache.put(&bookkeeping_record, user_key.clone())?;
         Ok(md)
     }
 
@@ -276,9 +292,20 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Delete the set
-    fn delete_metadata(&mut self, user_key: &BytesMut) -> Result<(), SableError> {
+    fn delete_metadata(
+        &mut self,
+        user_key: &BytesMut,
+        md: &ZSetValueMetadata,
+    ) -> Result<(), SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&encoded_key)?;
+
+        // Delete the bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(md.id())
+            .with_value_type(ValueType::Zset)
+            .to_bytes();
+        self.cache.delete(&bookkeeping_record)?;
         Ok(())
     }
 
@@ -288,16 +315,16 @@ impl<'a> ZSetDb<'a> {
         set_id: u64,
         member: &[u8],
         score: f64,
-        flags: &ZAddFlags,
+        flags: &ZWriteFlags,
     ) -> Result<PutMemberResult, SableError> {
         let key_by_member = self.encode_key_by_memebr(set_id, member);
         let key_by_score = self.encode_key_by_score(set_id, score, member);
 
         let result = match self.get_member_score(set_id, member)? {
             Some(old_score) => {
-                if flags.intersects(ZAddFlags::Nx)
-                    || (flags.intersects(ZAddFlags::Gt) && !score.gt(&old_score))
-                    || (flags.intersects(ZAddFlags::Lt) && !score.lt(&old_score))
+                if flags.intersects(ZWriteFlags::Nx)
+                    || (flags.intersects(ZWriteFlags::Gt) && !score.gt(&old_score))
+                    || (flags.intersects(ZWriteFlags::Lt) && !score.lt(&old_score))
                 {
                     return Ok(PutMemberResult::NotModified);
                 }
@@ -311,7 +338,7 @@ impl<'a> ZSetDb<'a> {
                 }
             }
             None => {
-                if flags.intersects(ZAddFlags::Xx) {
+                if flags.intersects(ZWriteFlags::Xx) {
                     return Ok(PutMemberResult::NotModified);
                 }
                 PutMemberResult::Inserted(score)
@@ -406,6 +433,42 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn test_bookkeeping_record() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut zset_db = ZSetDb::with_storage(&db, 0);
+        let set_name = BytesMut::from("myset");
+
+        // put (which creates) a new hash item in the database
+        let rein = BytesMut::from("Reinhardt");
+
+        zset_db
+            .add(&set_name, &rein, 10.0, &ZWriteFlags::None, true)
+            .unwrap();
+
+        // confirm that we have a bookkeeping record
+        let set_md = match zset_db.get_metadata(&set_name).unwrap() {
+            ZSetGetMetadataResult::Some(md) => md,
+            _ => {
+                panic!("Expected to find the set MD in the database");
+            }
+        };
+
+        let bookkeeping_record_key = Bookkeeping::new(0)
+            .with_uid(set_md.id())
+            .with_value_type(ValueType::Zset)
+            .to_bytes();
+
+        let db_set_name = db.get(&bookkeeping_record_key).unwrap().unwrap();
+        assert_eq!(db_set_name, set_name);
+
+        // delete the only entry from the hash -> this should remove the hash completely from the database
+        zset_db.delete_metadata(&set_name, &set_md).unwrap();
+        zset_db.commit().unwrap();
+
+        // confirm that the bookkeeping record was also removed from the database
+        assert!(db.get(&bookkeeping_record_key).unwrap().is_none());
+    }
 
     #[test]
     fn test_zset_get_score() -> Result<(), SableError> {
@@ -426,7 +489,7 @@ mod tests {
         for (tank, score) in overwatch_tanks_scores {
             assert_eq!(
                 zset_db
-                    .add(&overwatch_tanks, tank, score, &ZAddFlags::None)
+                    .add(&overwatch_tanks, tank, score, &ZWriteFlags::None, false)
                     .unwrap(),
                 ZSetAddMemberResult::Some(1)
             );
@@ -468,43 +531,28 @@ mod tests {
 
         assert_eq!(
             zset_db
-                .add(
-                    &overwatch_tanks,
-                    &orisa,
-                    score,
-                    &(ZAddFlags::Commit | ZAddFlags::Nx)
-                )
+                .add(&overwatch_tanks, &orisa, score, &(ZWriteFlags::Nx), true)
                 .unwrap(),
             ZSetAddMemberResult::Some(1)
         );
 
         assert_eq!(
             zset_db
-                .add(
-                    &overwatch_tanks,
-                    &orisa,
-                    score,
-                    &(ZAddFlags::Commit | ZAddFlags::Nx)
-                )
+                .add(&overwatch_tanks, &orisa, score, &(ZWriteFlags::Nx), true)
                 .unwrap(),
             ZSetAddMemberResult::Some(0)
         );
 
         assert_eq!(
             zset_db
-                .add(
-                    &overwatch_tanks,
-                    &rein,
-                    42.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Xx)
-                )
+                .add(&overwatch_tanks, &rein, 42.0, &(ZWriteFlags::Xx), true,)
                 .unwrap(),
             ZSetAddMemberResult::Some(0)
         );
 
         assert_eq!(
             zset_db
-                .add(&overwatch_tanks, &rein, 42.0, &ZAddFlags::Commit)
+                .add(&overwatch_tanks, &rein, 42.0, &ZWriteFlags::None, true)
                 .unwrap(),
             ZSetAddMemberResult::Some(1)
         );
@@ -516,7 +564,8 @@ mod tests {
                     &overwatch_tanks,
                     &rein,
                     42.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Xx | ZAddFlags::Ch)
+                    &(ZWriteFlags::Xx | ZWriteFlags::Ch),
+                    true
                 )
                 .unwrap(),
             ZSetAddMemberResult::Some(0)
@@ -529,12 +578,7 @@ mod tests {
         // Expected: 0 updates. 41 < old score(42)
         assert_eq!(
             zset_db
-                .add(
-                    &overwatch_tanks,
-                    &rein,
-                    41.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Gt)
-                )
+                .add(&overwatch_tanks, &rein, 41.0, &(ZWriteFlags::Gt), true,)
                 .unwrap(),
             ZSetAddMemberResult::Some(0)
         );
@@ -548,12 +592,7 @@ mod tests {
         // Expected: 0 updates. 47 > old score(42)
         assert_eq!(
             zset_db
-                .add(
-                    &overwatch_tanks,
-                    &rein,
-                    47.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Lt)
-                )
+                .add(&overwatch_tanks, &rein, 47.0, &(ZWriteFlags::Lt), true,)
                 .unwrap(),
             ZSetAddMemberResult::Some(0)
         );
@@ -571,7 +610,8 @@ mod tests {
                     &overwatch_tanks,
                     &rein,
                     43.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Gt | ZAddFlags::Ch)
+                    &(ZWriteFlags::Gt | ZWriteFlags::Ch),
+                    true
                 )
                 .unwrap(),
             ZSetAddMemberResult::Some(1)
@@ -590,7 +630,8 @@ mod tests {
                     &overwatch_tanks,
                     &rein,
                     40.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Lt | ZAddFlags::Ch)
+                    &(ZWriteFlags::Lt | ZWriteFlags::Ch),
+                    true
                 )
                 .unwrap(),
             ZSetAddMemberResult::Some(1)
@@ -609,7 +650,8 @@ mod tests {
                     &overwatch_tanks,
                     &rein,
                     40.0,
-                    &(ZAddFlags::Commit | ZAddFlags::Incr | ZAddFlags::Ch)
+                    &(ZWriteFlags::Incr | ZWriteFlags::Ch),
+                    true
                 )
                 .unwrap(),
             ZSetAddMemberResult::Some(1)

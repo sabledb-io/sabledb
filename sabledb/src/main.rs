@@ -47,8 +47,10 @@ fn main() -> Result<(), SableError> {
         .unwrap_or_else(|_| panic!("failed to bind address {}", address));
     info!("Server started on port address: {}", address);
 
+    let server_state_clone = server.state();
     let _ = ctrlc::set_handler(move || {
         info!("Received Ctrl-C");
+        server_state_clone.shutdown();
         info!("Flushing data");
         if let Err(e) = store.flush() {
             error!("failed to flush. {:?}", e);

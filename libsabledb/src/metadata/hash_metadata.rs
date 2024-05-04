@@ -1,6 +1,7 @@
 use crate::{
-    metadata::CommonValueMetadata, metadata::Encoding, Expiration, SableError, U8ArrayBuilder,
-    U8ArrayReader,
+    metadata::CommonValueMetadata,
+    metadata::{FromRaw, KeyType},
+    Expiration, SableError, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -78,7 +79,7 @@ impl HashValueMetadata {
         let mut buffer =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        builder.write_u8(Encoding::KEY_HASH_ITEM);
+        builder.write_u8(KeyType::HashItem as u8);
         builder.write_u64(self.id());
         buffer
     }
@@ -87,7 +88,7 @@ impl HashValueMetadata {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct HashFieldKey<'a> {
-    kind: u8,
+    kind: KeyType,
     hash_id: u64,
     user_key: &'a [u8],
 }
@@ -99,7 +100,7 @@ impl<'a> HashFieldKey<'a> {
 
     pub fn with_user_key(hash_id: u64, user_key: &'a BytesMut) -> Self {
         HashFieldKey {
-            kind: Encoding::KEY_HASH_ITEM,
+            kind: KeyType::HashItem,
             hash_id,
             user_key,
         }
@@ -107,7 +108,7 @@ impl<'a> HashFieldKey<'a> {
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.kind);
+        builder.write_u8(self.kind as u8);
         builder.write_u64(self.hash_id);
         builder.write_bytes(self.user_key);
     }
@@ -118,7 +119,7 @@ impl<'a> HashFieldKey<'a> {
         let hash_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         let (_, user_key) = buff.split_at(reader.consumed());
         Ok(HashFieldKey {
-            kind,
+            kind: KeyType::from_u8(kind).ok_or(SableError::SerialisationError)?,
             hash_id,
             user_key,
         })
@@ -155,7 +156,7 @@ mod tests {
         let kk = BytesMut::from(hash_item_key.user_key);
         assert_eq!(kk, BytesMut::from("field_key"),);
         assert_eq!(hash_item_key.hash_id, 42);
-        assert_eq!(hash_item_key.kind, Encoding::KEY_HASH_ITEM);
+        assert_eq!(hash_item_key.kind, KeyType::HashItem);
 
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);

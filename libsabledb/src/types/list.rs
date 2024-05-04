@@ -2,8 +2,10 @@
 use crate::{
     commands::Strings,
     iter_next_or_prev, list_md_or_null_string, list_or_size_0,
-    metadata::PrimaryKeyMetadata,
-    metadata::{CommonValueMetadata, Encoding, ListValueMetadata},
+    metadata::{
+        Bookkeeping, CommonValueMetadata, FromRaw, KeyType, ListValueMetadata, PrimaryKeyMetadata,
+        ValueType,
+    },
     storage::DbWriteCache,
     storage::PutFlags,
     BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, StorageAdapter, U8ArrayBuilder,
@@ -238,7 +240,7 @@ impl<'a> List<'a> {
         }
 
         if list.is_empty() {
-            self.delete_list_metadata_internal(list_name)?;
+            self.delete_list_metadata_internal(&list, list_name)?;
         } else {
             self.put_list_metadata_internal(&list, list_name)?;
         }
@@ -366,7 +368,7 @@ impl<'a> List<'a> {
         }
 
         if list_md.is_empty() {
-            self.delete_list_metadata_internal(list_name)?;
+            self.delete_list_metadata_internal(&list_md, list_name)?;
         } else {
             self.put_list_metadata_internal(&list_md, list_name)?;
         }
@@ -549,7 +551,7 @@ impl<'a> List<'a> {
         }
 
         if list.is_empty() {
-            self.delete_list_metadata_internal(list_name)?;
+            self.delete_list_metadata_internal(&list, list_name)?;
         } else {
             self.put_list_metadata_internal(&list, list_name)?;
         }
@@ -572,7 +574,7 @@ impl<'a> List<'a> {
                     builder.number_usize(response_buffer, 0);
                     return Ok(());
                 } else {
-                    self.new_list_internal()
+                    self.new_list_internal(list_name)?
                 }
             }
             GetListMetadataResult::Some(list) => list,
@@ -630,7 +632,7 @@ impl<'a> List<'a> {
 
             // delete or update source list if needed
             if list_md.is_empty() {
-                self.delete_list_metadata_internal(list_name)?;
+                self.delete_list_metadata_internal(&list_md, list_name)?;
             } else {
                 self.put_list_metadata_internal(&list_md, list_name)?;
             }
@@ -716,7 +718,7 @@ impl<'a> List<'a> {
 
         let mut target_list_md = match self.get_list_metadata_with_name(target_list_name)? {
             GetListMetadataResult::WrongType => return Ok(MoveResult::WrongType),
-            GetListMetadataResult::None => self.new_list_internal(),
+            GetListMetadataResult::None => self.new_list_internal(target_list_name)?,
             GetListMetadataResult::Some(list) => list,
         };
 
@@ -733,7 +735,7 @@ impl<'a> List<'a> {
 
         // delete or update source list if needed
         if src_list_md.is_empty() {
-            self.delete_list_metadata_internal(src_list_name)?;
+            self.delete_list_metadata_internal(&src_list_md, src_list_name)?;
         } else {
             self.put_list_metadata_internal(&src_list_md, src_list_name)?;
         }
@@ -1152,9 +1154,20 @@ impl<'a> List<'a> {
     }
 
     /// Delete `ListValueMetadata` from the database
-    fn delete_list_metadata_internal(&mut self, list_name: &BytesMut) -> Result<(), SableError> {
+    fn delete_list_metadata_internal(
+        &mut self,
+        metadata: &ListValueMetadata,
+        list_name: &BytesMut,
+    ) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(list_name, self.db_id);
         self.cache.delete(&internal_key)?;
+
+        // delete the bookkeeping record for this list
+        let bookkeeping_record_key = Bookkeeping::new(self.db_id)
+            .with_uid(metadata.id())
+            .with_value_type(ValueType::List)
+            .to_bytes();
+        self.cache.delete(&bookkeeping_record_key)?;
         Ok(())
     }
 
@@ -1172,12 +1185,19 @@ impl<'a> List<'a> {
         Ok(())
     }
 
-    /// Create new `ListValueMetadata` for `user_key` store and reutrn it to the caller
-    fn new_list_internal(&self) -> ListValueMetadata {
+    /// Create new `ListValueMetadata` for `list_name` and return it to the caller
+    fn new_list_internal(&mut self, list_name: &BytesMut) -> Result<ListValueMetadata, SableError> {
         let mut md = ListValueMetadata::new();
         let list_id = self.store.generate_id();
         md.set_id(list_id);
-        md
+
+        // create a new bookkeeping record for this list
+        let bookkeeping_record_key = Bookkeeping::new(self.db_id)
+            .with_uid(list_id)
+            .with_value_type(ValueType::List)
+            .to_bytes();
+        self.cache.put(&bookkeeping_record_key, list_name.clone())?;
+        Ok(md)
     }
 
     fn flush_cache(&mut self) -> Result<(), SableError> {
@@ -1188,7 +1208,7 @@ impl<'a> List<'a> {
 /// the order of the fields matters here
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListItem {
-    pub key_type: u8,
+    pub key_type: KeyType,
     pub list_id: u64,
     pub item_id: u64,
     pub prev: u64,
@@ -1199,7 +1219,7 @@ pub struct ListItem {
 #[allow(dead_code)]
 impl ListItem {
     // SIZE contain only the serialisable items
-    pub const SIZE: usize = 4 * std::mem::size_of::<u64>() + std::mem::size_of::<u8>();
+    pub const SIZE: usize = 4 * std::mem::size_of::<u64>() + std::mem::size_of::<KeyType>();
 
     pub fn id(&self) -> u64 {
         self.item_id
@@ -1248,7 +1268,7 @@ impl ListItem {
         );
 
         let mut builder = U8ArrayBuilder::with_buffer(&mut key);
-        builder.write_u8(self.key_type);
+        builder.write_u8(self.key_type as u8);
         builder.write_u64(self.list_id);
         builder.write_u64(self.item_id);
 
@@ -1274,7 +1294,7 @@ impl ListItem {
         );
 
         let mut builder = U8ArrayBuilder::with_buffer(&mut key);
-        builder.write_u8(self.key_type);
+        builder.write_u8(self.key_type as u8);
         builder.write_u64(self.list_id);
         builder.write_u64(self.item_id);
         store.delete(&key)
@@ -1351,11 +1371,6 @@ impl ListItem {
         self.next == 0
     }
 
-    /// Set the key type
-    fn set_type(&mut self, key_type: u8) {
-        self.key_type = key_type;
-    }
-
     fn set_list_id(&mut self, list_id: u64) {
         self.list_id = list_id;
     }
@@ -1379,7 +1394,7 @@ impl ListItem {
         );
 
         let mut builder = U8ArrayBuilder::with_buffer(&mut key);
-        builder.write_u8(Encoding::KEY_LIST_ITEM);
+        builder.write_u8(KeyType::ListItem as u8);
         builder.write_u64(list_id);
         builder.write_u64(item_id);
         key
@@ -1388,7 +1403,7 @@ impl ListItem {
     /// Create list item with a given id and list-id
     pub fn new(list_id: u64, item_id: u64) -> ListItem {
         let mut list_item = ListItem {
-            key_type: Encoding::KEY_LIST_ITEM,
+            key_type: KeyType::ListItem,
             list_id: 0,
             item_id: 0,
             prev: 0,
@@ -1438,7 +1453,8 @@ impl ListItem {
     fn construct_from(&mut self, key: &BytesMut, mut value: BytesMut) -> Result<(), SableError> {
         // decode the key
         let mut reader = U8ArrayReader::with_buffer(key);
-        self.key_type = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        let kind = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        self.key_type = KeyType::from_u8(kind).ok_or(SableError::SerialisationError)?;
         self.list_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
         self.item_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
 
@@ -1461,30 +1477,11 @@ impl ListItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StorageOpenParams;
-    use std::fs;
-    use std::path::PathBuf;
     use test_case::test_case;
-
-    /// Helper macro for building database for tests
-    macro_rules! prepare_db {
-        ($dbpath:expr) => {{
-            let _ = std::fs::create_dir_all("tests");
-            let db_path = PathBuf::from($dbpath);
-            let _ = fs::remove_dir_all(db_path.clone());
-            let open_params = StorageOpenParams::default()
-                .set_compression(false)
-                .set_cache_size(64)
-                .set_path(&db_path)
-                .set_wal_disabled(true);
-            crate::storage_rocksdb!(open_params)
-        }};
-    }
 
     #[test]
     fn test_serialise_list_item() -> Result<(), SableError> {
-        let store = prepare_db!("tests/test_serialise_list_item.db");
-
+        let (_guard, store) = crate::tests::open_store();
         let mut src = ListItem::new(1975, 42);
         src.prev = 10;
         src.next = 11;
@@ -1523,7 +1520,7 @@ mod tests {
 
     #[test]
     fn test_push_pop() -> Result<(), SableError> {
-        let store = prepare_db!("tests/test_push_pop.db");
+        let (_guard, store) = crate::tests::open_store();
         let list_name = BytesMut::from("my list");
         let mut list = List::with_storage(&store, 0);
         let elements = [
@@ -1540,6 +1537,24 @@ mod tests {
                 &mut response_buffer,
                 ListFlags::FromLeft,
             )?;
+
+            let list_id = match list.get_list_metadata_with_name(&list_name).unwrap() {
+                GetListMetadataResult::Some(md) => md.id(),
+                _ => {
+                    panic!("Expected to find the list MD in the database");
+                }
+            };
+
+            // Check that the book-keeping record is found
+            let bookkeeping_record = Bookkeeping::new(0)
+                .with_uid(list_id)
+                .with_value_type(ValueType::List)
+                .to_bytes();
+
+            {
+                let value = store.get(&bookkeeping_record)?.unwrap();
+                assert_eq!(value, list_name);
+            }
 
             list.len(&list_name, &mut response_buffer)?;
             // our list should have 3 elements
@@ -1565,6 +1580,10 @@ mod tests {
                 "$5\r\nhello\r\n"
             );
 
+            // Check that the book-keeping record no longer exists
+            assert!(store.get(&bookkeeping_record)?.is_none());
+
+            // the list no longer exist
             list.pop(&list_name, 1, &mut response_buffer, ListFlags::FromLeft)?;
             assert_eq!(
                 BytesMutUtils::to_string(&response_buffer).as_str(),
@@ -1576,7 +1595,7 @@ mod tests {
 
     #[test]
     fn test_list_iterate_forward() -> Result<(), SableError> {
-        let store = prepare_db!("tests/test_iterate_list_forward.db");
+        let (_guard, store) = crate::tests::open_store();
         let list_name = BytesMut::from("my list");
         let mut list = List::with_storage(&store, 0);
         let elements = [
@@ -1615,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_list_iterate_backward() -> Result<(), SableError> {
-        let store = prepare_db!("tests/test_iterate_list_backward.db");
+        let (_guard, store) = crate::tests::open_store();
         let list_name = BytesMut::from("my list");
         let mut list = List::with_storage(&store, 0);
         let elements = [
@@ -1663,7 +1682,7 @@ mod tests {
     #[test_case(-6, None; "index_neg_out_of_bounds")]
     #[test_case(5, None; "index_out_of_bounds")]
     fn test_list_index(index: i32, element: Option<&'static str>) -> Result<(), SableError> {
-        let store = prepare_db!(&format!("tests/test_list_index{}.db", index));
+        let (_guard, store) = crate::tests::open_store();
         let list_name = BytesMut::from("my list");
         let mut list = List::with_storage(&store, 0);
         let elements = [
@@ -1704,7 +1723,7 @@ mod tests {
         expected_len: u64,
         list_deleted: bool,
     ) -> Result<(), SableError> {
-        let store = prepare_db!(&format!("tests/test_list_trim_{}_{}.db", start, end));
+        let (_guard, store) = crate::tests::open_store();
         let list_name = BytesMut::from("my list");
         let mut list = List::with_storage(&store, 0);
         let elements = [

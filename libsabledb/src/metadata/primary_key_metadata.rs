@@ -1,11 +1,14 @@
-use crate::{SableError, U8ArrayBuilder, U8ArrayReader};
+use crate::{
+    metadata::{FromRaw, KeyType},
+    SableError, U8ArrayBuilder, U8ArrayReader,
+};
 use bytes::BytesMut;
 
 pub type PrimaryKeyMetadata = KeyMetadata;
 
 ///
 /// Each primary key stored in the storage contains a metadata attached to it which holds information about the
-/// key itself. The metadata is of a fixed size and is placed in the begining of the byte array
+/// key itself. The metadata is of a fixed size and is placed in the beginning of the byte array
 ///
 /// [ key-metadata | user key ]
 ///
@@ -13,7 +16,7 @@ pub type PrimaryKeyMetadata = KeyMetadata;
 pub struct KeyMetadata {
     /// The key type. For primary key, this will always be `0`
     /// This field must come first
-    key_type: u8,
+    key_type: KeyType,
     /// Database ID
     db_id: u16,
     /// Keep the slot number as part of the key encoding
@@ -24,36 +27,30 @@ pub struct KeyMetadata {
 
 impl KeyMetadata {
     pub const SIZE: usize =
-        std::mem::size_of::<u8>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
-    pub const KEY_PRIMARY: u8 = 0u8;
+        std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.key_type);
+        builder.write_u8(self.key_type as u8);
         builder.write_u16(self.db_id);
         builder.write_u16(self.key_slot);
     }
 
     pub fn from_bytes(buf: &BytesMut) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
-        let Some(key_type) = reader.read_u8() else {
-            return Err(SableError::SerialisationError);
-        };
-        let Some(db_id) = reader.read_u16() else {
-            return Err(SableError::SerialisationError);
-        };
-        let Some(key_slot) = reader.read_u16() else {
-            return Err(SableError::SerialisationError);
-        };
+        let key_type = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        let db_id = reader.read_u16().ok_or(SableError::SerialisationError)?;
+        let key_slot = reader.read_u16().ok_or(SableError::SerialisationError)?;
+
         Ok(KeyMetadata {
-            key_type,
+            key_type: KeyType::from_u8(key_type).ok_or(SableError::SerialisationError)?,
             db_id,
             key_slot,
         })
     }
 
     /// Set the key type
-    fn with_type(mut self, key_type: u8) -> Self {
+    fn with_type(mut self, key_type: KeyType) -> Self {
         self.key_type = key_type;
         self
     }
@@ -67,7 +64,7 @@ impl KeyMetadata {
     /// Create a string key that can place into the storage which includes a metadata regarding the key's encoding
     pub fn new_primary_key(user_key: &BytesMut, db_id: u16) -> BytesMut {
         let mut key_metadata = KeyMetadata::default()
-            .with_type(KeyMetadata::KEY_PRIMARY)
+            .with_type(KeyType::PrimaryKey)
             .with_db_id(db_id);
         key_metadata.key_slot = crate::utils::calculate_slot(user_key);
 
@@ -86,11 +83,11 @@ impl KeyMetadata {
     }
 
     pub fn is_primary_key(&self) -> bool {
-        self.key_type == KeyMetadata::KEY_PRIMARY
+        self.key_type == KeyType::PrimaryKey
     }
 
     /// Return the key type: Primary or Secondary
-    pub fn key_type(&self) -> u8 {
+    pub fn key_type(&self) -> KeyType {
         self.key_type
     }
 }

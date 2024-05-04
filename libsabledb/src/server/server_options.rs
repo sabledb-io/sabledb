@@ -82,12 +82,31 @@ impl Default for ClientLimits {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Maintenance {
+    /// Purge zombie records every N seconds
+    pub purge_zombie_records_secs: usize,
+    /// Delete of a single item is always `O(1)` regardless of its type. If the type has children
+    /// they are purged by the evictor background thread
+    pub instant_delete: bool,
+}
+
+impl Default for Maintenance {
+    fn default() -> Self {
+        Maintenance {
+            purge_zombie_records_secs: 60, // 1 minute
+            instant_delete: true,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct ServerOptions {
     pub general_settings: GeneralSettings,
     pub open_params: StorageOpenParams,
     pub replication_limits: ReplicationLimits,
     pub client_limits: ClientLimits,
+    pub maintenance: Maintenance,
 }
 
 impl ServerOptions {
@@ -208,6 +227,20 @@ impl ServerOptions {
             for (key, value) in properties.iter() {
                 if key == "client_response_buffer_size" {
                     options.client_limits.client_response_buffer_size = parse_number!(value, usize);
+                }
+            }
+        }
+
+        if let Some(properties) = ini_file.section(Some("maintenance")) {
+            for (key, value) in properties.iter() {
+                match key {
+                    "purge_zombie_records_secs" => {
+                        options.maintenance.purge_zombie_records_secs = parse_number!(value, usize);
+                    }
+                    "instant_delete" => {
+                        options.maintenance.instant_delete = ini_bool!(value);
+                    }
+                    _ => {}
                 }
             }
         }

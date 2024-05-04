@@ -1,6 +1,6 @@
 /// A database accessor that does not really care about the value
 use crate::{
-    metadata::{HashFieldKey, HashValueMetadata},
+    metadata::{Bookkeeping, HashFieldKey, HashValueMetadata, ValueType},
     storage::DbWriteCache,
     CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
@@ -224,7 +224,7 @@ impl<'a> HashDb<'a> {
         // update the hash metadata
         hash.decr_len_by(items_deleted as u64);
         if hash.is_empty() {
-            self.delete_hash_metadata(user_key)?;
+            self.delete_hash_metadata(user_key, &hash)?;
         } else {
             self.put_hash_metadata(user_key, &hash)?;
         }
@@ -313,9 +313,20 @@ impl<'a> HashDb<'a> {
     }
 
     /// Delete the hash metadata
-    fn delete_hash_metadata(&mut self, user_key: &BytesMut) -> Result<(), SableError> {
+    fn delete_hash_metadata(
+        &mut self,
+        user_key: &BytesMut,
+        hash_md: &HashValueMetadata,
+    ) -> Result<(), SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&encoded_key)?;
+
+        // Delete the bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(hash_md.id())
+            .with_value_type(ValueType::Hash)
+            .to_bytes();
+        self.cache.delete(&bookkeeping_record)?;
         Ok(())
     }
 
@@ -326,15 +337,15 @@ impl<'a> HashDb<'a> {
         &mut self,
         user_key: &BytesMut,
     ) -> Result<HashValueMetadata, SableError> {
-        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let hash_md = HashValueMetadata::with_id(self.store.generate_id());
+        self.put_hash_metadata(user_key, &hash_md)?;
 
-        // serialise the hash value into bytes
-        let mut buffer = BytesMut::with_capacity(HashValueMetadata::SIZE);
-        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        hash_md.to_bytes(&mut builder);
-
-        self.cache.put(&encoded_key, buffer)?;
+        // Add a bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(hash_md.id())
+            .with_value_type(ValueType::Hash)
+            .to_bytes();
+        self.cache.put(&bookkeeping_record, user_key.clone())?;
         Ok(hash_md)
     }
 
@@ -451,6 +462,44 @@ mod tests {
             HashPutResult::WrongType
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_bookkeeping_record() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut hash_db = HashDb::with_storage(&db, 0);
+        let hash_name = BytesMut::from("myhash");
+
+        // put (which creates) a new hash item in the database
+        let field1 = BytesMut::from("field1");
+        assert_eq!(
+            hash_db
+                .put_multi(&hash_name, &[(&field1, &field1)])
+                .unwrap(),
+            HashPutResult::Some(1)
+        );
+
+        // confirm that we have a bookkeeping record
+        let hash_id = match hash_db.hash_metadata(&hash_name).unwrap() {
+            GetHashMetadataResult::Some(md) => md.id(),
+            _ => {
+                panic!("Expected to find the hash MD in the database");
+            }
+        };
+
+        let bookkeeping_record_key = Bookkeeping::new(0)
+            .with_uid(hash_id)
+            .with_value_type(ValueType::Hash)
+            .to_bytes();
+
+        let db_hash_name = db.get(&bookkeeping_record_key).unwrap().unwrap();
+        assert_eq!(db_hash_name, hash_name);
+
+        // delete the only entry from the hash -> this should remove the hash completely from the database
+        hash_db.delete(&hash_name, &[&field1]).unwrap();
+
+        // confirm that the bookkeeping record was also removed from the database
+        assert!(db.get(&bookkeeping_record_key).unwrap().is_none());
     }
 
     #[test]

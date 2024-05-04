@@ -4,7 +4,7 @@ use crate::{
     check_args_count, check_value_type, command_arg_at,
     commands::{HandleCommandResult, StringCommands},
     metadata::CommonValueMetadata,
-    metadata::{Encoding, ValueType},
+    metadata::{KeyType, ValueType},
     parse_string_to_number,
     server::ClientState,
     storage::GenericDb,
@@ -65,41 +65,34 @@ impl GenericCommands {
 
         let mut deleted_items = 0usize;
         let db_id = client_state.database_id();
+        let mut generic_db = GenericDb::with_storage(client_state.database(), db_id);
         for user_key in iter {
             // obtain the lock per key
             let _unused = LockManager::lock_user_key_exclusive(user_key, client_state.clone())?;
-            let key_type =
-                Self::query_key_type(client_state.clone(), command.clone(), user_key).await?;
-            match key_type {
-                Some(ValueType::Str) => {
-                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
-                    generic_db.delete(user_key)?;
-                    deleted_items = deleted_items.saturating_add(1);
-                }
-                Some(ValueType::List) => {
-                    // TODO : delete sub-items
-                    let mut list = List::with_storage(client_state.database(), db_id);
-                    list.remove(
-                        user_key,
-                        None, // remove all items
-                        i32::MAX,
-                        response_buffer,
-                    )?;
-                    deleted_items = deleted_items.saturating_add(1);
-                }
-                Some(ValueType::Hash) => {
-                    // TODO : delete sub-items
-                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
-                    generic_db.delete(user_key)?;
-                    deleted_items = deleted_items.saturating_add(1);
-                }
-                Some(ValueType::Zset) => {
-                    // TODO : delete sub-items
-                    let generic_db = GenericDb::with_storage(client_state.database(), db_id);
-                    generic_db.delete(user_key)?;
-                    deleted_items = deleted_items.saturating_add(1);
-                }
-                None => {}
+            if generic_db.contains(user_key)? {
+                generic_db.delete(user_key, false)?;
+                deleted_items = deleted_items.saturating_add(1);
+            }
+        }
+        generic_db.commit()?;
+
+        if deleted_items > 0 {
+            // commit changes
+            generic_db.commit()?;
+
+            // if user wishes to remove the item NOW, trigger an eviction
+            if !client_state
+                .server_inner_state()
+                .options()
+                .maintenance
+                .instant_delete
+            {
+                // trigger eviction
+                // TODO: do we want to trigger eviction for a single key only?
+                client_state
+                    .server_inner_state()
+                    .send_evictor(crate::EvictorMessage::Evict)
+                    .await?;
             }
         }
 
@@ -121,7 +114,7 @@ impl GenericCommands {
         let key = command_arg_at!(command, 1);
 
         let _unused = LockManager::lock_user_key_shared(key, client_state.clone())?;
-        let generic_db =
+        let mut generic_db =
             GenericDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((_, value_metadata)) = generic_db.get(key)? {
             if !value_metadata.expiration().has_ttl() {
@@ -168,20 +161,6 @@ impl GenericCommands {
         Ok(())
     }
 
-    /// Load entry from the database, don't care about the value type
-    async fn query_key_type(
-        client_state: Rc<ClientState>,
-        _command: Rc<RedisCommand>,
-        user_key: &BytesMut,
-    ) -> Result<Option<ValueType>, SableError> {
-        let generic_db =
-            GenericDb::with_storage(client_state.database(), client_state.database_id());
-        let Some((_, md)) = generic_db.get(user_key)? else {
-            return Ok(None);
-        };
-        Ok(Some(md.value_type()))
-    }
-
     async fn expire(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -203,7 +182,7 @@ impl GenericCommands {
 
         let db_id = client_state.database_id();
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
-        let generic_db = GenericDb::with_storage(client_state.database(), db_id);
+        let mut generic_db = GenericDb::with_storage(client_state.database(), db_id);
 
         // Make sure the key exists in the database
         let Some(mut expiration) = generic_db.get_expiration(key)? else {
@@ -214,7 +193,7 @@ impl GenericCommands {
         // If no other param was provided, set the ttl in seconds and leave
         let Some(arg) = command.arg(3) else {
             expiration.set_ttl_seconds(seconds)?;
-            generic_db.put_expiration(key, &expiration)?;
+            generic_db.put_expiration(key, &expiration, true)?;
             builder.number_usize(response_buffer, 1);
             return Ok(());
         };
@@ -225,7 +204,7 @@ impl GenericCommands {
                 // NX -- Set expiry only when the key has no expiry
                 if !expiration.has_ttl() {
                     expiration.set_ttl_seconds(seconds)?;
-                    generic_db.put_expiration(key, &expiration)?;
+                    generic_db.put_expiration(key, &expiration, true)?;
                     builder.number_usize(response_buffer, 1);
                 } else {
                     builder.number_usize(response_buffer, 0);
@@ -235,7 +214,7 @@ impl GenericCommands {
                 // XX -- Set expiry only when the key has an existing expiry
                 if expiration.has_ttl() {
                     expiration.set_ttl_seconds(seconds)?;
-                    generic_db.put_expiration(key, &expiration)?;
+                    generic_db.put_expiration(key, &expiration, true)?;
                     builder.number_usize(response_buffer, 1);
                 } else {
                     builder.number_usize(response_buffer, 0);
@@ -245,7 +224,7 @@ impl GenericCommands {
                 // GT -- Set expiry only when the new expiry is greater than current one
                 if seconds > expiration.ttl_in_seconds()? {
                     expiration.set_ttl_seconds(seconds)?;
-                    generic_db.put_expiration(key, &expiration)?;
+                    generic_db.put_expiration(key, &expiration, true)?;
                     builder.number_usize(response_buffer, 1);
                 } else {
                     builder.number_usize(response_buffer, 0);
@@ -255,7 +234,7 @@ impl GenericCommands {
                 // LT -- Set expiry only when the new expiry is less than current one
                 if seconds < expiration.ttl_in_seconds()? {
                     expiration.set_ttl_seconds(seconds)?;
-                    generic_db.put_expiration(key, &expiration)?;
+                    generic_db.put_expiration(key, &expiration, true)?;
                     builder.number_usize(response_buffer, 1);
                 } else {
                     builder.number_usize(response_buffer, 0);

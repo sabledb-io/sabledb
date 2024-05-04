@@ -1,7 +1,7 @@
 /// A database accessor that does not really care about the value
 use crate::{
-    storage::PutFlags, CommonValueMetadata, Expiration, PrimaryKeyMetadata, SableError,
-    StorageAdapter, U8ArrayBuilder, U8ArrayReader,
+    CommonValueMetadata, DbWriteCache, Expiration, PrimaryKeyMetadata, SableError, StorageAdapter,
+    U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -17,39 +17,57 @@ pub struct GenericDb<'a> {
     /// This class handles String command database access
     store: &'a StorageAdapter,
     db_id: u16,
+    cache: Box<DbWriteCache<'a>>,
 }
 
 #[allow(dead_code)]
 impl<'a> GenericDb<'a> {
     pub fn with_storage(store: &'a StorageAdapter, db_id: u16) -> Self {
-        GenericDb { store, db_id }
+        let cache = Box::new(DbWriteCache::with_storage(store));
+        GenericDb {
+            store,
+            db_id,
+            cache,
+        }
     }
 
     /// Get a key value + its common metadata.
     /// We do not care about key type (i.e whether it is a string, list, hash etc)
     pub fn get(
-        &self,
+        &mut self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, CommonValueMetadata)>, SableError> {
         self.get_internal(user_key)
     }
 
     /// Delete key. The key is assumed to be a user key (i.e. not encoded)
-    pub fn delete(&self, user_key: &BytesMut) -> Result<(), SableError> {
+    pub fn delete(&mut self, user_key: &BytesMut, flush_cache: bool) -> Result<(), SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        self.store.delete(&internal_key)
+        self.cache.delete(&internal_key)?;
+        if flush_cache {
+            self.cache.flush()?;
+        }
+        Ok(())
     }
 
     /// Put or Replace key
     /// No locks involved here
     pub fn put(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         value: &BytesMut,
         metadata: &CommonValueMetadata,
-        put_flags: PutFlags,
+        flush_cache: bool,
     ) -> Result<(), SableError> {
-        self.put_internal(user_key, value, metadata, put_flags)
+        self.put_internal(user_key, value, metadata)?;
+        if flush_cache {
+            self.cache.flush()?;
+        }
+        Ok(())
+    }
+
+    pub fn commit(&mut self) -> Result<(), SableError> {
+        self.cache.flush()
     }
 
     /// Return true if user key exists in the db
@@ -59,9 +77,11 @@ impl<'a> GenericDb<'a> {
         self.store.contains(&internal_key)
     }
 
-    /// Each complex data type (List, Hash, Set, ZSet) are encoded with a unique ID
-    /// in a fixed position within the value. This function returns this ID.
-    pub fn get_complex_type_uid(&self, user_key: &BytesMut) -> Result<Option<u64>, SableError> {
+    /// Return the record's common metadata part of the value
+    pub fn value_common_metadata(
+        &mut self,
+        user_key: &BytesMut,
+    ) -> Result<Option<CommonValueMetadata>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         if !self.store.contains(&internal_key)? {
             return Ok(None);
@@ -70,11 +90,14 @@ impl<'a> GenericDb<'a> {
         let Some((_, common_md)) = self.get_internal(user_key)? else {
             return Ok(None);
         };
-        Ok(Some(common_md.uid()))
+        Ok(Some(common_md))
     }
 
     /// Return the expiration properties of a `user_key`
-    pub fn get_expiration(&self, user_key: &BytesMut) -> Result<Option<Expiration>, SableError> {
+    pub fn get_expiration(
+        &mut self,
+        user_key: &BytesMut,
+    ) -> Result<Option<Expiration>, SableError> {
         let Some((_, common_md)) = self.get_internal(user_key)? else {
             return Ok(None);
         };
@@ -83,50 +106,54 @@ impl<'a> GenericDb<'a> {
 
     /// Update the expiration properties of `user_key`
     pub fn put_expiration(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         expiration: &Expiration,
+        flush_cache: bool,
     ) -> Result<(), SableError> {
         let Some((value, mut common_md)) = self.get_internal(user_key)? else {
             return Ok(());
         };
 
         *common_md.expiration_mut() = expiration.clone();
-        self.put_internal(user_key, &value, &common_md, PutFlags::Override)
+        self.put_internal(user_key, &value, &common_md)?;
+        if flush_cache {
+            self.cache.flush()?;
+        }
+        Ok(())
     }
 
     // =========-------------------------------------------
     // Internal helpers
     // =========-------------------------------------------
     fn put_internal(
-        &self,
+        &mut self,
         user_key: &BytesMut,
         value: &BytesMut,
         metadata: &CommonValueMetadata,
-        put_flags: PutFlags,
     ) -> Result<(), SableError> {
         let mut joined_value = BytesMut::with_capacity(value.len() + CommonValueMetadata::SIZE);
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let mut builder = U8ArrayBuilder::with_buffer(&mut joined_value);
         metadata.to_bytes(&mut builder);
         builder.write_bytes(value);
-        self.store.put(&internal_key, &joined_value, put_flags)
+        self.cache.put(&internal_key, joined_value)
     }
 
     /// Get a string key from the underlying storage
     fn get_internal(
-        &self,
+        &mut self,
         user_key: &BytesMut,
     ) -> Result<Option<(BytesMut, CommonValueMetadata)>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
 
-        let raw_value = self.store.get(&internal_key)?;
+        let raw_value = self.cache.get(&internal_key)?;
         if let Some(mut value) = raw_value {
             let mut reader = U8ArrayReader::with_buffer(&value);
             let md = CommonValueMetadata::from_bytes(&mut reader)?;
 
             if md.expiration().is_expired()? {
-                self.store.delete(&internal_key)?;
+                self.cache.delete(&internal_key)?;
                 Ok(None)
             } else {
                 let _ = value.split_to(CommonValueMetadata::SIZE);
@@ -148,6 +175,7 @@ impl<'a> GenericDb<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::PutFlags;
     use crate::{
         metadata::ValueType,
         storage::{StringGetResult, StringsDb},
@@ -172,7 +200,7 @@ mod tests {
     fn test_generic_db() -> Result<(), SableError> {
         let store = open_database("test_generic_db");
         let mut strings_db = StringsDb::with_storage(&store, 0);
-        let generic_db = GenericDb::with_storage(&store, 0);
+        let mut generic_db = GenericDb::with_storage(&store, 0);
 
         // Write 10 entries using `StringDb`
         for i in 1..10 {
@@ -202,8 +230,9 @@ mod tests {
             assert!(md.expiration().ttl_in_seconds()? >= lower_bound);
 
             // write the value back
-            generic_db.put(&key, &value, &md, PutFlags::Override)?;
+            generic_db.put(&key, &value, &md, false)?;
         }
+        generic_db.commit()?;
 
         // Last check: read these 10 entries using `StringDb` and confirm nothing was corrupted
         for i in 1..10 {
@@ -230,7 +259,7 @@ mod tests {
     fn test_updating_expiration() -> Result<(), SableError> {
         let store = open_database("test_updating_expiration");
         let mut strings_db = StringsDb::with_storage(&store, 0);
-        let generic_db = GenericDb::with_storage(&store, 0);
+        let mut generic_db = GenericDb::with_storage(&store, 0);
 
         let key = BytesMut::from("key");
         let value = BytesMut::from("value");
@@ -246,7 +275,7 @@ mod tests {
 
         // update the expiration and confirm that the change persists
         expiration.set_ttl_millis(750).unwrap();
-        generic_db.put_expiration(&key, &expiration).unwrap();
+        generic_db.put_expiration(&key, &expiration, true).unwrap();
 
         let updated_expiration = generic_db.get_expiration(&key)?.unwrap();
         assert_eq!(updated_expiration.ttl_ms, 750);

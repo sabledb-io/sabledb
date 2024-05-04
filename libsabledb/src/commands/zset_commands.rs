@@ -4,8 +4,8 @@ use crate::{
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
-        GenericDb, ZAddFlags, ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult,
-        ZSetGetScoreResult, ZSetLenResult,
+        ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult, ZSetLenResult,
+        ZWriteFlags,
     },
     utils::RespBuilderV2,
     BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
@@ -116,34 +116,34 @@ impl ZSetCommands {
         iter.next(); // zadd
         iter.next(); // key
 
-        let mut flags = ZAddFlags::None;
+        let mut flags = ZWriteFlags::None;
         let mut steps = 2usize;
         for opt in iter.by_ref() {
             let opt_lowercase = BytesMutUtils::to_string(opt).to_lowercase();
             match opt_lowercase.as_str() {
                 "nx" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Nx, true);
+                    flags.set(ZWriteFlags::Nx, true);
                 }
                 "xx" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Xx, true);
+                    flags.set(ZWriteFlags::Xx, true);
                 }
                 "gt" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Gt, true);
+                    flags.set(ZWriteFlags::Gt, true);
                 }
                 "lt" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Lt, true);
+                    flags.set(ZWriteFlags::Lt, true);
                 }
                 "ch" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Ch, true);
+                    flags.set(ZWriteFlags::Ch, true);
                 }
                 "incr" => {
                     steps = steps.saturating_add(1);
-                    flags.set(ZAddFlags::Incr, true);
+                    flags.set(ZWriteFlags::Incr, true);
                 }
                 _ => {
                     break;
@@ -152,7 +152,7 @@ impl ZSetCommands {
         }
 
         // sanity
-        if flags.contains(ZAddFlags::Nx | ZAddFlags::Xx) {
+        if flags.contains(ZWriteFlags::Nx | ZWriteFlags::Xx) {
             builder.error_string(
                 response_buffer,
                 "ERR XX and NX options at the same time are not compatible",
@@ -160,7 +160,7 @@ impl ZSetCommands {
             return Ok(());
         }
 
-        if flags.contains(ZAddFlags::Lt | ZAddFlags::Gt) {
+        if flags.contains(ZWriteFlags::Lt | ZWriteFlags::Gt) {
             builder.error_string(
                 response_buffer,
                 "ERR GT, LT, and/or NX options at the same time are not compatible",
@@ -168,7 +168,8 @@ impl ZSetCommands {
             return Ok(());
         }
 
-        if flags.intersects(ZAddFlags::Nx) && flags.intersects(ZAddFlags::Lt | ZAddFlags::Gt) {
+        if flags.intersects(ZWriteFlags::Nx) && flags.intersects(ZWriteFlags::Lt | ZWriteFlags::Gt)
+        {
             builder.error_string(
                 response_buffer,
                 "ERR GT, LT, and/or NX options at the same time are not compatible",
@@ -211,7 +212,7 @@ impl ZSetCommands {
             return Ok(());
         }
 
-        if flags.intersects(ZAddFlags::Incr) && pairs.len() != 1 {
+        if flags.intersects(ZWriteFlags::Incr) && pairs.len() != 1 {
             builder.error_string(
                 response_buffer,
                 "ERR INCR option supports a single increment-element pair",
@@ -224,7 +225,7 @@ impl ZSetCommands {
 
         let mut items_added = 0usize;
         for (score, member) in pairs {
-            match zset_db.add(key, member, score, &flags)? {
+            match zset_db.add(key, member, score, &flags, false)? {
                 ZSetAddMemberResult::Some(incr) => items_added = items_added.saturating_add(incr),
                 ZSetAddMemberResult::WrongType => {
                     builder.error_string(response_buffer, Strings::WRONGTYPE);
@@ -262,9 +263,9 @@ impl ZSetCommands {
 
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
-        let flags = ZAddFlags::Incr;
+        let flags = ZWriteFlags::Incr;
 
-        match zset_db.add(key, member, incrby, &flags)? {
+        match zset_db.add(key, member, incrby, &flags, false)? {
             ZSetAddMemberResult::WrongType => {
                 builder.error_string(response_buffer, Strings::WRONGTYPE);
             }
@@ -523,10 +524,11 @@ impl ZSetCommands {
         }
 
         let iter = keys_vec.iter();
-        let user_keys: Vec<&BytesMut> = iter.collect();
+        let mut user_keys: Vec<&BytesMut> = iter.collect();
         if user_keys.len() == 1 {
             builder_return_empty_array!(builder, response_buffer);
         }
+        user_keys.push(destination);
 
         let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
 
@@ -534,10 +536,6 @@ impl ZSetCommands {
         let Some(main_key) = iter.next() else {
             builder_return_syntax_error!(builder, response_buffer);
         };
-
-        // Check if this key already exists
-        let generic_db =
-            GenericDb::with_storage(client_state.database(), client_state.database_id());
 
         // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
         let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
@@ -587,10 +585,10 @@ impl ZSetCommands {
         }
 
         // Zdiffstore overrides
-        generic_db.delete(destination)?;
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        zset_db.delete(destination, false)?;
         for (key, score) in result_set.borrow().iter() {
-            zset_db.add(destination, key, *score, &ZAddFlags::None)?;
+            zset_db.add(destination, key, *score, &ZWriteFlags::None, false)?;
         }
         zset_db.commit()?;
         builder.number_usize(response_buffer, result_set.borrow().len());

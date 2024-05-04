@@ -6,7 +6,7 @@ use crate::{
     replication::{
         ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
     },
-    StorageAdapter,
+    Evictor, EvictorContext, EvictorMessage, StorageAdapter,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -39,6 +39,7 @@ pub struct ServerState {
     opts: ServerOptions,
     role_primary: AtomicBool,
     replicator_context: Option<Arc<ReplicatorContext>>,
+    evictor_context: Option<Arc<EvictorContext>>,
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
 }
 
@@ -62,6 +63,7 @@ impl ServerState {
             opts: ServerOptions::default(),
             role_primary: AtomicBool::new(true),
             replicator_context: None,
+            evictor_context: None,
             worker_tx_channels: DashMap::<std::thread::ThreadId, WorkerSender>::new(),
         }
     }
@@ -91,6 +93,11 @@ impl ServerState {
 
     pub fn set_replication_context(mut self, replication_context: ReplicatorContext) -> Self {
         self.replicator_context = Some(Arc::new(replication_context));
+        self
+    }
+
+    pub fn set_evictor_context(mut self, evictor_context: EvictorContext) -> Self {
+        self.evictor_context = Some(Arc::new(evictor_context));
         self
     }
 
@@ -260,6 +267,25 @@ impl ServerState {
         }
         Ok(())
     }
+
+    pub fn shutdown(&self) {
+        if let Some(replicator_context) = &self.replicator_context {
+            tracing::info!("Sending shutdown command to replicator");
+            let _ = replicator_context.send_sync(ReplicationWorkerMessage::Shutdown);
+        }
+        if let Some(evictor_context) = &self.evictor_context {
+            tracing::info!("Sending shutdown command to evictor");
+            let _ = evictor_context.send_sync(EvictorMessage::Shutdown);
+        }
+    }
+
+    pub async fn send_evictor(&self, message: EvictorMessage) -> Result<(), SableError> {
+        if let Some(evictor_context) = &self.evictor_context {
+            tracing::debug!("Sending {:?} command to evictor", message);
+            evictor_context.send(message).await?;
+        }
+        Ok(())
+    }
 }
 
 impl Server {
@@ -269,10 +295,12 @@ impl Server {
         workers_count: usize,
     ) -> Result<Self, SableError> {
         let replicator_context = Replicator::run(opts.clone(), store.clone())?;
+        let evictor_content = Evictor::run(opts.clone(), store.clone())?;
         let state = Arc::new(
             ServerState::new()
                 .set_server_options(opts)
-                .set_replication_context(replicator_context),
+                .set_replication_context(replicator_context)
+                .set_evictor_context(evictor_content),
         );
 
         let worker_manager = WorkerManager::new(workers_count, store.clone(), state.clone())?;
@@ -284,5 +312,9 @@ impl Server {
 
     pub fn get_worker(&self) -> &WorkerContext {
         self.worker_manager.pick()
+    }
+
+    pub fn state(&self) -> Arc<ServerState> {
+        self.state.clone()
     }
 }

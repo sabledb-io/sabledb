@@ -1,4 +1,4 @@
-use crate::{Client, SableError, ServerState, StorageAdapter, Telemetry, TimeUtils};
+use crate::{Client, SableError, ServerState, StorageAdapter, Telemetry, TimeUtils, WorkerHandle};
 use rand::Rng;
 use std::net::TcpStream;
 use std::rc::Rc;
@@ -26,7 +26,6 @@ pub enum BroadcastMessageType {
 
 pub type WorkerSender = tokio::sync::mpsc::Sender<WorkerMessage>;
 pub type WorkerReceiver = tokio::sync::mpsc::Receiver<WorkerMessage>;
-pub type WorkerHandle = tokio::runtime::Handle;
 
 #[allow(dead_code)]
 pub struct Worker {

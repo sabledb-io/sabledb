@@ -34,7 +34,7 @@ impl ShardLocker {
 pub struct LockManager {}
 
 impl LockManager {
-    // obtain execlusive lock on a user key
+    // obtain exclusive lock on a user key
     pub fn lock_user_key_exclusive<'a>(
         user_key: &BytesMut,
         client_state: Rc<ClientState>,
@@ -42,6 +42,30 @@ impl LockManager {
         let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_exclusive(&internal_key, client_state)
+    }
+
+    /// Obtain exclusive lock on a user key, without conditions.
+    /// other methods in this class will check for various variables
+    /// like whether or not we have an open transaction and in which state.
+    /// This function skip these checks
+    pub fn lock_user_key_exclusive_unconditionally<'a>(
+        user_key: &BytesMut,
+        db_id: u16,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
+        Self::lock_internal_key_exclusive_unconditionally(&internal_key)
+    }
+
+    /// Obtain exclusive lock on a user key, without conditions.
+    /// other methods in this class will check for various variables
+    /// like whether or not we have an open transaction and in which state.
+    /// This function skip these checks
+    pub fn lock_user_key_shared_unconditionally<'a>(
+        user_key: &BytesMut,
+        db_id: u16,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
+        Self::lock_internal_key_shared_unconditionally(&internal_key)
     }
 
     // obtain a shared lock on a user key
@@ -335,6 +359,46 @@ impl LockManager {
         Ok(ShardLockGuard {
             write_locks: Some(write_locks),
             read_locks: None,
+        })
+    }
+
+    fn lock_internal_key_exclusive_unconditionally<'a>(
+        user_key: &BytesMut,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(1);
+        let slot = calculate_slot(user_key);
+        write_locks.push(
+            MULTI_LOCK
+                .locks
+                .get(slot as usize)
+                .expect("lock")
+                .write()
+                .expect("poisoned mutex"),
+        );
+
+        Ok(ShardLockGuard {
+            write_locks: Some(write_locks),
+            read_locks: None,
+        })
+    }
+
+    fn lock_internal_key_shared_unconditionally<'a>(
+        user_key: &BytesMut,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let mut read_locks = Vec::<RwLockReadGuard<'a, u16>>::with_capacity(1);
+        let slot = calculate_slot(user_key);
+        read_locks.push(
+            MULTI_LOCK
+                .locks
+                .get(slot as usize)
+                .expect("lock")
+                .read()
+                .expect("poisoned mutex"),
+        );
+
+        Ok(ShardLockGuard {
+            write_locks: None,
+            read_locks: Some(read_locks),
         })
     }
 }

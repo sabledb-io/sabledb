@@ -462,7 +462,7 @@ impl StorageAdapter {
     /// Generated ID that is guaranteed to be unique.
     /// the returned value is always positive, greater than `0`!
     pub fn generate_id(&self) -> u64 {
-        MONOTONIC_COUNTER.fetch_add(1, Ordering::SeqCst)
+        MONOTONIC_COUNTER.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Apply batch update to the database

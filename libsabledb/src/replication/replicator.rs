@@ -66,6 +66,14 @@ impl ReplicatorContext {
         let _ = self.worker_send_channel.send(message).await;
         Ok(())
     }
+
+    /// Send message to the worker (non async)
+    pub fn send_sync(&self, message: ReplicationWorkerMessage) -> Result<(), SableError> {
+        if let Err(e) = self.worker_send_channel.try_send(message) {
+            return Err(SableError::OtherError(format!("{:?}", e)));
+        }
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
