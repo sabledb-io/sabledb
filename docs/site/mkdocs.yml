@@ -1,8 +1,0 @@
-site_name: SableDb
-site_url: https://sabledb.io
-repo_url: https://github.com/sabledb-io/sabledb
-repo_name: GitHub
-edit_uri: edit/main/docs/site
-
-nav:
-    - About: /README.md
