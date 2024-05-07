@@ -1,0 +1,13 @@
+@startuml
+title Replication: Full Sync
+Replica -> Primary: Send changes since transaction N
+Primary -> Replica: Failed to fetch changes since transaction N
+Replica -> Primary: Send the entire database
+Primary --> Primary: Create Db Checkpoint + Write last transaction ID
+Primary --> Primary: Archive the checkpoint
+Primary -> Replica: Send the archive file
+Replica --> Replica: Lock all slots for read-only mode
+Replica --> Replica: Extract the archive and replace the database files
+Replica --> Replica: Read last transaction ID as the next sequence
+Replica -> Primary: Send changes since transaction N
+@enduml

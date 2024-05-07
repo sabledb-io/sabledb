@@ -5,4 +5,32 @@ repo_name: GitHub
 edit_uri: edit/main/docs/site
 
 nav:
-    - About: /README.md
+    - High Level Design: design/overview.md
+    - Replication: design/replication.md
+
+theme:
+  name: material
+  features:
+    - navigation.expand
+    - navigation.sections
+    - content.code.copy
+  palette:
+    scheme: default
+    primary: indigo
+  highlightjs: true
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+markdown_extensions:
+  - pymdownx.keys
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra:
+  generator: false

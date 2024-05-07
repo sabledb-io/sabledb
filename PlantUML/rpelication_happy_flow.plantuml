@@ -1,0 +1,7 @@
+@startuml
+title Replication: Happy flow
+Replica -> Primary: Send changes since transaction N
+Primary -> Primary: Read all changes from N -> current
+Primary -> Primary: Concatenate the changes into N chunks,\neach chunk has a maximum of `single_update_buffer_size`\nbytes in size
+Primary -> Replica: Send chunks + Next change sequence
+@enduml
