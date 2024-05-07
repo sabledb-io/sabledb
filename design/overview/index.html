@@ -412,7 +412,7 @@ The current implementation of <code>SableDb</code> uses <code>RocksDb</code> as 
 the the storage itself is thread-safe, <code>SableDb</code> still needs to provide atomicity for multiple database access (consider the <code>ValKey</code>'s
 <code>getset</code> command which requires to perform both <code>get</code> and <code>set</code> in a single operation) - <code>SableDb</code> achieves this by using a shard locking (more details on this later).</p>
 <p>By default, <code>SableDb</code> listens on port <code>6379</code> for incoming connections. A newly arrived connection is then assigned
-to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> (A task, is tokio's implementation for [green threads<a href="https://en.wikipedia.org/wiki/Green_thread">3</a>)
+to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> (A task, is tokio's implementation for <a href="https://en.wikipedia.org/wiki/Green_thread">green threads</a>)
 which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two: </p>
 <ul>
 <li>Reader end</li>
