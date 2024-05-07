@@ -430,11 +430,11 @@ which performs the TLS handshake (if dictated by the configuration) and then spl
 <p>The writer task input are the commands read and constructed by the reader task.</p>
 <p>Once a command is received, the writer task invokes the proper handler for that command (if the command it not supported
 an error message is sent back to the client). </p>
-<p>As an output, the handler of the command can either build a response buffer to send over to the client or send the response directly
-The decision whether to reply directly or propagate the response to the caller task is done on per command basis
-For example, the <code>hgetall</code> might generate a huge output (depends on the number of fields in the hash and their size)
+<p>As an output, the handler of the command can either build a response buffer to send over to the client or send the response directly.</p>
+<p>The decision whether to reply directly or propagate the response to the caller task is done on per command basis.</p>
+<p>For example, the <code>hgetall</code> command might generate a huge output (depends on the number of fields in the hash and their size)
 so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building 
-a complete response in memory (which can take Gigabytes of RAM) and then write it at once.</p>
+a complete response in memory (which can take Gigabytes of RAM) and only then write it to the client.</p>
 
 
 
