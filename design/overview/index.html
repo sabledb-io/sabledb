@@ -271,10 +271,27 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptor-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptor thread
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls-handshake" class="md-nav__link">
+    <span class="md-ellipsis">
+      TLS handshake
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-reader-task" class="md-nav__link">
     <span class="md-ellipsis">
       The reader task
@@ -282,11 +299,30 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#the-writer-task" class="md-nav__link">
     <span class="md-ellipsis">
       The writer task
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The writer task">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#send-a-response-to-the-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      Send a response to the client
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-the-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block the client
     </span>
   </a>
   
@@ -356,10 +392,27 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptor-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptor thread
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls-handshake" class="md-nav__link">
+    <span class="md-ellipsis">
+      TLS handshake
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-reader-task" class="md-nav__link">
     <span class="md-ellipsis">
       The reader task
@@ -367,11 +420,30 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#the-writer-task" class="md-nav__link">
     <span class="md-ellipsis">
       The writer task
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The writer task">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#send-a-response-to-the-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      Send a response to the client
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-the-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block the client
     </span>
   </a>
   
@@ -403,7 +475,7 @@
   <h1>High Level Design</h1>
 
 <h2 id="overview">Overview</h2>
-<p>This chapter covers the overall design choices made for building <code>SableDb</code>.</p>
+<p>This chapter covers the overall design choices made when building <code>SableDb</code>.</p>
 <p>The networking layer of SableDb uses a lock free design. i.e. once a connection is assigned to a worker thread
 it does not interact with any other threads or shared data structures.</p>
 <p>Having said that, there is one obvious "point" that requires locking: the storage. 
@@ -412,29 +484,57 @@ The current implementation of <code>SableDb</code> uses <code>RocksDb</code> as 
 the the storage itself is thread-safe, <code>SableDb</code> still needs to provide atomicity for multiple database access (consider the <code>ValKey</code>'s
 <code>getset</code> command which requires to perform both <code>get</code> and <code>set</code> in a single operation) - <code>SableDb</code> achieves this by using a shard locking (more details on this later).</p>
 <p>By default, <code>SableDb</code> listens on port <code>6379</code> for incoming connections. A newly arrived connection is then assigned
-to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> (A task, is tokio's implementation for <a href="https://en.wikipedia.org/wiki/Green_thread">green threads</a>)
+to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> 
+(A task, is tokio's implementation for <a href="https://en.wikipedia.org/wiki/Green_thread">green threads</a>)
 which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two: </p>
 <ul>
 <li>Reader end</li>
 <li>Writer end</li>
 </ul>
-<p>Each end of the stream is then passed into a dedicated <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> for handling</p>
-<h3 id="the-reader-task">The reader task</h3>
+<p>Each end of the stream is then passed into a newly spawned <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> for handling</p>
+<p>Below is a diagram shows the main components within <code>SableDb</code>:</p>
+<p><img alt="main-components" src="../../images/main-components.svg" /></p>
+<h2 id="acceptor-thread">Acceptor thread</h2>
+<p>The main thread of <code>SableDb</code> - after spawning the worker threads - is used as the TCP acceptor thread.
+Unless specified otherwise, <code>SableDb</code> listens on port 6379. Every incoming connection is moved to a thread
+for later handling so the acceptor can accept new connections</p>
+<h2 id="tls-handshake">TLS handshake</h2>
+<p>The worker thread moves the newly incoming connection to a task which does the following:</p>
+<ul>
+<li>If TLS is enabled by configuration, performs the TLS handshake (asynchronously) and split the connection into two (receiver and writer ends)</li>
+<li>If TLS is not needed, it just splits the connection into two (receiver and writer ends)</li>
+</ul>
+<p>The TLS handshake task spawns the reader and writer tasks and moves two proper ends of the connection to each of the task.
+A tokio channel is then established between the two tasks for passing data from the reader -&gt; writer task</p>
+<h2 id="the-reader-task">The reader task</h2>
 <p>The reader task is responsible for:</p>
 <ul>
-<li>Reading bytes from the stream </li>
-<li>Parsing the incoming message and forming a <code>RedisCommand</code> structure</li>
-<li>Once a full command is read from the socket, it is moved to the writer task</li>
+<li>Reading bytes from the stream</li>
+<li>Parsing the incoming message and constructing a <code>RedisCommand</code> structure</li>
+<li>Once a full command is read from the socket, it is moved to the writer task for processing</li>
 </ul>
-<h3 id="the-writer-task">The writer task</h3>
+<h2 id="the-writer-task">The writer task</h2>
 <p>The writer task input are the commands read and constructed by the reader task.</p>
 <p>Once a command is received, the writer task invokes the proper handler for that command (if the command it not supported
 an error message is sent back to the client). </p>
-<p>As an output, the handler of the command can either build a response buffer to send over to the client or send the response directly.</p>
-<p>The decision whether to reply directly or propagate the response to the caller task is done on per command basis.</p>
+<p>The command handler, can return one of 2 possible actions:</p>
+<h3 id="send-a-response-to-the-client">Send a response to the client</h3>
+<p>There are 2 ways that the writer task can send back a response to the client:</p>
+<ul>
+<li>The command handler returns the complete response (e.g. <code>+OK\r\n</code>)</li>
+<li>The command handler writes the response directly to the socket</li>
+</ul>
+<p>The decision whether to reply directly or propagate the response to the caller task is done on per command basis.
+The idea is to prevent huge memory spikes where possible.</p>
 <p>For example, the <code>hgetall</code> command might generate a huge output (depends on the number of fields in the hash and their size)
 so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building 
 a complete response in memory (which can take Gigabytes of RAM) and only then write it to the client.</p>
+<h3 id="block-the-client">Block the client</h3>
+<p>When a client executes a blocking call on a resource that is not yet available, the writer task is suspended until:</p>
+<ul>
+<li>Timeout occurrs (most blocking commands allow to specify timeout duration)</li>
+<li>The resource is available</li>
+</ul>
 
 
 
