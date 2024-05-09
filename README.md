@@ -181,6 +181,7 @@ and visit this page again in couple of days
 | zrangebyscore | ✓ |✓ | |
 | zinter | ✓ |✓ | |
 | zintercard | ✓ |✓ | |
+| zinterstore | ✓ |✓ | |
 
 ### Generic commands
 

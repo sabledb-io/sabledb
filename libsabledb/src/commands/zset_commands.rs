@@ -86,6 +86,9 @@ impl ZSetCommands {
             RedisCommandName::Zintercard => {
                 Self::zintercard(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Zinterstore => {
+                Self::zinterstore(client_state, command, &mut response_buffer).await?;
+            }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
@@ -414,7 +417,7 @@ impl ZSetCommands {
         builder_return_number!(builder, response_buffer, matched_entries);
     }
 
-    /// `ZDIFF numkeys key [key ...]`
+    /// `ZDIFF numkeys key [key ...] [WITHSCORES]`
     /// Computes the difference between the first and all successive input sorted sets
     async fn zdiff(
         client_state: Rc<ClientState>,
@@ -659,6 +662,10 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
+        let user_keys = Self::keys_to_lock(command.clone(), 2, numkeys, None);
+        let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
         let result_set = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
                 builder_return_syntax_error!(builder, response_buffer);
@@ -716,6 +723,10 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
+        let user_keys = Self::keys_to_lock(command.clone(), 2, numkeys, None);
+        let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
         let result = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
                 builder_return_syntax_error!(builder, response_buffer);
@@ -732,7 +743,7 @@ impl ZSetCommands {
             IntersectError::Ok(result) => result,
         };
 
-        // do we want scores?
+        // Do we have a limit?
         let limit = match Self::get_limit(command.clone()) {
             GetLimitResult::SyntaxError => {
                 builder_return_syntax_error!(builder, response_buffer);
@@ -749,6 +760,58 @@ impl ZSetCommands {
                 result.borrow().len()
             },
         );
+        Ok(())
+    }
+
+    /// `ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE <SUM | MIN | MAX>]`
+    /// This command is similar to ZINTER, but instead of returning the result set, it returns just the cardinality of the result
+    async fn zinterstore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let builder = RespBuilderV2::default();
+        let destination = command_arg_at!(command, 1);
+        let numkeys = command_arg_at!(command, 2);
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        if numkeys == 0 {
+            builder_return_at_least_1_key!(builder, response_buffer, command);
+        }
+
+        let user_keys = Self::keys_to_lock(command.clone(), 3, numkeys, Some(destination));
+        let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
+
+        // Lock the database. The lock must be done here (it has to do with how txn are working)
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
+        let result = match Self::intersect(client_state.clone(), command.clone(), 3, numkeys)? {
+            IntersectError::SyntaxError => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            IntersectError::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            IntersectError::EmptyArray => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            IntersectError::ArgCount => {
+                builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+            }
+            IntersectError::Ok(result) => result,
+        };
+
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        zset_db.delete(destination, false)?;
+        for (key, score) in result.borrow().iter() {
+            zset_db.add(destination, key, *score, &ZWriteFlags::None, false)?;
+        }
+        zset_db.commit()?;
+        builder.number_usize(response_buffer, result.borrow().len());
         Ok(())
     }
 
@@ -1009,6 +1072,36 @@ impl ZSetCommands {
         Ok(IterateResult::Ok)
     }
 
+    /// Return the keys to lock
+    fn keys_to_lock(
+        command: Rc<RedisCommand>,
+        first_key_pos: usize,
+        numkeys: usize,
+        destination: Option<&BytesMut>,
+    ) -> Vec<BytesMut> {
+        let mut iter = command.args_vec().iter();
+        let mut first_key_pos = first_key_pos;
+
+        while first_key_pos > 0 {
+            iter.next();
+            first_key_pos = first_key_pos.saturating_sub(1);
+        }
+
+        let mut keys = Vec::<BytesMut>::with_capacity(numkeys + 1);
+        for _ in 0..numkeys {
+            if let Some(key) = iter.next() {
+                keys.push(key.clone());
+            } else {
+                break;
+            }
+        }
+
+        if let Some(destination) = destination {
+            keys.push(destination.clone());
+        }
+        keys
+    }
+
     /// Common function for parsing command line arguments that uses the following format:
     /// <CMD> .. numkeys <key1> ... <keyN> ...
     fn intersect(
@@ -1032,22 +1125,27 @@ impl ZSetCommands {
         parsed_args.insert("withscores", KeyWord::new("withscores", 0));
         parsed_args.insert("limit", KeyWord::new("limit", 1));
 
-        if let Err(msg) =
-            Self::parse_optional_args(command.clone(), numkeys.saturating_add(2), &mut parsed_args)
-        {
-            tracing::debug!("failed to parse {:?}. {}", command.args_vec(), msg);
+        if let Err(msg) = Self::parse_optional_args(
+            command.clone(),
+            numkeys.saturating_add(first_key_pos),
+            &mut parsed_args,
+        ) {
+            tracing::debug!("failed to parse command: {:?}. {}", command.args_vec(), msg);
             return Ok(IntersectError::SyntaxError);
         }
 
-        // do we want scores?
+        // Determine the score aggreation method
         let agg_method = Self::aggregation_method(&parsed_args);
 
         if !Self::assign_weight(&parsed_args, &mut input_keys)? {
+            tracing::debug!(
+                "failed to assign weights for command: {:?}",
+                command.args_vec()
+            );
             return Ok(IntersectError::SyntaxError);
         }
 
         let keys_to_lock: Vec<&BytesMut> = input_keys.iter().map(|(k, _w)| (*k)).collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone())?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         // For best performance, locate the smallest set. This will be our base working set
@@ -1553,6 +1651,25 @@ mod test {
         ("zintercard 2 tanks_1 no_such_set LIMIT", "-ERR syntax error\r\n"),
         ("zintercard 2 tanks_1 no_such_set LIMIT 1", ":0\r\n"),
     ]; "test_zintercard")]
+    #[test_case(vec![
+        ("zadd tanks_1 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("zadd tanks_2 1 rein 1 roadhog 1 doomfist 5 mei", ":4\r\n"),
+        ("zadd tanks_3 2 orisa 3 ram", ":2\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3", ":0\r\n"),
+        ("zadd tanks_3 1 rein", ":1\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3", ":1\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n3.00\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5", "-ERR syntax error\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 1 2 3", ":1\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n6.00\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5", ":1\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$5\r\n15.00\r\n"),
+        ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 AGGREGATE MIN", ":1\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
+        ("zinterstore 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 AGGREGATE MIN", "-ERR value is not an integer or out of range\r\n"),
+        ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 5 AGGREGATE SUM", "-ERR syntax error\r\n"),
+        ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 AGGREGATE SUM", ":0\r\n"),
+    ]; "test_zinterstore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

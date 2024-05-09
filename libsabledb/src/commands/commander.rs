@@ -121,6 +121,7 @@ pub enum RedisCommandName {
     Zdiffstore,
     Zinter,
     Zintercard,
+    Zinterstore,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -939,6 +940,12 @@ impl Default for CommandsManager {
                         .with_first_key(0)
                         .with_last_key(0)
                         .with_step(0),
+                ),
+                (
+                    "zinterstore",
+                    CommandMetadata::new(RedisCommandName::Zinterstore)
+                        .write()
+                        .with_arity(-4),
                 ),
             ]),
         }
