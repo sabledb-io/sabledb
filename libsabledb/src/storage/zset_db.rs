@@ -258,7 +258,7 @@ impl<'a> ZSetDb<'a> {
         let mut smallest_set_index = 0usize;
         let mut curidx = 0usize;
         for k in user_keys {
-            let zset_length = match self.len(*k)? {
+            let zset_length = match self.len(k)? {
                 ZSetLenResult::WrongType => return Ok(ZSetGetSmallestResult::WrongType),
                 ZSetLenResult::Some(zset_length) => zset_length,
             };

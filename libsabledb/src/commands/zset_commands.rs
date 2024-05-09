@@ -66,8 +66,7 @@ impl ZSetCommands {
                 Self::zdiffstore(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zinter => {
-                Self::zinter(client_state, command, tx).await?;
-                return Ok(HandleCommandResult::ResponseSent);
+                Self::zinter(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -628,21 +627,22 @@ impl ZSetCommands {
     async fn zinter(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
-        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
-        check_args_count_writer!(command, 3, writer);
+        check_args_count!(command, 3, response_buffer);
+
+        let builder = RespBuilderV2::default();
         let numkeys = command_arg_at!(command, 1);
         let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
-            writer_return_value_not_int!(writer);
+            builder_return_value_not_int!(builder, response_buffer);
         };
 
         if numkeys == 0 {
-            writer_return_at_least_1_key!(writer, command);
+            builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
         // Now that we know the keys count, we can further strict the expected arguments requirement
-        check_args_count_writer!(command, (2usize + numkeys), writer);
+        check_args_count!(command, (2usize + numkeys), response_buffer);
         let in_keys = &command.args_vec()[2usize..2usize.saturating_add(numkeys)];
         let mut input_keys: Vec<(&BytesMut, usize)> = in_keys.iter().map(|k| (k, 1)).collect();
 
@@ -656,14 +656,14 @@ impl ZSetCommands {
             Self::parse_optional_args(command.clone(), numkeys.saturating_add(2), &mut parsed_args)
         {
             tracing::debug!("failed to parse {:?}. {}", command.args_vec(), msg);
-            writer_return_syntax_error!(writer);
+            builder_return_syntax_error!(builder, response_buffer);
         }
 
         // do we want scores?
         let with_scores = Self::withscores(&parsed_args);
         let agg_method = Self::aggregation_method(&parsed_args);
         if !Self::assign_weight(&parsed_args, &mut input_keys)? {
-            writer_return_syntax_error!(writer);
+            builder_return_syntax_error!(builder, response_buffer);
         }
 
         let keys_to_lock: Vec<&BytesMut> = input_keys.iter().map(|(k, _w)| (*k)).collect();
@@ -674,17 +674,17 @@ impl ZSetCommands {
         // everything is compared against this set
         let smallest_set_idx = match zset_db.find_smallest(&keys_to_lock)? {
             ZSetGetSmallestResult::None => {
-                writer_return_empty_array!(writer);
+                builder_return_empty_array!(builder, response_buffer);
             }
             ZSetGetSmallestResult::WrongType => {
-                writer_return_wrong_type!(writer);
+                builder_return_wrong_type!(builder, response_buffer);
             }
             ZSetGetSmallestResult::Some(idx) => idx,
         };
 
         let Some((smallest_set_name, smallest_set_weight)) = input_keys.get(smallest_set_idx)
         else {
-            writer_return_empty_array!(writer);
+            builder_return_empty_array!(builder, response_buffer);
         };
 
         // Read the smalleset set items - and store them as the result set (we use BTreeMap to produce a sorted output)
@@ -752,23 +752,21 @@ impl ZSetCommands {
         }
 
         // Finally, generate the output
-        writer
-            .add_array_len(if with_scores {
+        builder.add_array_len(
+            response_buffer,
+            if with_scores {
                 result_set.borrow().len() * 2usize
             } else {
                 result_set.borrow().len()
-            })
-            .await?;
+            },
+        );
 
         for (member, score) in result_set.borrow().iter() {
-            writer.add_bulk_string(member).await?;
+            builder.add_bulk_string(response_buffer, member);
             if with_scores {
-                writer
-                    .add_bulk_string(format!("{:.2}", score).as_bytes())
-                    .await?;
+                builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes())
             }
         }
-        writer.flush().await?;
         Ok(())
     }
 
@@ -1080,7 +1078,7 @@ impl ZSetCommands {
     /// Return the WITHSCORES values from a parsed arguments
     fn assign_weight(
         parsed_args: &HashMap<&'static str, KeyWord>,
-        keys: &mut Vec<(&BytesMut, usize)>,
+        keys: &mut [(&BytesMut, usize)],
     ) -> Result<bool, SableError> {
         let Some(weights) = parsed_args.get("weights") else {
             return Ok(true);
