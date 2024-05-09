@@ -1402,6 +1402,8 @@ mod test {
         ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MIN", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
         ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MAX", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
         ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "*2\r\n$4\r\nrein\r\n$5\r\n15.00\r\n"),
+        ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "-ERR syntax error\r\n"),
+        ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 WITHSCORES AGGREGATE SUM", "*0\r\n"),
     ]; "test_zinter")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
