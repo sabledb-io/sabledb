@@ -36,6 +36,21 @@ enum AggregationMethod {
     Max,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum IntersectError {
+    ArgCount,
+    SyntaxError,
+    EmptyArray,
+    WrongType,
+    Ok(Rc<RefCell<BTreeMap<BytesMut, f64>>>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum GetLimitResult {
+    Limit(usize),
+    SyntaxError,
+}
+
 pub struct ZSetCommands {}
 
 #[allow(dead_code)]
@@ -67,6 +82,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zinter => {
                 Self::zinter(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zintercard => {
+                Self::zintercard(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -641,115 +659,24 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
-        // Now that we know the keys count, we can further strict the expected arguments requirement
-        check_args_count!(command, (2usize + numkeys), response_buffer);
-        let in_keys = &command.args_vec()[2usize..2usize.saturating_add(numkeys)];
-        let mut input_keys: Vec<(&BytesMut, usize)> = in_keys.iter().map(|k| (k, 1)).collect();
-
-        // Parse the remaining command args
-        let mut parsed_args = HashMap::<&'static str, KeyWord>::new();
-        parsed_args.insert("weights", KeyWord::new("weights", input_keys.len()));
-        parsed_args.insert("aggregate", KeyWord::new("aggregate", 1));
-        parsed_args.insert("withscores", KeyWord::new("withscores", 0));
-
-        if let Err(msg) =
-            Self::parse_optional_args(command.clone(), numkeys.saturating_add(2), &mut parsed_args)
-        {
-            tracing::debug!("failed to parse {:?}. {}", command.args_vec(), msg);
-            builder_return_syntax_error!(builder, response_buffer);
-        }
-
-        // do we want scores?
-        let with_scores = Self::withscores(&parsed_args);
-        let agg_method = Self::aggregation_method(&parsed_args);
-        if !Self::assign_weight(&parsed_args, &mut input_keys)? {
-            builder_return_syntax_error!(builder, response_buffer);
-        }
-
-        let keys_to_lock: Vec<&BytesMut> = input_keys.iter().map(|(k, _w)| (*k)).collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone())?;
-        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
-
-        // For best performance, locate the smallest set. This will be our base working set
-        // everything is compared against this set
-        let smallest_set_idx = match zset_db.find_smallest(&keys_to_lock)? {
-            ZSetGetSmallestResult::None => {
-                builder_return_empty_array!(builder, response_buffer);
+        let result_set = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
+            IntersectError::SyntaxError => {
+                builder_return_syntax_error!(builder, response_buffer);
             }
-            ZSetGetSmallestResult::WrongType => {
+            IntersectError::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            ZSetGetSmallestResult::Some(idx) => idx,
+            IntersectError::EmptyArray => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            IntersectError::ArgCount => {
+                builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+            }
+            IntersectError::Ok(result) => result,
         };
 
-        let Some((smallest_set_name, smallest_set_weight)) = input_keys.get(smallest_set_idx)
-        else {
-            builder_return_empty_array!(builder, response_buffer);
-        };
-
-        // Read the smalleset set items - and store them as the result set (we use BTreeMap to produce a sorted output)
-        let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
-        let result_set_clone = result_set.clone();
-        let _ = Self::iterate_by_member_and_apply(
-            client_state.clone(),
-            smallest_set_name,
-            move |member, score| {
-                result_set_clone
-                    .borrow_mut()
-                    .insert(BytesMut::from(member), *smallest_set_weight as f64 * score);
-                Ok(IterateCallbackResult::Continue)
-            },
-        )?;
-
-        // Read the remainder of the sets, while we keep intersecting with the result set
-        for (set_name, weight) in &input_keys {
-            if set_name.eq(smallest_set_name) {
-                continue;
-            }
-
-            let result_set_clone = result_set.clone();
-            if result_set_clone.borrow().is_empty() {
-                break;
-            }
-
-            // Keep track of items that were not visited in the result set during this iteration
-            // these items, should be removed from the final result set
-            // We start by assuming that all items were NOT visited
-            let not_visited: HashSet<BytesMut> = result_set_clone
-                .borrow()
-                .iter()
-                .map(|(k, _w)| k.clone())
-                .collect();
-
-            let not_visited = Rc::new(RefCell::new(not_visited));
-            let not_visited_clone = not_visited.clone();
-
-            // read the current set
-            let _ = Self::iterate_by_member_and_apply(
-                client_state.clone(),
-                set_name,
-                move |member, score| {
-                    // first thing we do: adjust this item score by the multiplier
-                    let score = *weight as f64 * score;
-                    // Check to see if this member exists in the result set
-                    let mut res_set_mut = result_set_clone.borrow_mut();
-                    if let Some(cur_member_score) = res_set_mut.get(member) {
-                        // Aggregate the score based on the given method (SUM, MAX, MIN)
-                        let new_score = Self::agg_func(agg_method, score, *cur_member_score);
-                        // Finally, update the result set
-                        res_set_mut.insert(BytesMut::from(member), new_score);
-                        // remove "member" from the "not_visited" set
-                        not_visited_clone.borrow_mut().remove(member);
-                    }
-                    Ok(IterateCallbackResult::Continue)
-                },
-            )?;
-
-            // All items that still exist in the "not_visited" set, should be removed from the final output
-            for member in not_visited.borrow().iter() {
-                result_set.borrow_mut().remove(member);
-            }
-        }
+        // do we want scores?
+        let with_scores = Self::withscores(command.clone());
 
         // Finally, generate the output
         builder.add_array_len(
@@ -767,6 +694,61 @@ impl ZSetCommands {
                 builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes())
             }
         }
+        Ok(())
+    }
+
+    /// `ZINTERCARD numkeys key [key ...] [LIMIT limit]`
+    /// This command is similar to ZINTER, but instead of returning the result set, it returns just the cardinality of the result
+    async fn zintercard(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let builder = RespBuilderV2::default();
+        let numkeys = command_arg_at!(command, 1);
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        if numkeys == 0 {
+            builder_return_at_least_1_key!(builder, response_buffer, command);
+        }
+
+        let result = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
+            IntersectError::SyntaxError => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            IntersectError::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            IntersectError::EmptyArray => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            IntersectError::ArgCount => {
+                builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+            }
+            IntersectError::Ok(result) => result,
+        };
+
+        // do we want scores?
+        let limit = match Self::get_limit(command.clone()) {
+            GetLimitResult::SyntaxError => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            GetLimitResult::Limit(limit) => limit,
+        };
+
+        // Finally, write the result
+        builder.number_usize(
+            response_buffer,
+            if result.borrow().len() > limit {
+                limit
+            } else {
+                result.borrow().len()
+            },
+        );
         Ok(())
     }
 
@@ -1027,6 +1009,130 @@ impl ZSetCommands {
         Ok(IterateResult::Ok)
     }
 
+    /// Common function for parsing command line arguments that uses the following format:
+    /// <CMD> .. numkeys <key1> ... <keyN> ...
+    fn intersect(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        first_key_pos: usize,
+        numkeys: usize,
+    ) -> Result<IntersectError, SableError> {
+        // Now that we know the keys count, we can further strict the expected arguments requirement
+        if !command.expect_args_count(first_key_pos + numkeys) {
+            return Ok(IntersectError::ArgCount);
+        }
+
+        let in_keys = &command.args_vec()[first_key_pos..first_key_pos.saturating_add(numkeys)];
+        let mut input_keys: Vec<(&BytesMut, usize)> = in_keys.iter().map(|k| (k, 1)).collect();
+
+        // Parse the remaining command args
+        let mut parsed_args = HashMap::<&'static str, KeyWord>::new();
+        parsed_args.insert("weights", KeyWord::new("weights", input_keys.len()));
+        parsed_args.insert("aggregate", KeyWord::new("aggregate", 1));
+        parsed_args.insert("withscores", KeyWord::new("withscores", 0));
+        parsed_args.insert("limit", KeyWord::new("limit", 1));
+
+        if let Err(msg) =
+            Self::parse_optional_args(command.clone(), numkeys.saturating_add(2), &mut parsed_args)
+        {
+            tracing::debug!("failed to parse {:?}. {}", command.args_vec(), msg);
+            return Ok(IntersectError::SyntaxError);
+        }
+
+        // do we want scores?
+        let agg_method = Self::aggregation_method(&parsed_args);
+
+        if !Self::assign_weight(&parsed_args, &mut input_keys)? {
+            return Ok(IntersectError::SyntaxError);
+        }
+
+        let keys_to_lock: Vec<&BytesMut> = input_keys.iter().map(|(k, _w)| (*k)).collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        // For best performance, locate the smallest set. This will be our base working set
+        // everything is compared against this set
+        let smallest_set_idx = match zset_db.find_smallest(&keys_to_lock)? {
+            ZSetGetSmallestResult::None => {
+                return Ok(IntersectError::EmptyArray);
+            }
+            ZSetGetSmallestResult::WrongType => {
+                return Ok(IntersectError::WrongType);
+            }
+            ZSetGetSmallestResult::Some(idx) => idx,
+        };
+
+        let Some((smallest_set_name, smallest_set_weight)) = input_keys.get(smallest_set_idx)
+        else {
+            return Ok(IntersectError::EmptyArray);
+        };
+
+        // Read the smalleset set items - and store them as the result set (we use BTreeMap to produce a sorted output)
+        let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
+        let result_set_clone = result_set.clone();
+        let _ = Self::iterate_by_member_and_apply(
+            client_state.clone(),
+            smallest_set_name,
+            move |member, score| {
+                result_set_clone
+                    .borrow_mut()
+                    .insert(BytesMut::from(member), *smallest_set_weight as f64 * score);
+                Ok(IterateCallbackResult::Continue)
+            },
+        )?;
+
+        // Read the remainder of the sets, while we keep intersecting with the result set
+        for (set_name, weight) in &input_keys {
+            if set_name.eq(smallest_set_name) {
+                continue;
+            }
+
+            let result_set_clone = result_set.clone();
+            if result_set_clone.borrow().is_empty() {
+                break;
+            }
+
+            // Keep track of items that were not visited in the result set during this iteration
+            // these items, should be removed from the final result set
+            // We start by assuming that all items were NOT visited
+            let not_visited: HashSet<BytesMut> = result_set_clone
+                .borrow()
+                .iter()
+                .map(|(k, _w)| k.clone())
+                .collect();
+
+            let not_visited = Rc::new(RefCell::new(not_visited));
+            let not_visited_clone = not_visited.clone();
+
+            // read the current set
+            let _ = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                set_name,
+                move |member, score| {
+                    // first thing we do: adjust this item score by the multiplier
+                    let score = *weight as f64 * score;
+                    // Check to see if this member exists in the result set
+                    let mut res_set_mut = result_set_clone.borrow_mut();
+                    if let Some(cur_member_score) = res_set_mut.get(member) {
+                        // Aggregate the score based on the given method (SUM, MAX, MIN)
+                        let new_score = Self::agg_func(agg_method, score, *cur_member_score);
+                        // Finally, update the result set
+                        res_set_mut.insert(BytesMut::from(member), new_score);
+                        // remove "member" from the "not_visited" set
+                        not_visited_clone.borrow_mut().remove(member);
+                    }
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            // All items that still exist in the "not_visited" set, should be removed from the final output
+            for member in not_visited.borrow().iter() {
+                result_set.borrow_mut().remove(member);
+            }
+        }
+        Ok(IntersectError::Ok(result_set))
+    }
+
     // Perform aggregation on `score1` and `score2` based on the requested method
     fn agg_func(method: AggregationMethod, score1: f64, score2: f64) -> f64 {
         match method {
@@ -1066,13 +1172,36 @@ impl ZSetCommands {
         }
     }
 
-    /// Return the WITHSCORES values from a parsed arguments
-    fn withscores(parsed_args: &HashMap<&'static str, KeyWord>) -> bool {
-        if let Some(with_scores) = parsed_args.get("withscores") {
-            with_scores.is_found()
-        } else {
-            false
+    /// Return the LIMIT <value> from the command line
+    fn get_limit(command: Rc<RedisCommand>) -> GetLimitResult {
+        let mut iter = command.args_vec().iter();
+        while let Some(arg) = iter.next() {
+            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            if token_lowercase.eq("limit") {
+                let Some(val) = iter.next() else {
+                    return GetLimitResult::SyntaxError;
+                };
+
+                let Some(val) = BytesMutUtils::parse::<usize>(val) else {
+                    return GetLimitResult::SyntaxError;
+                };
+
+                return GetLimitResult::Limit(val);
+            }
         }
+        GetLimitResult::Limit(usize::MAX)
+    }
+
+    /// Return the LIMIT <value> from the command line
+    fn withscores(command: Rc<RedisCommand>) -> bool {
+        let iter = command.args_vec().iter();
+        for arg in iter {
+            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            if token_lowercase.eq("withscores") {
+                return true;
+            }
+        }
+        false
     }
 
     /// Return the WITHSCORES values from a parsed arguments
@@ -1227,6 +1356,13 @@ impl KeyWord {
             return String::new();
         };
         BytesMutUtils::to_string(val.as_ref()).to_lowercase()
+    }
+
+    pub fn value_usize_or(&self, index: usize, default_value: usize) -> usize {
+        let Some(val) = self.tokens.get(index) else {
+            return default_value;
+        };
+        BytesMutUtils::parse::<usize>(val).unwrap_or(default_value)
     }
 }
 
@@ -1405,6 +1541,18 @@ mod test {
         ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "-ERR syntax error\r\n"),
         ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 WITHSCORES AGGREGATE SUM", "*0\r\n"),
     ]; "test_zinter")]
+    #[test_case(vec![
+        ("zadd tanks_1 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        ("zadd tanks_2 1 rein 1 roadhog 1 doomfist 5 mei", ":4\r\n"),
+        ("zadd tanks_3 2 orisa 3 ram 5 mei", ":3\r\n"),
+        ("zintercard 3 tanks_1 tanks_2 tanks_3", ":0\r\n"),
+        ("zintercard 2 tanks_1 tanks_3", ":2\r\n"),
+        ("zadd tanks_3 1 rein", ":1\r\n"),
+        ("zintercard 2 tanks_1 tanks_3", ":3\r\n"),
+        ("zintercard 2 tanks_1 tanks_3 LIMIT 1", ":1\r\n"),
+        ("zintercard 2 tanks_1 no_such_set LIMIT", "-ERR syntax error\r\n"),
+        ("zintercard 2 tanks_1 no_such_set LIMIT 1", ":0\r\n"),
+    ]; "test_zintercard")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

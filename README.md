@@ -180,6 +180,7 @@ and visit this page again in couple of days
 | zdiffstore | ✓ |✓ | |
 | zrangebyscore | ✓ |✓ | |
 | zinter | ✓ |✓ | |
+| zintercard | ✓ |✓ | |
 
 ### Generic commands
 
