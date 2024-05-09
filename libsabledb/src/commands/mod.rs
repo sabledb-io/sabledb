@@ -14,6 +14,21 @@ macro_rules! expect_args_count {
 }
 
 #[macro_export]
+macro_rules! expect_args_count_writer {
+    ($cmd:expr, $expected_args_count:expr, $writer:expr, $return_value:expr) => {
+        if !$cmd.expect_args_count($expected_args_count) {
+            let errmsg = format!(
+                "ERR wrong number of arguments for '{}' command",
+                $cmd.main_command()
+            );
+            $writer.error_string(&errmsg).await?;
+            $writer.flush().await?;
+            return Ok($return_value);
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! expect_args_count_tx {
     ($cmd:expr, $expected_args_count:expr, $resp_writer:expr, $return_value:expr) => {
         if !$cmd.expect_args_count($expected_args_count) {
@@ -32,6 +47,13 @@ macro_rules! expect_args_count_tx {
 macro_rules! check_args_count {
     ($cmd:expr, $expected_args_count:expr, $response_buffer:expr) => {
         expect_args_count!($cmd, $expected_args_count, $response_buffer, ())
+    };
+}
+
+#[macro_export]
+macro_rules! check_args_count_writer {
+    ($cmd:expr, $expected_args_count:expr, $writer:expr) => {
+        expect_args_count_writer!($cmd, $expected_args_count, $writer, ())
     };
 }
 
@@ -188,6 +210,15 @@ macro_rules! writer_return_empty_array {
 }
 
 #[macro_export]
+macro_rules! writer_return_wrong_type {
+    ($writer:expr) => {
+        $writer.error_string(Strings::WRONGTYPE).await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! writer_return_syntax_error {
     ($writer:expr) => {
         $writer.error_string(Strings::SYNTAX_ERROR).await?;
@@ -246,6 +277,38 @@ macro_rules! builder_return_wrong_type {
 macro_rules! builder_return_value_not_int {
     ($builder:expr, $response_buffer:expr) => {
         $builder.error_string($response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! writer_return_at_least_1_key {
+    ($writer:expr, $command:expr) => {
+        $writer
+            .error_string(
+                format!(
+                    "ERR at least 1 input key is needed for '{}' command",
+                    $command.main_command()
+                )
+                .as_str(),
+            )
+            .await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_at_least_1_key {
+    ($builder:expr, $response_buffer:expr, $command:expr) => {
+        $builder.error_string(
+            $response_buffer,
+            format!(
+                "ERR at least 1 input key is needed for '{}' command",
+                $command.main_command()
+            )
+            .as_str(),
+        );
         return Ok(());
     };
 }

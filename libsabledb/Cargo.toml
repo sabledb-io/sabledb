@@ -40,6 +40,7 @@ strum = "0"
 strum_macros = "0"
 wildmatch = "2"
 futures = "0"
+btreemultimap = "0"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 affinity = "0"

@@ -179,6 +179,7 @@ and visit this page again in couple of days
 | zdiff | ✓ |✓ | |
 | zdiffstore | ✓ |✓ | |
 | zrangebyscore | ✓ |✓ | |
+| zinter | ✓ |✓ | |
 
 ### Generic commands
 

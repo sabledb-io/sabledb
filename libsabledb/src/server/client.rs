@@ -644,7 +644,8 @@ impl Client {
             | RedisCommandName::Zrangebyscore
             | RedisCommandName::Zcount
             | RedisCommandName::Zdiff
-            | RedisCommandName::Zdiffstore => {
+            | RedisCommandName::Zdiffstore
+            | RedisCommandName::Zinter => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

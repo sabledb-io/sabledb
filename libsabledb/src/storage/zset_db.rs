@@ -7,7 +7,6 @@ use crate::{
 };
 use bytes::BytesMut;
 
-// Internal enum
 #[derive(Debug, PartialEq, Eq)]
 pub enum ZSetGetMetadataResult {
     /// An entry exists in the db for the given key, but for a different type
@@ -16,6 +15,16 @@ pub enum ZSetGetMetadataResult {
     Some(ZSetValueMetadata),
     /// No entry exist
     NotFound,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ZSetGetSmallestResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Return the index of the set with the smallest length
+    Some(usize),
+    /// No entry exist
+    None,
 }
 
 /// `ZSetDb::delete` result
@@ -234,6 +243,34 @@ impl<'a> ZSetDb<'a> {
         let mut writer = U8ArrayBuilder::with_buffer(&mut buffer);
         writer.write_f64(score);
         buffer
+    }
+
+    /// Given multiple sets represented by `user_keys` return the one with the smallest length
+    pub fn find_smallest(
+        &self,
+        user_keys: &[&BytesMut],
+    ) -> Result<ZSetGetSmallestResult, SableError> {
+        if user_keys.is_empty() {
+            return Ok(ZSetGetSmallestResult::None);
+        }
+
+        let mut smallest_len = usize::MAX;
+        let mut smallest_set_index = 0usize;
+        let mut curidx = 0usize;
+        for k in user_keys {
+            let zset_length = match self.len(*k)? {
+                ZSetLenResult::WrongType => return Ok(ZSetGetSmallestResult::WrongType),
+                ZSetLenResult::Some(zset_length) => zset_length,
+            };
+
+            if zset_length < smallest_len {
+                smallest_len = zset_length;
+                smallest_set_index = curidx;
+            }
+            curidx = curidx.saturating_add(1);
+        }
+
+        Ok(ZSetGetSmallestResult::Some(smallest_set_index))
     }
 
     //=== ----------------------------
