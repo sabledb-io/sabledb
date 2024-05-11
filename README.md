@@ -183,6 +183,7 @@ and visit this page again in couple of days
 | zintercard | ✓ |✓ | |
 | zinterstore | ✓ |✓ | |
 | zlexcount | ✓ |✓ | |
+| zmpop | ✓ |✓ | |
 
 ### Generic commands
 

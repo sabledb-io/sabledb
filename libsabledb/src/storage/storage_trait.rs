@@ -98,10 +98,12 @@ pub trait StorageTrait {
     /// to point to `prefix`
     fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<IteratorAdapter, SableError>;
 
-    /// Create a reverse database iterator (if no prefix is provided, the iterator is placed at the end)
-    /// A call to `IteratorAdapter::next()` goes backward
+    /// Create a reverse database iterator
+    /// `upper_bound` should be the first prefix after the requested prefix.
+    /// For example, if the caller wishes to iterate over all items starting with "1"
+    /// `upper_bound` passed here should be "2"
     fn create_reverse_iterator(
         &self,
-        prefix: Option<&BytesMut>,
+        upper_bound: &BytesMut,
     ) -> Result<IteratorAdapter, SableError>;
 }

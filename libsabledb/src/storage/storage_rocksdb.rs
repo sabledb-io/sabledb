@@ -310,7 +310,9 @@ impl StorageTrait for StorageRocksDb {
         &self,
         prefix: Option<&BytesMut>,
     ) -> Result<IteratorAdapter, SableError> {
-        let mut iterator = self.store.raw_iterator();
+        let mut read_options = rocksdb::ReadOptions::default();
+        read_options.fill_cache(false);
+        let mut iterator = self.store.raw_iterator_opt(read_options);
         if let Some(prefix) = prefix {
             iterator.seek(prefix);
         }
@@ -323,23 +325,22 @@ impl StorageTrait for StorageRocksDb {
     /// Create a reverse iterator
     fn create_reverse_iterator<'a>(
         &self,
-        prefix: Option<&BytesMut>,
+        upper_bound: &BytesMut,
     ) -> Result<IteratorAdapter, SableError> {
-        let mut iterator = self.store.raw_iterator();
-        if let Some(prefix) = prefix {
-            // When we call for `prev` after `eseek` we will get the one before it
-            // to include the prefix, we need to skip one entry
-            iterator.seek(prefix);
-            iterator.next();
+        let mut read_options = rocksdb::ReadOptions::default();
+        read_options.fill_cache(false);
+        let mut iterator = self.store.raw_iterator_opt(read_options);
+        iterator.seek_for_prev(upper_bound);
+        if iterator.valid() {
+            let Some(key) = iterator.key() else {
+                return Err(SableError::OtherError(
+                    "failed to create reverse iterator".into(),
+                ));
+            };
 
-            if !iterator.valid() {
-                // "prefix" is the last key. We need to seek to the logical end so "prev"
-                // will return the key presented by "prefix"
-                iterator = self.store.raw_iterator();
-                iterator.seek_to_last();
+            if key.starts_with(upper_bound) {
+                iterator.prev();
             }
-        } else {
-            iterator.seek_to_last();
         }
 
         Ok(IteratorAdapter {

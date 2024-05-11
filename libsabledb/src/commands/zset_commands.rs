@@ -61,9 +61,29 @@ enum GetLimitResult {
     SyntaxError,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum GetCountResult {
+    Count(usize),
+    SyntaxError,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum MinOrMaxResult {
+    Min,
+    Max,
+    None,
+}
+
 enum UpperLimitState {
     NotFound,
     Found,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum TryPopResult {
+    None,
+    Some(Vec<(BytesMut, BytesMut)>),
+    WrongType,
 }
 
 pub struct ZSetCommands {}
@@ -106,6 +126,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zlexcount => {
                 Self::zlexcount(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zmpop => {
+                Self::zmpop(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -680,7 +703,17 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
-        let user_keys = Self::keys_to_lock(command.clone(), 2, numkeys, None);
+        let reserved_words: HashSet<&'static str> =
+            ["WEIGHTS", "AGGREGATE", "SUM", "MIN", "MAX", "WITHSCORES"]
+                .iter()
+                .copied()
+                .collect();
+        let Ok(user_keys) =
+            Self::parse_keys_to_lock(command.clone(), 2, numkeys, &reserved_words, None)
+        else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
+
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
         let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
 
@@ -741,7 +774,12 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
-        let user_keys = Self::keys_to_lock(command.clone(), 2, numkeys, None);
+        let reserved_words: HashSet<&'static str> = ["LIMIT"].iter().copied().collect();
+        let Ok(user_keys) =
+            Self::parse_keys_to_lock(command.clone(), 2, numkeys, &reserved_words, None)
+        else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
         let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
 
@@ -801,7 +839,20 @@ impl ZSetCommands {
             builder_return_at_least_1_key!(builder, response_buffer, command);
         }
 
-        let user_keys = Self::keys_to_lock(command.clone(), 3, numkeys, Some(destination));
+        let reserved_words: HashSet<&'static str> = ["WEIGHTS", "AGGREGATE", "SUM", "MIN", "MAX"]
+            .iter()
+            .copied()
+            .collect();
+
+        let Ok(user_keys) = Self::parse_keys_to_lock(
+            command.clone(),
+            3,
+            numkeys,
+            &reserved_words,
+            Some(destination),
+        ) else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
 
         // Lock the database. The lock must be done here (it has to do with how txn are working)
@@ -927,6 +978,134 @@ impl ZSetCommands {
 
         builder.number_usize(response_buffer, count);
         Ok(())
+    }
+
+    /// `ZMPOP numkeys key [key ...] <MIN | MAX> [COUNT count]`
+    /// Pops one or more elements, that are member-score pairs, from the first non-empty sorted set in the provided list
+    /// of key names
+    async fn zmpop(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let builder = RespBuilderV2::default();
+        let numkeys = command_arg_at!(command, 1);
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        let reserved_words: HashSet<&'static str> =
+            ["COUNT", "MIN", "MAX"].iter().copied().collect();
+        let Ok(keys_to_lock) =
+            Self::parse_keys_to_lock(command.clone(), 2, numkeys, &reserved_words, None)
+        else {
+            builder_return_syntax_error!(builder, response_buffer);
+        };
+
+        let count = match Self::get_count(command.clone(), 1) {
+            GetCountResult::Count(count) => count,
+            GetCountResult::SyntaxError => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+        };
+
+        let min_members = match Self::get_min_or_max(command.clone()) {
+            MinOrMaxResult::None => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            MinOrMaxResult::Max => false,
+            MinOrMaxResult::Min => true,
+        };
+
+        let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
+        for key in &user_keys {
+            match Self::try_pop(client_state.clone(), key, count, min_members)? {
+                TryPopResult::Some(items) => {
+                    // build response
+                    builder.add_array_len(response_buffer, 2);
+                    builder.add_bulk_string(response_buffer, key);
+                    builder.add_array_len(response_buffer, items.len());
+                    for (member, score) in &items {
+                        builder.add_array_len(response_buffer, 2);
+                        builder.add_bulk_string(response_buffer, member);
+                        builder.add_bulk_string(response_buffer, score);
+                    }
+                    return Ok(());
+                }
+                TryPopResult::None => {}
+                TryPopResult::WrongType => {
+                    builder_return_wrong_type!(builder, response_buffer);
+                }
+            }
+        }
+        // if we reached here, nothing was popped
+        builder.null_array(response_buffer);
+        Ok(())
+    }
+
+    /// Try to pop `count` members from `key` set.
+    /// If `lowest_score_items` is `true`, remove the members with lowest score
+    fn try_pop(
+        client_state: Rc<ClientState>,
+        key: &BytesMut,
+        count: usize,
+        items_with_low_score: bool,
+    ) -> Result<TryPopResult, SableError> {
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let md = match zset_db.get_metadata(key)? {
+            ZSetGetMetadataResult::Some(md) => md,
+            ZSetGetMetadataResult::NotFound => {
+                return Ok(TryPopResult::None);
+            }
+            ZSetGetMetadataResult::WrongType => {
+                return Ok(TryPopResult::WrongType);
+            }
+        };
+
+        let count = std::cmp::min(count, md.len() as usize);
+        let prefix = md.prefix_by_score(None);
+
+        // items with lowest scores are placed at the start
+        let mut db_iter = if items_with_low_score {
+            client_state.database().create_iterator(Some(&prefix))?
+        } else {
+            let upper_bound = md.score_upper_bound_prefix();
+            client_state
+                .database()
+                .create_reverse_iterator(&upper_bound)?
+        };
+
+        let mut result = Vec::<(BytesMut, BytesMut)>::new();
+        while db_iter.valid() {
+            if count == result.len() {
+                break;
+            }
+
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            let score_member = ZSetScoreItem::from_bytes(key)?;
+            let score_value = format!("{:.2}", score_member.score());
+            result.push((score_member.member().into(), score_value.as_str().into()));
+            db_iter.next();
+        }
+
+        if !result.is_empty() {
+            for (member, _) in &result {
+                zset_db.delete_member(key, member, false)?;
+            }
+            zset_db.commit()?;
+        }
+        Ok(TryPopResult::Some(result))
     }
 
     /// Check whether we reached the upper limit `end_prefix`.
@@ -1239,23 +1418,31 @@ impl ZSetCommands {
     }
 
     /// Return the keys to lock
-    fn keys_to_lock(
+    fn parse_keys_to_lock(
         command: Rc<RedisCommand>,
         first_key_pos: usize,
         numkeys: usize,
+        reserved_words: &HashSet<&'static str>,
         destination: Option<&BytesMut>,
-    ) -> Vec<BytesMut> {
+    ) -> Result<Vec<BytesMut>, String> {
         let mut iter = command.args_vec().iter();
-        let mut first_key_pos = first_key_pos;
+        let mut words_to_skip = first_key_pos;
 
-        while first_key_pos > 0 {
+        let reserved_words: HashSet<String> =
+            reserved_words.iter().map(|w| w.to_lowercase()).collect();
+        while words_to_skip > 0 {
             iter.next();
-            first_key_pos = first_key_pos.saturating_sub(1);
+            words_to_skip = words_to_skip.saturating_sub(1);
         }
 
         let mut keys = Vec::<BytesMut>::with_capacity(numkeys + 1);
         for _ in 0..numkeys {
             if let Some(key) = iter.next() {
+                let key_lowercase = BytesMutUtils::to_string(key).to_lowercase();
+                if reserved_words.contains(key_lowercase.as_str()) {
+                    // if the key is a known keyword, return false
+                    return Err("syntax error".into());
+                }
                 keys.push(key.clone());
             } else {
                 break;
@@ -1265,7 +1452,7 @@ impl ZSetCommands {
         if let Some(destination) = destination {
             keys.push(destination.clone());
         }
-        keys
+        Ok(keys)
     }
 
     /// Common function for parsing command line arguments that uses the following format:
@@ -1454,6 +1641,44 @@ impl ZSetCommands {
             }
         }
         GetLimitResult::Limit(usize::MAX)
+    }
+
+    /// Return the `COUNT <value>` from the command line
+    fn get_count(command: Rc<RedisCommand>, default_value: usize) -> GetCountResult {
+        let mut iter = command.args_vec().iter();
+        while let Some(arg) = iter.next() {
+            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            if token_lowercase.eq("count") {
+                let Some(val) = iter.next() else {
+                    return GetCountResult::SyntaxError;
+                };
+
+                let Some(val) = BytesMutUtils::parse::<usize>(val) else {
+                    return GetCountResult::SyntaxError;
+                };
+
+                return GetCountResult::Count(val);
+            }
+        }
+        GetCountResult::Count(default_value)
+    }
+
+    /// Locate `MIN` or `MAX` in the command line
+    fn get_min_or_max(command: Rc<RedisCommand>) -> MinOrMaxResult {
+        let iter = command.args_vec().iter();
+        for arg in iter {
+            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            match token_lowercase.as_str() {
+                "min" => {
+                    return MinOrMaxResult::Min;
+                }
+                "max" => {
+                    return MinOrMaxResult::Max;
+                }
+                _ => {}
+            }
+        }
+        MinOrMaxResult::None
     }
 
     /// Return the LIMIT <value> from the command line
@@ -1847,6 +2072,24 @@ mod test {
         ("zlexcount myzset1 b (f", "-ERR syntax error\r\n"),
         ("zlexcount myzset1 (b f", "-ERR syntax error\r\n"),
     ]; "test_zlexcount")]
+    #[test_case(vec![
+        ("ZMPOP 1 notsuchkey MIN", "*-1\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*-1\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*-1\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZMPOP 1 myzset MAX COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*-1\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZMPOP 1 myzset MIN COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+    ]; "test_zmpop")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

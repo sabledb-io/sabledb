@@ -648,7 +648,8 @@ impl Client {
             | RedisCommandName::Zinter
             | RedisCommandName::Zintercard
             | RedisCommandName::Zinterstore
-            | RedisCommandName::Zlexcount => {
+            | RedisCommandName::Zlexcount
+            | RedisCommandName::Zmpop => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

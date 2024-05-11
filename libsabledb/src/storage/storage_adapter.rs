@@ -557,14 +557,18 @@ impl StorageAdapter {
         db.create_iterator(prefix)
     }
 
+    /// Create a reverse database iterator
+    /// `upper_bound` should be the first prefix after the requested prefix.
+    /// For example, if the caller wishes to iterate over all items starting with "1"
+    /// `upper_bound` passed here should be "2"
     pub fn create_reverse_iterator(
         &self,
-        prefix: Option<&BytesMut>,
+        upper_bound: &BytesMut,
     ) -> Result<IteratorAdapter, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.create_reverse_iterator(prefix)
+        db.create_reverse_iterator(upper_bound)
     }
 
     /// Commit the txn into the database as a single batch operation
@@ -713,7 +717,6 @@ mod tests {
     #[test]
     fn test_reverse_iterator_with_prefix() {
         let (_guard, store) = crate::tests::open_store();
-        let seek_me = BytesMut::from("2");
         let value = BytesMut::from("string_value");
 
         let keys = vec![
@@ -728,64 +731,105 @@ mod tests {
             store.put(key, &value, PutFlags::Override).unwrap();
         }
 
-        let mut db_iter = store.create_reverse_iterator(Some(&seek_me)).unwrap();
-        let mut result = Vec::<BytesMut>::new();
+        {
+            let upper_bound = BytesMut::from("3"); // to place the iterator on the *last* `2` we use upper bound of `3`
+            let seek_me = BytesMut::from("2");
+            let mut db_iter = store.create_reverse_iterator(&upper_bound).unwrap();
+            let mut result = Vec::<BytesMut>::new();
 
-        while db_iter.valid() {
-            // get the key & value
-            let Some((key, _)) = db_iter.key_value() else {
-                break;
-            };
+            while db_iter.valid() {
+                // get the key & value
+                let Some((key, _)) = db_iter.key_value() else {
+                    break;
+                };
 
-            if !key.starts_with(seek_me.as_ref()) {
-                break;
+                if !key.starts_with(seek_me.as_ref()) {
+                    break;
+                }
+
+                let k = BytesMut::from(key);
+                result.push(k);
+                db_iter.next();
             }
-
-            result.push(BytesMut::from(key));
-            db_iter.next();
+            assert_eq!(result.len(), 2);
+            assert_eq!(result, vec![BytesMut::from("2_k3"), BytesMut::from("2_k2")]);
         }
-        assert_eq!(result.len(), 2);
-        assert_eq!(result, vec![BytesMut::from("2_k3"), BytesMut::from("2_k2")]);
-    }
-    #[test]
-    fn test_reverse_iterator_no_prefix() {
-        let (_guard, store) = crate::tests::open_store();
-        let value = BytesMut::from("string_value");
+        {
+            let upper_bound = BytesMut::from("4"); // to place the iterator on the *last* `3` we use upper bound of `4`
+            let seek_me = BytesMut::from("3");
+            let mut db_iter = store.create_reverse_iterator(&upper_bound).unwrap();
+            let mut result = Vec::<BytesMut>::new();
 
-        let keys = vec![
-            BytesMut::from("1_k1"),
-            BytesMut::from("2_k2"),
-            BytesMut::from("2_k3"),
-            BytesMut::from("1_k4"),
-            BytesMut::from("3_k5"),
-        ];
+            while db_iter.valid() {
+                // get the key & value
+                let Some((key, _)) = db_iter.key_value() else {
+                    println!("None key/val");
+                    break;
+                };
 
-        for key in keys.iter() {
-            store.put(key, &value, PutFlags::Override).unwrap();
+                if !key.starts_with(seek_me.as_ref()) {
+                    println!("!key.starts_with(seek_me.as_ref())");
+                    break;
+                }
+
+                let k = BytesMut::from(key);
+                println!("Adding {:?}", k);
+                result.push(k);
+                db_iter.next();
+            }
+            assert_eq!(result.len(), 1);
+            assert_eq!(result, vec![BytesMut::from("3_k5")]);
         }
+        {
+            let upper_bound = BytesMut::from("5"); // to place the iterator on the *last* `4` we use upper bound of `5`
+            let seek_me = BytesMut::from("4");
+            let mut db_iter = store.create_reverse_iterator(&upper_bound).unwrap();
+            let mut result = Vec::<BytesMut>::new();
 
-        let mut db_iter = store.create_reverse_iterator(None).unwrap();
-        let mut result = Vec::<BytesMut>::new();
+            while db_iter.valid() {
+                // get the key & value
+                let Some((key, _)) = db_iter.key_value() else {
+                    println!("None key/val");
+                    break;
+                };
 
-        while db_iter.valid() {
-            // get the key & value
-            let Some((key, _)) = db_iter.key_value() else {
-                break;
-            };
+                if !key.starts_with(seek_me.as_ref()) {
+                    println!("!key.starts_with(seek_me.as_ref())");
+                    break;
+                }
 
-            result.push(BytesMut::from(key));
-            db_iter.next();
+                let k = BytesMut::from(key);
+                println!("Adding {:?}", k);
+                result.push(k);
+                db_iter.next();
+            }
+            assert_eq!(result.len(), 0);
         }
-        assert_eq!(result.len(), 5);
-        assert_eq!(
-            result,
-            vec![
-                BytesMut::from("3_k5"),
-                BytesMut::from("2_k3"),
-                BytesMut::from("2_k2"),
-                BytesMut::from("1_k4"),
-                BytesMut::from("1_k1")
-            ]
-        );
+        {
+            let upper_bound = BytesMut::from("2"); // to get all "1"s use "2" as the upper bound
+            let seek_me = BytesMut::from("1");
+            let mut db_iter = store.create_reverse_iterator(&upper_bound).unwrap();
+            let mut result = Vec::<BytesMut>::new();
+
+            while db_iter.valid() {
+                // get the key & value
+                let Some((key, _)) = db_iter.key_value() else {
+                    println!("None key/val");
+                    break;
+                };
+
+                if !key.starts_with(seek_me.as_ref()) {
+                    println!("!key.starts_with(seek_me.as_ref())");
+                    break;
+                }
+
+                let k = BytesMut::from(key);
+                println!("Adding {:?}", k);
+                result.push(k);
+                db_iter.next();
+            }
+            assert_eq!(result.len(), 2);
+            assert_eq!(result, vec![BytesMut::from("1_k4"), BytesMut::from("1_k1")]);
+        }
     }
 }

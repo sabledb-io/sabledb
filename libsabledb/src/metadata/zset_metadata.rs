@@ -81,6 +81,26 @@ impl ZSetValueMetadata {
         buffer
     }
 
+    /// Create an upper bound prefix for this set (for iterating over scores)
+    pub fn score_upper_bound_prefix(&self) -> BytesMut {
+        let mut buffer =
+            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+        builder.write_u8(KeyType::ZsetScoreItem as u8);
+        builder.write_u64(self.id() + 1);
+        buffer
+    }
+
+    /// Create an upper bound prefix for this set (for iterating over members)
+    pub fn member_upper_bound_prefix(&self) -> BytesMut {
+        let mut buffer =
+            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+        builder.write_u8(KeyType::ZsetMemberItem as u8);
+        builder.write_u64(self.id() + 1);
+        buffer
+    }
+
     /// Create a prefix for iterating all items belonged to this zset by member
     pub fn prefix_by_member(&self, member: Option<&[u8]>) -> BytesMut {
         let mut buffer =

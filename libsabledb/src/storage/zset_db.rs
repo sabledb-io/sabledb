@@ -44,6 +44,14 @@ pub enum ZSetAddMemberResult {
     Some(usize),
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum ZSetDeleteMemberResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Delete was successful
+    Ok,
+}
+
 #[derive(PartialEq, Debug)]
 enum PutMemberResult {
     /// Ok...
@@ -273,6 +281,35 @@ impl<'a> ZSetDb<'a> {
         Ok(ZSetGetSmallestResult::Some(smallest_set_index))
     }
 
+    pub fn delete_member(
+        &mut self,
+        user_key: &BytesMut,
+        member: &[u8],
+        flush_cache: bool,
+    ) -> Result<ZSetDeleteMemberResult, SableError> {
+        let mut md = match self.get_metadata(user_key)? {
+            ZSetGetMetadataResult::WrongType => return Ok(ZSetDeleteMemberResult::WrongType),
+            ZSetGetMetadataResult::NotFound => {
+                return Ok(ZSetDeleteMemberResult::Ok);
+            }
+            ZSetGetMetadataResult::Some(set) => set,
+        };
+
+        if self.delete_member_internal(md.id(), member)? {
+            md.decr_len_by(1);
+            if md.is_empty() {
+                self.delete_metadata(user_key, &md)?;
+            } else {
+                self.put_metadata(user_key, &md)?;
+            }
+        }
+
+        if flush_cache {
+            self.commit()?;
+        }
+        Ok(ZSetDeleteMemberResult::Ok)
+    }
+
     //=== ----------------------------
     // Private methods
     //=== ----------------------------
@@ -408,7 +445,7 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Delete member from the set
-    fn delete_member(&mut self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
+    fn delete_member_internal(&mut self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
         let key_by_member = self.encode_key_by_memebr(set_id, member);
         let Some(value) = self.cache.get(&key_by_member)? else {
             return Ok(false);
@@ -505,6 +542,40 @@ mod tests {
 
         // confirm that the bookkeeping record was also removed from the database
         assert!(db.get(&bookkeeping_record_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_member() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut zset_db = ZSetDb::with_storage(&db, 0);
+        let set_name = BytesMut::from("myset");
+
+        // put (which creates) a new hash item in the database
+        let rein = BytesMut::from("Reinhardt");
+
+        zset_db
+            .add(&set_name, &rein, 20.0, &ZWriteFlags::None, true)
+            .unwrap();
+
+        let orisa = BytesMut::from("Orisa");
+        zset_db
+            .add(&set_name, &orisa, 15.0, &ZWriteFlags::None, true)
+            .unwrap();
+
+        // delete the only entry from the hash -> this should remove the hash completely from the database
+        zset_db.delete_member(&set_name, &rein, false).unwrap();
+        zset_db.commit().unwrap();
+
+        // confirm that the bookkeeping record was also removed from the database
+        assert_eq!(zset_db.len(&set_name).unwrap(), ZSetLenResult::Some(1));
+        assert_eq!(
+            zset_db.get_score(&set_name, &orisa).unwrap(),
+            ZSetGetScoreResult::Score(15.0)
+        );
+        assert_eq!(
+            zset_db.get_score(&set_name, &rein).unwrap(),
+            ZSetGetScoreResult::NotFound
+        );
     }
 
     #[test]
