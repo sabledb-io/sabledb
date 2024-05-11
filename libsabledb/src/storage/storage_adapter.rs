@@ -557,6 +557,16 @@ impl StorageAdapter {
         db.create_iterator(prefix)
     }
 
+    pub fn create_reverse_iterator(
+        &self,
+        prefix: Option<&BytesMut>,
+    ) -> Result<IteratorAdapter, SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.create_reverse_iterator(prefix)
+    }
+
     /// Commit the txn into the database as a single batch operation
     pub fn commit(&self) -> Result<(), SableError> {
         let Some(db) = &self.store else {
@@ -680,8 +690,8 @@ mod tests {
             store.put(key, &value, PutFlags::Override).unwrap();
         }
 
-        let mut matches = 0u32;
         let mut db_iter = store.create_iterator(Some(&seek_me)).unwrap();
+        let mut result = Vec::<BytesMut>::new();
 
         while db_iter.valid() {
             // get the key & value
@@ -692,10 +702,90 @@ mod tests {
             if !key.starts_with(seek_me.as_ref()) {
                 break;
             }
-            matches = matches.saturating_add(1);
+
+            result.push(BytesMut::from(key));
             db_iter.next();
         }
+        assert_eq!(result.len(), 2);
+        assert_eq!(result, vec![BytesMut::from("1_k1"), BytesMut::from("1_k4")]);
+    }
 
-        assert_eq!(matches, 2);
+    #[test]
+    fn test_reverse_iterator_with_prefix() {
+        let (_guard, store) = crate::tests::open_store();
+        let seek_me = BytesMut::from("2");
+        let value = BytesMut::from("string_value");
+
+        let keys = vec![
+            BytesMut::from("1_k1"),
+            BytesMut::from("2_k2"),
+            BytesMut::from("2_k3"),
+            BytesMut::from("1_k4"),
+            BytesMut::from("3_k5"),
+        ];
+
+        for key in keys.iter() {
+            store.put(key, &value, PutFlags::Override).unwrap();
+        }
+
+        let mut db_iter = store.create_reverse_iterator(Some(&seek_me)).unwrap();
+        let mut result = Vec::<BytesMut>::new();
+
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(seek_me.as_ref()) {
+                break;
+            }
+
+            result.push(BytesMut::from(key));
+            db_iter.next();
+        }
+        assert_eq!(result.len(), 2);
+        assert_eq!(result, vec![BytesMut::from("2_k3"), BytesMut::from("2_k2")]);
+    }
+    #[test]
+    fn test_reverse_iterator_no_prefix() {
+        let (_guard, store) = crate::tests::open_store();
+        let value = BytesMut::from("string_value");
+
+        let keys = vec![
+            BytesMut::from("1_k1"),
+            BytesMut::from("2_k2"),
+            BytesMut::from("2_k3"),
+            BytesMut::from("1_k4"),
+            BytesMut::from("3_k5"),
+        ];
+
+        for key in keys.iter() {
+            store.put(key, &value, PutFlags::Override).unwrap();
+        }
+
+        let mut db_iter = store.create_reverse_iterator(None).unwrap();
+        let mut result = Vec::<BytesMut>::new();
+
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            result.push(BytesMut::from(key));
+            db_iter.next();
+        }
+        assert_eq!(result.len(), 5);
+        assert_eq!(
+            result,
+            vec![
+                BytesMut::from("3_k5"),
+                BytesMut::from("2_k3"),
+                BytesMut::from("2_k2"),
+                BytesMut::from("1_k4"),
+                BytesMut::from("1_k1")
+            ]
+        );
     }
 }

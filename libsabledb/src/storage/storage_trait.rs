@@ -9,36 +9,32 @@ use std::path::Path;
 
 pub enum StorageIterator<'a> {
     RocksDb(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
+    RocksDbReverse(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
 }
 
 pub struct IteratorAdapter<'a> {
-    iterator: StorageIterator<'a>,
+    pub iterator: StorageIterator<'a>,
 }
 
 impl<'a> IteratorAdapter<'a> {
-    pub fn new_rocksdb_iterator(
-        rocksdb_iter: rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>,
-    ) -> Self {
-        IteratorAdapter {
-            iterator: StorageIterator::RocksDb(rocksdb_iter),
-        }
-    }
-
     pub fn valid(&self) -> bool {
         match &self.iterator {
             StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.valid(),
+            StorageIterator::RocksDbReverse(rocksdb_iter) => rocksdb_iter.valid(),
         }
     }
 
     pub fn next(&mut self) {
         match &mut self.iterator {
             StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.next(),
+            StorageIterator::RocksDbReverse(rocksdb_iter) => rocksdb_iter.prev(),
         }
     }
 
     pub fn key_value(&self) -> Option<(&[u8], &[u8])> {
         match &self.iterator {
-            StorageIterator::RocksDb(rocksdb_iter) => {
+            StorageIterator::RocksDbReverse(rocksdb_iter)
+            | StorageIterator::RocksDb(rocksdb_iter) => {
                 let k = rocksdb_iter.key();
                 let v = rocksdb_iter.value();
 
@@ -101,4 +97,11 @@ pub trait StorageTrait {
     /// Create a database iterator. If `prefix` is not `None`, move the iterator
     /// to point to `prefix`
     fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<IteratorAdapter, SableError>;
+
+    /// Create a reverse database iterator (if no prefix is provided, the iterator is placed at the end)
+    /// A call to `IteratorAdapter::next()` goes backward
+    fn create_reverse_iterator(
+        &self,
+        prefix: Option<&BytesMut>,
+    ) -> Result<IteratorAdapter, SableError>;
 }

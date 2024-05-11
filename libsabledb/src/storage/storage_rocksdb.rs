@@ -314,8 +314,37 @@ impl StorageTrait for StorageRocksDb {
         if let Some(prefix) = prefix {
             iterator.seek(prefix);
         }
-        let iter = IteratorAdapter::new_rocksdb_iterator(iterator);
-        Ok(iter)
+
+        Ok(IteratorAdapter {
+            iterator: StorageIterator::RocksDb(iterator),
+        })
+    }
+
+    /// Create a reverse iterator
+    fn create_reverse_iterator<'a>(
+        &self,
+        prefix: Option<&BytesMut>,
+    ) -> Result<IteratorAdapter, SableError> {
+        let mut iterator = self.store.raw_iterator();
+        if let Some(prefix) = prefix {
+            // When we call for `prev` after `eseek` we will get the one before it
+            // to include the prefix, we need to skip one entry
+            iterator.seek(prefix);
+            iterator.next();
+
+            if !iterator.valid() {
+                // "prefix" is the last key. We need to seek to the logical end so "prev"
+                // will return the key presented by "prefix"
+                iterator = self.store.raw_iterator();
+                iterator.seek_to_last();
+            }
+        } else {
+            iterator.seek_to_last();
+        }
+
+        Ok(IteratorAdapter {
+            iterator: StorageIterator::RocksDbReverse(iterator),
+        })
     }
 }
 
