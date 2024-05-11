@@ -122,6 +122,7 @@ pub enum RedisCommandName {
     Zinter,
     Zintercard,
     Zinterstore,
+    Zlexcount,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -946,6 +947,12 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zinterstore)
                         .write()
                         .with_arity(-4),
+                ),
+                (
+                    "zlexcount",
+                    CommandMetadata::new(RedisCommandName::Zlexcount)
+                        .read_only()
+                        .with_arity(4),
                 ),
             ]),
         }

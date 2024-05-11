@@ -45,10 +45,25 @@ enum IntersectError {
     Ok(Rc<RefCell<BTreeMap<BytesMut, f64>>>),
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+enum LexIndex<'a> {
+    Include(&'a [u8]),
+    Exclude(&'a [u8]),
+    Min,
+    Max,
+    Invalid,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum GetLimitResult {
     Limit(usize),
     SyntaxError,
+}
+
+enum UpperLimitState {
+    NotFound,
+    Found,
 }
 
 pub struct ZSetCommands {}
@@ -88,6 +103,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zinterstore => {
                 Self::zinterstore(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zlexcount => {
+                Self::zlexcount(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -815,6 +833,129 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZLEXCOUNT key min max`
+    /// When all the elements in a sorted set are inserted with the same score, in order to force lexicographical
+    /// ordering, this command returns the number of elements in the sorted set at key with a value between min and max
+    async fn zlexcount(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let min = command_arg_at!(command, 2);
+        let max = command_arg_at!(command, 3);
+
+        let builder = RespBuilderV2::default();
+        let min = Self::parse_lex_index(min.as_ref());
+        let max = Self::parse_lex_index(max.as_ref());
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = match zset_db.get_metadata(key)? {
+            ZSetGetMetadataResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ZSetGetMetadataResult::NotFound => {
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+
+        let mut db_iter = match min {
+            LexIndex::Invalid => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            LexIndex::Include(prefix) => {
+                let prefix = md.prefix_by_member(Some(prefix));
+                client_state.database().create_iterator(Some(&prefix))?
+            }
+            LexIndex::Exclude(prefix) => {
+                let prefix = md.prefix_by_member(Some(prefix));
+                let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                db_iter.next(); // skip this entry
+                db_iter
+            }
+            LexIndex::Max => {
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+            LexIndex::Min => {
+                let prefix = md.prefix_by_member(None);
+                client_state.database().create_iterator(Some(&prefix))?
+            }
+        };
+
+        // Setup the upper limit
+        let upper_limit = match max {
+            LexIndex::Invalid => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+            LexIndex::Include(prefix) => Some((md.prefix_by_member(Some(prefix)), true)),
+            LexIndex::Exclude(prefix) => Some((md.prefix_by_member(Some(prefix)), false)),
+            LexIndex::Max => None,
+            LexIndex::Min => {
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+        };
+
+        let set_prefix = md.prefix_by_member(None);
+        let mut state = UpperLimitState::NotFound;
+        let mut count = 0usize;
+        while db_iter.valid() {
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&set_prefix) {
+                // Key does not belong to this set
+                break;
+            }
+
+            if let Some((end_prefix, include_it)) = &upper_limit {
+                if !Self::can_iter_continue(key, end_prefix.as_ref(), *include_it, &mut state) {
+                    break;
+                }
+            }
+            count = count.saturating_add(1);
+            db_iter.next();
+        }
+
+        builder.number_usize(response_buffer, count);
+        Ok(())
+    }
+
+    /// Check whether we reached the upper limit `end_prefix`.
+    /// If `end_prefix_included` is `true`, we allow this prefix to be included
+    /// If `end_prefix_included` is `false`, this function return false, at the first
+    /// `end_prefix` found
+    fn can_iter_continue(
+        current_key: &[u8],
+        end_prefix: &[u8],
+        end_prefix_included: bool,
+        state: &mut UpperLimitState,
+    ) -> bool {
+        match state {
+            UpperLimitState::NotFound => {
+                if !current_key.starts_with(end_prefix) {
+                    true
+                } else {
+                    *state = UpperLimitState::Found;
+                    // We found the upper limit, "upper limit reached" is
+                    // now determined based on whether or not we should include it
+                    // i.e if the upper limit is NOT included, then we reached the upper
+                    // limit boundary
+                    end_prefix_included
+                }
+            }
+            UpperLimitState::Found => current_key.starts_with(end_prefix),
+        }
+    }
+
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
     /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
     /// equal to min or max). The elements are considered to be ordered from low to high scores
@@ -1029,10 +1170,35 @@ impl ZSetCommands {
         Self::parse_score(&BytesMut::from(mod_index)).map(|val| (val, !exclude_index))
     }
 
-    /// Valid `indx` must start with `(` or `[`, in order to specify whether the range interval is exclusive
-    /// or inclusive, respectively.
-    fn parse_lex_range(_index: &BytesMut) -> Option<(f64, bool)> {
-        unimplemented!();
+    /// Valid `index` must start with `(` (exclude) or `[` (include), in order to specify whether the range
+    /// interval is exclusive or inclusive, respectively.
+    /// The special values of `+` or `-` for start and stop have the special meaning or positively infinite
+    /// and negatively infinite strings
+    fn parse_lex_index(index: &[u8]) -> LexIndex {
+        if index.is_empty() {
+            return LexIndex::Invalid;
+        }
+
+        if index == b"+" {
+            return LexIndex::Max;
+        }
+
+        if index == b"-" {
+            return LexIndex::Min;
+        }
+
+        if index.len() < 2 {
+            return LexIndex::Invalid;
+        }
+
+        let prefix = index[0];
+        let remainder = &index[1..];
+
+        match prefix {
+            b'(' => LexIndex::Exclude(remainder),
+            b'[' => LexIndex::Include(remainder),
+            _ => LexIndex::Invalid,
+        }
     }
 
     /// Iterate over all items of `set_name` and apply callback on them
@@ -1490,7 +1656,6 @@ mod test {
         let res = ZSetCommands::parse_optional_args(cmd, 3, &mut keywords);
         assert!(res.is_err());
         let errstr = res.unwrap_err();
-        println!("{errstr}");
         assert!(errstr.contains("expected keyword"));
 
         let args = "zinter 2 a b WEIGHTS 1 2".split(' ').collect();
@@ -1670,6 +1835,18 @@ mod test {
         ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 5 AGGREGATE SUM", "-ERR syntax error\r\n"),
         ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 AGGREGATE SUM", ":0\r\n"),
     ]; "test_zinterstore")]
+    #[test_case(vec![
+        ("zadd myzset0 0 a 0 b 0 c 0 d 0 e", ":5\r\n"),
+        ("zadd myzset1 0 a 0 b 0 c 0 d 0 e", ":5\r\n"),
+        ("zadd myzset2 0 a 0 b 0 c 0 d 0 e", ":5\r\n"),
+        ("zadd myzset1 0 f 0 g", ":2\r\n"),
+        ("zlexcount myzset1 - +", ":7\r\n"),
+        ("zlexcount myzset1 [b [f", ":5\r\n"),
+        ("zlexcount myzset1 [b (f", ":4\r\n"),
+        ("zlexcount myzset1 (b (f", ":3\r\n"),
+        ("zlexcount myzset1 b (f", "-ERR syntax error\r\n"),
+        ("zlexcount myzset1 (b f", "-ERR syntax error\r\n"),
+    ]; "test_zlexcount")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
