@@ -94,9 +94,8 @@ pub trait StorageTrait {
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError>;
 
-    /// Create a database iterator. If `prefix` is not `None`, move the iterator
-    /// to point to `prefix`
-    fn create_iterator(&self, prefix: Option<&BytesMut>) -> Result<IteratorAdapter, SableError>;
+    /// Create a database iterator starting from `prefix`
+    fn create_iterator(&self, prefix: &BytesMut) -> Result<IteratorAdapter, SableError>;
 
     /// Create a reverse database iterator
     /// `upper_bound` should be the first prefix after the requested prefix.

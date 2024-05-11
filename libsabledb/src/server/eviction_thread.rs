@@ -216,7 +216,7 @@ impl Evictor {
         let mut records_to_delete = HashSet::<BytesMut>::new();
         for (primary_type, sub_items) in &prefix_arr {
             let prefix = Bookkeeping::prefix(primary_type);
-            let mut db_iter = store.create_iterator(Some(&prefix))?;
+            let mut db_iter = store.create_iterator(&prefix)?;
             while db_iter.valid() {
                 let Some((key, user_key)) = db_iter.key_value() else {
                     break;
@@ -281,7 +281,7 @@ impl Evictor {
         builder.write_u8(*key_type as u8);
         builder.write_u64(record.uid());
 
-        let mut db_iter = store.create_iterator(Some(&prefix))?;
+        let mut db_iter = store.create_iterator(&prefix)?;
         while db_iter.valid() {
             let Some((key, _)) = db_iter.key_value() else {
                 break;

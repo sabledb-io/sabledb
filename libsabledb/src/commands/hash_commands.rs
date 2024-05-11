@@ -439,7 +439,7 @@ impl HashCommands {
             .await?;
 
         let prefix = hash_md.prefix();
-        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
         while db_iter.valid() {
             // get the key & value
             let Some((key, value)) = db_iter.key_value() else {
@@ -727,7 +727,7 @@ impl HashCommands {
         // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
         // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
         // chosen indices
-        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
 
         while db_iter.valid() && !indices.is_empty() {
             // get the key & value
@@ -891,9 +891,7 @@ impl HashCommands {
         let hash_prefix = hash_md.prefix();
 
         let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
-        let mut db_iter = client_state
-            .database()
-            .create_iterator(Some(&iter_start_pos))?;
+        let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
         while db_iter.valid() && count > 0 {
             // get the key & value
             let Some((key, value)) = db_iter.key_value() else {

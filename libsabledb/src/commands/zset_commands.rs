@@ -397,7 +397,7 @@ impl ZSetCommands {
 
         // Determine the starting score
         let prefix = md.prefix_by_score(None);
-        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
         if !db_iter.valid() {
             // invalud iterator
             builder_return_number!(builder, response_buffer, 0);
@@ -420,7 +420,7 @@ impl ZSetCommands {
             {
                 let prefix = md.prefix_by_score(Some(set_item.score()));
                 // place the iterator on the range start
-                db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                db_iter = client_state.database().create_iterator(&prefix)?;
                 break;
             }
             db_iter.next();
@@ -922,11 +922,11 @@ impl ZSetCommands {
             }
             LexIndex::Include(prefix) => {
                 let prefix = md.prefix_by_member(Some(prefix));
-                client_state.database().create_iterator(Some(&prefix))?
+                client_state.database().create_iterator(&prefix)?
             }
             LexIndex::Exclude(prefix) => {
                 let prefix = md.prefix_by_member(Some(prefix));
-                let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                let mut db_iter = client_state.database().create_iterator(&prefix)?;
                 db_iter.next(); // skip this entry
                 db_iter
             }
@@ -936,7 +936,7 @@ impl ZSetCommands {
             }
             LexIndex::Min => {
                 let prefix = md.prefix_by_member(None);
-                client_state.database().create_iterator(Some(&prefix))?
+                client_state.database().create_iterator(&prefix)?
             }
         };
 
@@ -1071,7 +1071,7 @@ impl ZSetCommands {
 
         // items with lowest scores are placed at the start
         let mut db_iter = if items_with_low_score {
-            client_state.database().create_iterator(Some(&prefix))?
+            client_state.database().create_iterator(&prefix)?
         } else {
             let upper_bound = md.score_upper_bound_prefix();
             client_state
@@ -1222,7 +1222,7 @@ impl ZSetCommands {
 
         // Determine the starting score
         let prefix = md.prefix_by_score(None);
-        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
         if !db_iter.valid() {
             // invalud iterator
             writer_return_empty_array!(writer);
@@ -1245,7 +1245,7 @@ impl ZSetCommands {
             {
                 let prefix = md.prefix_by_score(Some(set_item.score()));
                 // place the iterator on the range start
-                db_iter = client_state.database().create_iterator(Some(&prefix))?;
+                db_iter = client_state.database().create_iterator(&prefix)?;
                 break;
             }
             db_iter.next();
@@ -1397,7 +1397,7 @@ impl ZSetCommands {
         };
 
         let prefix = md.prefix_by_member(None);
-        let mut db_iter = client_state.database().create_iterator(Some(&prefix))?;
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
         while db_iter.valid() {
             let Some((key, value)) = db_iter.key_value() else {
                 break;

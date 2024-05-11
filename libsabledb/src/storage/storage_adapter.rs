@@ -547,10 +547,7 @@ impl StorageAdapter {
         db.storage_updates_since(sequence_number, memory_limit, changes_count_limit)
     }
 
-    pub fn create_iterator(
-        &self,
-        prefix: Option<&BytesMut>,
-    ) -> Result<IteratorAdapter, SableError> {
+    pub fn create_iterator(&self, prefix: &BytesMut) -> Result<IteratorAdapter, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
@@ -694,7 +691,7 @@ mod tests {
             store.put(key, &value, PutFlags::Override).unwrap();
         }
 
-        let mut db_iter = store.create_iterator(Some(&seek_me)).unwrap();
+        let mut db_iter = store.create_iterator(&seek_me).unwrap();
         let mut result = Vec::<BytesMut>::new();
 
         while db_iter.valid() {
