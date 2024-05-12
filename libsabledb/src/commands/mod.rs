@@ -385,6 +385,28 @@ macro_rules! zset_md_or_0_builder {
     }};
 }
 
+/// Block `$client_state` for keys `$interersting_keys`. In case of failure to block
+/// the client, return `NullArray`
+macro_rules! block_client_for_keys {
+    ($client_state:expr, $interersting_keys:expr, $response_buffer:expr) => {{
+        let client_state_clone = $client_state.clone();
+        let rx = match $client_state
+            .server_inner_state()
+            .block_client($client_state.id(), &$interersting_keys, client_state_clone)
+            .await
+        {
+            BlockClientResult::Blocked(rx) => rx,
+            BlockClientResult::TxnActive => {
+                // can't block the client due to an active transaction
+                let builder = RespBuilderV2::default();
+                builder.null_array(&mut $response_buffer);
+                return Ok(HandleCommandResult::ResponseBufferUpdated($response_buffer));
+            }
+        };
+        rx
+    }};
+}
+
 bitflags::bitflags! {
 pub struct SetFlags: u32  {
     const None = 0;

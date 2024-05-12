@@ -10,8 +10,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,8 +20,66 @@ use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio::sync::RwLock;
 
-// contains a table that maps a clientId -> Sender channel
-type BlockedClientTable = RwLock<HashMap<BytesMut, VecDeque<TokioSender<u8>>>>;
+#[derive(Default)]
+struct BlockedClients {
+    /// Maps between client id and the keys it is blocking on
+    clients: HashMap<u128, Vec<BytesMut>>,
+    /// Mapes between a key and list of clients pending
+    keys_map: HashMap<BytesMut, VecDeque<(u128, TokioSender<u8>)>>,
+}
+
+impl BlockedClients {
+    pub fn contains_key(&self, key: &BytesMut) -> bool {
+        self.keys_map.contains_key(key)
+    }
+
+    pub fn get_mut(&mut self, key: &BytesMut) -> Option<&mut VecDeque<(u128, TokioSender<u8>)>> {
+        self.keys_map.get_mut(key)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys_map.is_empty()
+    }
+
+    pub fn delete_key(&mut self, key: &BytesMut) {
+        let _ = self.keys_map.remove(key);
+    }
+
+    pub fn add_client(&mut self, client_id: u128, keys: Vec<BytesMut>) {
+        self.clients.insert(client_id, keys);
+    }
+
+    /// Remove a client from the blocking clients tracking lists
+    /// Visit all keys marked for notification and remove all the
+    /// references to `client_id` and finally, remove the `client_id`
+    /// from the blocked clients list
+    pub fn remove_client(&mut self, client_id: &u128) {
+        // fast path checking:
+        let Some(blocking_keys) = self.clients.get(client_id) else {
+            tracing::trace!("BlockedClients::remove_client(): nothing to be done");
+            return;
+        };
+
+        tracing::trace!("Removing client {} for blocking lists", client_id);
+        // visit the keys that this client was blocking on and remove the registered
+        // entry for `client_id`
+        for k in blocking_keys {
+            let Some(list) = self.keys_map.get_mut(k) else {
+                continue;
+            };
+
+            list.retain(|(id, _)| id.ne(client_id));
+            if list.is_empty() {
+                // no more blocked clients for this key, remove this entire reocrd
+                let _ = self.keys_map.remove(k);
+            }
+        }
+
+        // and finally, remove the client id from the `clients` map
+        let _ = self.clients.remove(client_id);
+        tracing::trace!("Success");
+    }
+}
 
 /// Possible output for block_client function
 #[derive(Debug)]
@@ -34,7 +91,7 @@ pub enum BlockClientResult {
 }
 
 pub struct ServerState {
-    blocked_clients: BlockedClientTable,
+    blocked_clients: RwLock<BlockedClients>,
     telemetry: Arc<Mutex<Telemetry>>,
     opts: ServerOptions,
     role_primary: AtomicBool,
@@ -59,7 +116,7 @@ impl ServerState {
     pub fn new() -> Self {
         ServerState {
             telemetry: Arc::new(Mutex::new(Telemetry::default())),
-            blocked_clients: RwLock::new(HashMap::<BytesMut, VecDeque<TokioSender<u8>>>::default()),
+            blocked_clients: RwLock::new(BlockedClients::default()),
             opts: ServerOptions::default(),
             role_primary: AtomicBool::new(true),
             replicator_context: None,
@@ -139,42 +196,55 @@ impl ServerState {
         self.role_primary.store(true, Ordering::Relaxed);
     }
 
+    /// Remove `client_id` from the blocking list queues
+    pub async fn remove_blocked_client(&self, client_id: &u128) {
+        let mut blocked_clients = self.blocked_clients.write().await;
+        blocked_clients.remove_client(client_id);
+    }
+
     /// If we have blocked clients waiting for `key` -> wake them up now
     pub async fn wakeup_clients(&self, key: &BytesMut, mut num_clients: usize) {
+        tracing::trace!("Waking up {} clients for {:?}", num_clients, key);
         {
             // Fast path:
             // Obtain a read lock and check if there are any clients that needs to be waked up
-            let table = self.blocked_clients.read().await;
-            if table.is_empty() || !table.contains_key(key) {
-                tracing::debug!("there are no blocked clients for key {:?}", key);
+            let blocked_clients = self.blocked_clients.read().await;
+            if blocked_clients.is_empty() || !blocked_clients.contains_key(key) {
+                tracing::trace!("there are no blocked clients for key {:?}", key);
                 return;
             }
         }
+
+        // need to get a write lock
+        let mut blocked_clients = self.blocked_clients.write().await;
+
+        // Since a client might register for more than one key, we need to
+        // keep track of the clients that were notified and remove them from the blocking list
+        let mut notified_clients = Vec::<u128>::new();
 
         //==>
         // Some other thread might have updated the table here, so double check the table before continuing
         // but this time do this under a write-lock
         //==>
 
-        // need to get a write lock
-        let mut table = self.blocked_clients.write().await;
-
         // double check the blocking client table now
-        if table.is_empty() || !table.contains_key(key) {
+        if blocked_clients.is_empty() || !blocked_clients.contains_key(key) {
             return;
         }
 
         // based on num_clients, wakeup all the clients that are blocked by
         // this key
-        let remove_key = if let Some(channel_queue) = table.get_mut(key) {
+        let remove_key = if let Some(channel_queue) = blocked_clients.get_mut(key) {
             while num_clients > 0 {
-                if let Some(client_channel) = channel_queue.pop_front() {
+                if let Some((client_id, client_channel)) = channel_queue.pop_front() {
                     if let Err(e) = client_channel.send(0u8).await {
                         tracing::debug!(
                             "error while sending wakeup bit. client already timed out or terminated. {:?}",
                             e
                         );
                     } else {
+                        tracing::debug!("Client {} was notified!", client_id);
+                        notified_clients.push(client_id);
                         num_clients = num_clients.saturating_sub(1);
                     }
                 } else {
@@ -189,33 +259,43 @@ impl ServerState {
 
         if remove_key {
             // we no longer have clients blocked by this key
-            let _ = table.remove(key);
+            blocked_clients.delete_key(key);
+        }
+
+        for cid in &notified_clients {
+            // remove this client from the tables
+            blocked_clients.remove_client(cid);
         }
     }
 
     /// Block the current client for the provided keys
     pub async fn block_client(
         &self,
+        client_id: u128,
         keys: &[BytesMut],
         client_state: Rc<ClientState>,
     ) -> BlockClientResult {
-        tracing::debug!("blocking client for keys {:?}", keys);
+        tracing::debug!("blocking client {} for keys {:?}", client_id, keys);
         if client_state.is_txn_state_exec() {
             return BlockClientResult::TxnActive;
         }
 
         // need to get a write lock
-        let mut table = self.blocked_clients.write().await;
+        let mut blocked_clients = self.blocked_clients.write().await;
+
+        // Keep track of this client
+        let keys_to_block_on: Vec<BytesMut> = keys.to_vec();
+        blocked_clients.add_client(client_id, keys_to_block_on);
 
         let (tx, rx) = tokio::sync::mpsc::channel(keys.len());
         for key in keys.iter() {
-            if let Some(channel_queue) = table.get_mut(key) {
-                channel_queue.push_back(tx.clone());
+            if let Some(channel_queue) = blocked_clients.keys_map.get_mut(key) {
+                channel_queue.push_back((client_id, tx.clone()));
             } else {
                 // first time
-                let mut channel_queue = VecDeque::<TokioSender<u8>>::new();
-                channel_queue.push_back(tx.clone());
-                table.insert(key.clone(), channel_queue);
+                let mut channel_queue = VecDeque::<(u128, TokioSender<u8>)>::new();
+                channel_queue.push_back((client_id, tx.clone()));
+                blocked_clients.keys_map.insert(key.clone(), channel_queue);
             };
         }
         BlockClientResult::Blocked(rx)
@@ -279,10 +359,20 @@ impl ServerState {
         }
     }
 
+    // Sending command to the evictor thread usign async API
     pub async fn send_evictor(&self, message: EvictorMessage) -> Result<(), SableError> {
         if let Some(evictor_context) = &self.evictor_context {
-            tracing::debug!("Sending {:?} command to evictor", message);
+            tracing::debug!("Sending {:?} command (async) to evictor", message);
             evictor_context.send(message).await?;
+        }
+        Ok(())
+    }
+
+    // Sending command to the evictor thread usign non async API
+    pub fn send_evictor_sync(&self, message: EvictorMessage) -> Result<(), SableError> {
+        if let Some(evictor_context) = &self.evictor_context {
+            tracing::debug!("Sending {:?} command (sync) to evictor", message);
+            evictor_context.send_sync(message)?;
         }
         Ok(())
     }

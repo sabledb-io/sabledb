@@ -149,14 +149,20 @@ impl Client {
 
         // If any of the tasks (reader - writer) ends,
         // abort the connection
+        let reader_abort_handle = r.abort_handle();
+        let writer_abort_handle = w.abort_handle();
         tokio::select! {
             _ = r => {
+                // terminate the writer task
+                writer_abort_handle.abort();
                 Err(SableError::StdIoError(std::io::Error::new(
                     std::io::ErrorKind::ConnectionAborted,
                     "reader task ended prematurely. closing connection",
                 )))
             },
             _ = w => {
+                // terminate the reader task
+                reader_abort_handle.abort();
                 Err(SableError::StdIoError(std::io::Error::new(
                     std::io::ErrorKind::ConnectionAborted,
                     "writer task ended prematurely. closing connection",
@@ -690,6 +696,15 @@ impl Client {
         }
         Telemetry::inc_net_bytes_written(buffer.len() as u128);
         Ok(())
+    }
+
+    /// Perform cleanup. This method is called just before the client goes out of scope (but before
+    /// the `Drop`). Put here any `async` cleanup tasks required (which can't be done in `drop`)
+    pub async fn cleanup(&self) {
+        self.state
+            .server_inner_state()
+            .remove_blocked_client(&self.state.id())
+            .await;
     }
 }
 

@@ -264,8 +264,14 @@ impl Worker {
         tokio::task::spawn_local(async move {
             debug!("Handling new connection");
             let mut client = Client::new(server_state_clone, store_clone, tls_acceptor);
-            client.run(stream).await?;
-            Ok::<(), SableError>(())
+            if let Err(e) = client.run(stream).await {
+                // do cleanup and propagate the error message
+                tracing::debug!("Client {} terminated: {:?}", client.inner().id(), e);
+                client.cleanup().await;
+                Err(e)
+            } else {
+                Ok::<(), SableError>(())
+            }
         });
 
         Ok(())
