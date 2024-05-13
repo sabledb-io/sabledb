@@ -68,7 +68,8 @@ impl GenericCommands {
         let mut generic_db = GenericDb::with_storage(client_state.database(), db_id);
         for user_key in iter {
             // obtain the lock per key
-            let _unused = LockManager::lock_user_key_exclusive(user_key, client_state.clone())?;
+            let _unused =
+                LockManager::lock_user_key_exclusive(user_key, client_state.clone()).await?;
             if generic_db.contains(user_key)? {
                 generic_db.delete(user_key, false)?;
                 deleted_items = deleted_items.saturating_add(1);
@@ -113,7 +114,7 @@ impl GenericCommands {
         let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone())?;
+        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
         let mut generic_db =
             GenericDb::with_storage(client_state.database(), client_state.database_id());
         if let Some((_, value_metadata)) = generic_db.get(key)? {
@@ -181,7 +182,7 @@ impl GenericCommands {
         };
 
         let db_id = client_state.database_id();
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
         let mut generic_db = GenericDb::with_storage(client_state.database(), db_id);
 
         // Make sure the key exists in the database

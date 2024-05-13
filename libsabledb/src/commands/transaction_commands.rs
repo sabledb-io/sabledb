@@ -130,7 +130,7 @@ impl TransactionCommands {
 
         // Step 2:
         // Lock all the slots that are about to be affected
-        let _unused = LockManager::lock_multi_slots_exclusive(slots, client_state.clone())?;
+        let _unused = LockManager::lock_multi_slots_exclusive(slots, client_state.clone()).await?;
 
         // Step 3:
         // Execute the commands, buffering the responses

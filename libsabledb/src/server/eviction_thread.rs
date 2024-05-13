@@ -145,7 +145,7 @@ impl Evictor {
                         Some(EvictorMessage::Evict) => {
                             // Do evict now
                             tracing::info!("Evicting records from the database");
-                            Self::evict(&self.store, &self.server_options)?;
+                            Self::evict(&self.store, &self.server_options).await?;
                         }
                         Some(EvictorMessage::Shutdown) => {
                             tracing::info!("Exiting");
@@ -156,7 +156,7 @@ impl Evictor {
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(sleep_internal)) => {
                     // Evict
-                    Self::evict(&self.store, &self.server_options)?;
+                    Self::evict(&self.store, &self.server_options).await?;
                 }
             }
         }
@@ -202,7 +202,10 @@ impl Evictor {
     /// ```
     /// So in the above example, even if a user overode the value by calling `set` command
     /// we can still access the orphan values and remove them from the database
-    fn evict(store: &StorageAdapter, _server_options: &ServerOptions) -> Result<usize, SableError> {
+    async fn evict(
+        store: &StorageAdapter,
+        _server_options: &ServerOptions,
+    ) -> Result<usize, SableError> {
         let prefix_arr = vec![
             (ValueType::Hash, vec![KeyType::HashItem]),
             (ValueType::List, vec![KeyType::ListItem]),
@@ -233,7 +236,8 @@ impl Evictor {
                     let _unused = LockManager::lock_user_key_shared_unconditionally(
                         &user_key,
                         record.db_id(),
-                    )?;
+                    )
+                    .await?;
 
                     match Self::record_exists(store, &record, &user_key, primary_type)? {
                         RecordExistsResult::WrongType | RecordExistsResult::NotFound => {
@@ -342,71 +346,74 @@ mod tests {
 
     #[test]
     fn test_eviction_of_zset_records() {
-        let (_deleter, db) = crate::tests::open_store();
-        let mut zset_db = ZSetDb::with_storage(&db, 0);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_deleter, db) = crate::tests::open_store();
+            let mut zset_db = ZSetDb::with_storage(&db, 0);
 
-        let overwatch_tanks = BytesMut::from("overwatch_tanks");
-        let overwatch_tanks_2 = BytesMut::from("overwatch_tanks2");
+            let overwatch_tanks = BytesMut::from("overwatch_tanks");
+            let overwatch_tanks_2 = BytesMut::from("overwatch_tanks2");
 
-        // rank our tanks
-        let orisa = BytesMut::from("Orisa");
-        let rein = BytesMut::from("Rein");
-        let dva = BytesMut::from("Dva");
-        let roadhog = BytesMut::from("Roadhog");
+            // rank our tanks
+            let orisa = BytesMut::from("Orisa");
+            let rein = BytesMut::from("Rein");
+            let dva = BytesMut::from("Dva");
+            let roadhog = BytesMut::from("Roadhog");
 
-        let overwatch_tanks_scores =
-            vec![(&orisa, 1.0), (&rein, 2.0), (&dva, 3.0), (&roadhog, 4.0)];
+            let overwatch_tanks_scores =
+                vec![(&orisa, 1.0), (&rein, 2.0), (&dva, 3.0), (&roadhog, 4.0)];
 
-        for (tank, score) in overwatch_tanks_scores {
+            for (tank, score) in overwatch_tanks_scores {
+                assert_eq!(
+                    zset_db
+                        .add(&overwatch_tanks, tank, score, &ZWriteFlags::None, false)
+                        .unwrap(),
+                    ZSetAddMemberResult::Some(1)
+                );
+                assert_eq!(
+                    zset_db
+                        .add(&overwatch_tanks_2, tank, score, &ZWriteFlags::None, false)
+                        .unwrap(),
+                    ZSetAddMemberResult::Some(1)
+                );
+            }
+            zset_db.commit().unwrap();
             assert_eq!(
-                zset_db
-                    .add(&overwatch_tanks, tank, score, &ZWriteFlags::None, false)
-                    .unwrap(),
-                ZSetAddMemberResult::Some(1)
+                zset_db.len(&overwatch_tanks).unwrap(),
+                ZSetLenResult::Some(4)
             );
+
             assert_eq!(
-                zset_db
-                    .add(&overwatch_tanks_2, tank, score, &ZWriteFlags::None, false)
-                    .unwrap(),
-                ZSetAddMemberResult::Some(1)
+                zset_db.len(&overwatch_tanks_2).unwrap(),
+                ZSetLenResult::Some(4)
             );
-        }
-        zset_db.commit().unwrap();
-        assert_eq!(
-            zset_db.len(&overwatch_tanks).unwrap(),
-            ZSetLenResult::Some(4)
-        );
 
-        assert_eq!(
-            zset_db.len(&overwatch_tanks_2).unwrap(),
-            ZSetLenResult::Some(4)
-        );
+            // overide the set creating zombie entries
 
-        // overide the set creating zombie entries
+            let mut strings_db = StringsDb::with_storage(&db, 0);
+            let string_md = crate::StringValueMetadata::default();
 
-        let mut strings_db = StringsDb::with_storage(&db, 0);
-        let string_md = crate::StringValueMetadata::default();
+            let key = BytesMut::from("overwatch_tanks");
+            let value = BytesMut::from("a string value");
+            strings_db
+                .put(&key, &value, &string_md, PutFlags::Override)
+                .unwrap();
 
-        let key = BytesMut::from("overwatch_tanks");
-        let value = BytesMut::from("a string value");
-        strings_db
-            .put(&key, &value, &string_md, PutFlags::Override)
-            .unwrap();
+            // value now has string type
+            assert_eq!(
+                zset_db.len(&overwatch_tanks).unwrap(),
+                ZSetLenResult::WrongType
+            );
 
-        // value now has string type
-        assert_eq!(
-            zset_db.len(&overwatch_tanks).unwrap(),
-            ZSetLenResult::WrongType
-        );
+            // but this ZSet is still valid
+            assert_eq!(
+                zset_db.len(&overwatch_tanks_2).unwrap(),
+                ZSetLenResult::Some(4)
+            );
 
-        // but this ZSet is still valid
-        assert_eq!(
-            zset_db.len(&overwatch_tanks_2).unwrap(),
-            ZSetLenResult::Some(4)
-        );
-
-        let server_options = ServerOptions::default();
-        let items_evicted = Evictor::evict(&db, &server_options).unwrap();
-        assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
+            let server_options = ServerOptions::default();
+            let items_evicted = Evictor::evict(&db, &server_options).await.unwrap();
+            assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
+        });
     }
 }

@@ -52,75 +52,78 @@ impl ReplicationClient {
 
         // Spawn a thread to handle the replication
         let _ = std::thread::spawn(move || {
-            loop {
-                let mut stream = match Self::connect_to_primary(&options) {
-                    Err(e) => {
-                        crate::error_with_throttling!(300, "Failed to connect to primary. {:?}", e);
-
-                        // Check whether we should attempt to reconnect
-                        match Self::check_command_channel(&mut rx) {
-                            CheckShutdownResult::Terminate => {
-                                tracing::info!(
-                                    "Requested to terminate replication client thread. Closing connection with primary"
-                                );
-                                break; // leave the thread
-                            }
-                            CheckShutdownResult::Timeout => {}
-                            CheckShutdownResult::Err(e) => {
-                                tracing::error!(
-                                    "Error occurred while reading from channel. {:?}",
-                                    e
-                                );
-                                break; // leave the thread
-                            }
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(250));
-                        continue;
-                    }
-                    Ok(stream) => stream,
-                };
-
-                // hereon: use socket with timeout
-                if let Err(e) = prepare_std_socket(&stream) {
-                    tracing::error!("Failed to prepare socket. {:?}", e);
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    break;
-                }
-
-                // This is the replication main loop:
-                // We continuously calling `request_changes` from the primary
-                // and store them in our database
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
                 loop {
-                    let mut reader = TcpStreamBytesReader::new(&stream);
-                    let mut writer = TcpStreamBytesWriter::new(&stream);
-                    let result =
-                        Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx);
-                    match result {
-                        RequestChangesResult::Success => {
-                            // Note: if there are no changes, the primary server will stall
-                            // the response
+                    let mut stream = match Self::connect_to_primary(&options) {
+                        Err(e) => {
+                            crate::error_with_throttling!(300, "Failed to connect to primary. {:?}", e);
+
+                            // Check whether we should attempt to reconnect
+                            match Self::check_command_channel(&mut rx) {
+                                CheckShutdownResult::Terminate => {
+                                    tracing::info!(
+                                        "Requested to terminate replication client thread. Closing connection with primary"
+                                    );
+                                    break; // leave the thread
+                                }
+                                CheckShutdownResult::Timeout => {}
+                                CheckShutdownResult::Err(e) => {
+                                    tracing::error!(
+                                        "Error occurred while reading from channel. {:?}",
+                                        e
+                                    );
+                                    break; // leave the thread
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            continue;
                         }
-                        RequestChangesResult::Reconnect => {
-                            tracing::info!("Closing connection with primary: {:?}", stream);
-                            let _ = stream.shutdown(std::net::Shutdown::Both);
-                            break;
-                        }
-                        RequestChangesResult::ExitThread => {
-                            tracing::info!("Closing connection with primary: {:?}", stream);
-                            let _ = stream.shutdown(std::net::Shutdown::Both);
-                            return; // leave the thread
-                        }
-                        RequestChangesResult::FullSync => {
-                            // Try to do a fullsync
-                            if let Err(e) = Self::fullsync(&store, &options, &mut stream) {
-                                tracing::error!("Fullsync error. {:?}", e);
+                        Ok(stream) => stream,
+                    };
+
+                    // hereon: use socket with timeout
+                    if let Err(e) = prepare_std_socket(&stream) {
+                        tracing::error!("Failed to prepare socket. {:?}", e);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
+
+                    // This is the replication main loop:
+                    // We continuously calling `request_changes` from the primary
+                    // and store them in our database
+                    loop {
+                        let mut reader = TcpStreamBytesReader::new(&stream);
+                        let mut writer = TcpStreamBytesWriter::new(&stream);
+                        let result =
+                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx);
+                        match result {
+                            RequestChangesResult::Success => {
+                                // Note: if there are no changes, the primary server will stall
+                                // the response
+                            }
+                            RequestChangesResult::Reconnect => {
+                                tracing::info!("Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 break;
                             }
+                            RequestChangesResult::ExitThread => {
+                                tracing::info!("Closing connection with primary: {:?}", stream);
+                                let _ = stream.shutdown(std::net::Shutdown::Both);
+                                return; // leave the thread
+                            }
+                            RequestChangesResult::FullSync => {
+                                // Try to do a fullsync
+                                if let Err(e) = Self::fullsync(&store, &options, &mut stream).await {
+                                    tracing::error!("Fullsync error. {:?}", e);
+                                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-            }
+            });
         });
 
         // Thread is detached
@@ -157,7 +160,7 @@ impl ReplicationClient {
     }
 
     /// Perform a fullsync with the primary
-    fn fullsync(
+    async fn fullsync(
         store: &StorageAdapter,
         options: &ServerOptions,
         stream: &mut std::net::TcpStream,
@@ -202,6 +205,9 @@ impl ReplicationClient {
             "Backup database extracted to: {}",
             target_folder_path.display()
         );
+
+        let _unused = crate::LockManager::lock_all_keys_shared().await?;
+        tracing::info!("Database is now locked (read-only mode)");
 
         store.restore_from_checkpoint(&target_folder_path, true)?;
         tracing::info!("Database successfully restored from backup");

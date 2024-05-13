@@ -1,7 +1,7 @@
 use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, SableError};
 use bytes::BytesMut;
 use std::rc::Rc;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 lazy_static::lazy_static! {
     static ref MULTI_LOCK: ShardLocker = ShardLocker::default();
@@ -10,7 +10,27 @@ lazy_static::lazy_static! {
 #[allow(dead_code)]
 pub struct ShardLockGuard<'a> {
     read_locks: Option<Vec<RwLockReadGuard<'a, u16>>>,
+    read_count: usize,
     write_locks: Option<Vec<RwLockWriteGuard<'a, u16>>>,
+    write_count: usize,
+}
+
+impl<'a> ShardLockGuard<'a> {
+    pub fn len(&self) -> usize {
+        self.read_count.saturating_add(self.write_count)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn read_locks_len(&self) -> usize {
+        self.read_count
+    }
+
+    pub fn write_locks_len(&self) -> usize {
+        self.write_count
+    }
 }
 
 struct ShardLocker {
@@ -35,51 +55,51 @@ pub struct LockManager {}
 
 impl LockManager {
     // obtain exclusive lock on a user key
-    pub fn lock_user_key_exclusive<'a>(
+    pub async fn lock_user_key_exclusive<'a>(
         user_key: &BytesMut,
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_exclusive(&internal_key, client_state)
+        Self::lock_internal_key_exclusive(&internal_key, client_state).await
     }
 
     /// Obtain exclusive lock on a user key, without conditions.
     /// other methods in this class will check for various variables
     /// like whether or not we have an open transaction and in which state.
     /// This function skip these checks
-    pub fn lock_user_key_exclusive_unconditionally<'a>(
+    pub async fn lock_user_key_exclusive_unconditionally<'a>(
         user_key: &BytesMut,
         db_id: u16,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_exclusive_unconditionally(&internal_key)
+        Self::lock_internal_key_exclusive_unconditionally(&internal_key).await
     }
 
     /// Obtain exclusive lock on a user key, without conditions.
     /// other methods in this class will check for various variables
     /// like whether or not we have an open transaction and in which state.
     /// This function skip these checks
-    pub fn lock_user_key_shared_unconditionally<'a>(
+    pub async fn lock_user_key_shared_unconditionally<'a>(
         user_key: &BytesMut,
         db_id: u16,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_shared_unconditionally(&internal_key)
+        Self::lock_internal_key_shared_unconditionally(&internal_key).await
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_key_shared<'a>(
+    pub async fn lock_user_key_shared<'a>(
         user_key: &BytesMut,
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_shared(&internal_key, client_state)
+        Self::lock_internal_key_shared(&internal_key, client_state).await
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_shared<'a>(
+    pub async fn lock_user_keys_shared<'a>(
         user_keys: &[&BytesMut],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -91,11 +111,11 @@ impl LockManager {
             primary_keys.push(internal_key.clone());
             primary_keys_refs.push(internal_key);
         }
-        Self::lock_multi_internal_keys_shared(&primary_keys_refs, client_state)
+        Self::lock_multi_internal_keys_shared(&primary_keys_refs, client_state).await
     }
 
     // obtain a shared lock on a user key
-    pub fn lock_user_keys_exclusive<'a>(
+    pub async fn lock_user_keys_exclusive<'a>(
         user_keys: &[&BytesMut],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -107,11 +127,11 @@ impl LockManager {
             primary_keys.push(internal_key.clone());
             primary_keys_refs.push(internal_key);
         }
-        Self::lock_multi_internal_keys_exclusive(&primary_keys_refs, client_state)
+        Self::lock_multi_internal_keys_exclusive(&primary_keys_refs, client_state).await
     }
 
     /// Lock the entire storage
-    pub fn lock_all_keys_exclusive<'a>() -> Result<ShardLockGuard<'a>, SableError> {
+    pub async fn lock_all_keys_exclusive<'a>() -> Result<ShardLockGuard<'a>, SableError> {
         let mut write_locks =
             Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(crate::utils::SLOT_SIZE.into());
 
@@ -124,26 +144,25 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        for idx in slots.into_iter() {
-            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+        for idx in &slots {
+            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            if let Ok(lock) = lock.write() {
-                write_locks.push(lock);
-            } else {
-                panic!("Can't obtain lock for slot: {}", idx);
-            }
+            let lock = lock.write().await;
+            write_locks.push(lock);
         }
 
         Ok(ShardLockGuard {
             read_locks: None,
+            read_count: 0,
             write_locks: Some(write_locks),
+            write_count: slots.len(),
         })
     }
 
     /// Lock the entire storage
-    pub fn lock_all_keys_shared<'a>() -> Result<ShardLockGuard<'a>, SableError> {
+    pub async fn lock_all_keys_shared<'a>() -> Result<ShardLockGuard<'a>, SableError> {
         let mut read_locks =
             Vec::<RwLockReadGuard<'a, u16>>::with_capacity(crate::utils::SLOT_SIZE.into());
 
@@ -156,21 +175,20 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        for idx in slots.into_iter() {
-            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+        for idx in &slots {
+            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            if let Ok(lock) = lock.read() {
-                read_locks.push(lock);
-            } else {
-                panic!("Can't obtain lock for slot: {}", idx);
-            }
+            let lock = lock.read().await;
+            read_locks.push(lock);
         }
 
         Ok(ShardLockGuard {
             read_locks: Some(read_locks),
+            read_count: slots.len(),
             write_locks: None,
+            write_count: 0,
         })
     }
 
@@ -178,7 +196,7 @@ impl LockManager {
     // Internal API
     // ===-------------------------------------------
 
-    fn lock_multi_internal_keys_exclusive<'a>(
+    async fn lock_multi_internal_keys_exclusive<'a>(
         keys: &[Rc<BytesMut>],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -200,25 +218,24 @@ impl LockManager {
             return Self::noop_lock();
         }
 
-        for idx in slots.into_iter() {
-            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+        for idx in &slots {
+            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            if let Ok(lock) = lock.write() {
-                write_locks.push(lock);
-            } else {
-                panic!("Can't obtain lock for slot: {}", idx);
-            }
+            let lock = lock.write().await;
+            write_locks.push(lock);
         }
 
         Ok(ShardLockGuard {
             read_locks: None,
+            read_count: 0,
             write_locks: Some(write_locks),
+            write_count: slots.len(),
         })
     }
 
-    fn lock_multi_internal_keys_shared<'a>(
+    async fn lock_multi_internal_keys_shared<'a>(
         keys: &[Rc<BytesMut>],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -240,26 +257,25 @@ impl LockManager {
             return Self::noop_lock();
         }
 
-        for idx in slots.into_iter() {
-            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+        for idx in &slots {
+            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            if let Ok(lock) = lock.read() {
-                read_locks.push(lock);
-            } else {
-                panic!("Can't obtain lock for slot: {}", idx);
-            }
+            let lock = lock.read().await;
+            read_locks.push(lock);
         }
 
         Ok(ShardLockGuard {
             read_locks: Some(read_locks),
+            read_count: slots.len(),
             write_locks: None,
+            write_count: 0,
         })
     }
 
     /// Lock `slots`, exclusively
-    pub fn lock_multi_slots_exclusive<'a>(
+    pub async fn lock_multi_slots_exclusive<'a>(
         mut slots: Vec<u16>,
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -276,25 +292,24 @@ impl LockManager {
             return Self::noop_lock();
         }
 
-        for idx in slots.into_iter() {
-            let Some(lock) = MULTI_LOCK.locks.get(idx as usize) else {
+        for idx in &slots {
+            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            if let Ok(lock) = lock.write() {
-                write_locks.push(lock);
-            } else {
-                panic!("Can't obtain lock for slot: {}", idx);
-            }
+            let lock = lock.write().await;
+            write_locks.push(lock);
         }
 
         Ok(ShardLockGuard {
             read_locks: None,
+            read_count: 0,
             write_locks: Some(write_locks),
+            write_count: slots.len(),
         })
     }
 
-    fn lock_internal_key_shared<'a>(
+    async fn lock_internal_key_shared<'a>(
         key: &BytesMut,
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -316,23 +331,27 @@ impl LockManager {
                 .get(slot as usize)
                 .expect("lock")
                 .read()
-                .expect("poisoned mutex"),
+                .await,
         );
 
         Ok(ShardLockGuard {
             read_locks: Some(read_locks),
+            read_count: 1,
             write_locks: None,
+            write_count: 0,
         })
     }
 
     fn noop_lock<'a>() -> Result<ShardLockGuard<'a>, SableError> {
         Ok(ShardLockGuard {
             write_locks: None,
+            write_count: 0,
             read_locks: None,
+            read_count: 0,
         })
     }
 
-    fn lock_internal_key_exclusive<'a>(
+    async fn lock_internal_key_exclusive<'a>(
         key: &BytesMut,
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -353,16 +372,18 @@ impl LockManager {
                 .get(slot as usize)
                 .expect("lock")
                 .write()
-                .expect("poisoned mutex"),
+                .await,
         );
 
         Ok(ShardLockGuard {
             write_locks: Some(write_locks),
+            write_count: 1,
             read_locks: None,
+            read_count: 0,
         })
     }
 
-    fn lock_internal_key_exclusive_unconditionally<'a>(
+    async fn lock_internal_key_exclusive_unconditionally<'a>(
         user_key: &BytesMut,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(1);
@@ -373,16 +394,18 @@ impl LockManager {
                 .get(slot as usize)
                 .expect("lock")
                 .write()
-                .expect("poisoned mutex"),
+                .await,
         );
 
         Ok(ShardLockGuard {
             write_locks: Some(write_locks),
+            write_count: 1,
             read_locks: None,
+            read_count: 0,
         })
     }
 
-    fn lock_internal_key_shared_unconditionally<'a>(
+    async fn lock_internal_key_shared_unconditionally<'a>(
         user_key: &BytesMut,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let mut read_locks = Vec::<RwLockReadGuard<'a, u16>>::with_capacity(1);
@@ -393,12 +416,14 @@ impl LockManager {
                 .get(slot as usize)
                 .expect("lock")
                 .read()
-                .expect("poisoned mutex"),
+                .await,
         );
 
         Ok(ShardLockGuard {
             write_locks: None,
+            write_count: 0,
             read_locks: Some(read_locks),
+            read_count: 1,
         })
     }
 }
@@ -418,146 +443,194 @@ mod tests {
 
     #[test]
     fn test_write_locks() {
-        let k1 = Rc::new(BytesMut::from("key1"));
-        let k2 = Rc::new(BytesMut::from("key2"));
-        let k3 = Rc::new(BytesMut::from("key1"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let k1 = Rc::new(BytesMut::from("key1"));
+            let k2 = Rc::new(BytesMut::from("key2"));
+            let k3 = Rc::new(BytesMut::from("key1"));
 
-        let mut keys = Vec::<Rc<BytesMut>>::with_capacity(3);
-        keys.push(k1);
-        keys.push(k2);
-        keys.push(k3);
+            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(3);
+            keys.push(k1);
+            keys.push(k2);
+            keys.push(k3);
 
-        let (_guard, store) = crate::tests::open_store();
-        let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        for _ in 0..100 {
-            let locker =
-                LockManager::lock_multi_internal_keys_exclusive(&keys, client.inner()).unwrap();
-            assert!(locker.write_locks.is_some());
-            assert!(locker.read_locks.is_none());
-            // we expect two locks (key1 is duplicated)
-            assert_eq!(locker.write_locks.unwrap().len(), 2);
-        }
+            for _ in 0..100 {
+                let locker = LockManager::lock_multi_internal_keys_exclusive(&keys, client.inner())
+                    .await
+                    .unwrap();
+                assert!(locker.write_locks.is_some());
+                assert!(locker.read_locks.is_none());
+                // we expect two locks (key1 is duplicated)
+                assert_eq!(locker.write_locks.unwrap().len(), 2);
+            }
+        });
     }
 
     #[test]
     fn test_read_locks() {
-        let k1 = Rc::new(BytesMut::from("key1"));
-        let k2 = Rc::new(BytesMut::from("key2"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let k1 = Rc::new(BytesMut::from("key1"));
+            let k2 = Rc::new(BytesMut::from("key2"));
 
-        let (_guard, store) = crate::tests::open_store();
-        let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-        keys.push(k1);
-        keys.push(k2);
+            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
+            keys.push(k1);
+            keys.push(k2);
 
-        for _ in 0..100 {
-            let locker =
-                LockManager::lock_multi_internal_keys_shared(&keys, client.inner()).unwrap();
-            assert!(locker.write_locks.is_none());
-            assert!(locker.read_locks.is_some());
-            assert_eq!(locker.read_locks.unwrap().len(), 2);
-        }
+            for _ in 0..100 {
+                let locker = LockManager::lock_multi_internal_keys_shared(&keys, client.inner())
+                    .await
+                    .unwrap();
+                assert!(locker.write_locks.is_none());
+                assert!(locker.read_locks.is_some());
+                assert_eq!(locker.read_locks.unwrap().len(), 2);
+            }
+        });
     }
 
     #[test]
     fn test_lock_in_txn_prep_state() {
-        let k1 = Rc::new(BytesMut::from("key1"));
-        let k2 = Rc::new(BytesMut::from("key2"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let k1 = Rc::new(BytesMut::from("key1"));
+            let k2 = Rc::new(BytesMut::from("key2"));
 
-        let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
-        expected_slots.dedup();
-        expected_slots.sort();
+            let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
+            expected_slots.dedup();
+            expected_slots.sort();
 
-        let (_guard, store) = crate::tests::open_store();
-        let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        client.inner().set_txn_state_calc_slots(true);
+            client.inner().set_txn_state_calc_slots(true);
 
-        let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-        keys.push(k1);
-        keys.push(k2);
+            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
+            keys.push(k1);
+            keys.push(k2);
 
-        let result = LockManager::lock_multi_internal_keys_shared(&keys, client.inner());
-        match result {
-            Err(SableError::LockCancelledTxnPrep(slots)) => {
-                assert_eq!(expected_slots, slots);
+            let result = LockManager::lock_multi_internal_keys_shared(&keys, client.inner()).await;
+            match result {
+                Err(SableError::LockCancelledTxnPrep(slots)) => {
+                    assert_eq!(expected_slots, slots);
+                }
+                _ => {
+                    panic!("expected SableError::LockCancelledTxnPrep");
+                }
             }
-            _ => {
-                panic!("expected SableError::LockCancelledTxnPrep");
-            }
-        }
+        });
     }
 
     #[test]
     fn test_lock_in_active_txn_state() {
-        let k1 = Rc::new(BytesMut::from("key1"));
-        let k2 = Rc::new(BytesMut::from("key2"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let k1 = Rc::new(BytesMut::from("key1"));
+            let k2 = Rc::new(BytesMut::from("key2"));
 
-        let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
-        expected_slots.dedup();
-        expected_slots.sort();
+            let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
+            expected_slots.dedup();
+            expected_slots.sort();
 
-        let (_guard, store) = crate::tests::open_store();
-        let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-        client.inner().set_txn_state_exec(true);
+            client.inner().set_txn_state_exec(true);
 
-        let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-        keys.push(k1);
-        keys.push(k2);
+            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
+            keys.push(k1);
+            keys.push(k2);
 
-        let guard = LockManager::lock_multi_internal_keys_shared(&keys, client.inner()).unwrap();
-        // No-op locks
-        assert!(guard.write_locks.is_none());
-        assert!(guard.read_locks.is_none());
+            let guard = LockManager::lock_multi_internal_keys_shared(&keys, client.inner())
+                .await
+                .unwrap();
+            // No-op locks
+            assert!(guard.write_locks.is_none());
+            assert!(guard.read_locks.is_none());
+        });
     }
 
     #[test]
     fn test_multithreaded_locks() {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
         let h1 = std::thread::spawn(|| {
-            let (_guard, store) = crate::tests::open_store();
-            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .thread_name("Worker")
+                .build()
+                .unwrap_or_else(|e| {
+                    panic!("failed to create tokio runtime. {:?}", e);
+                });
+            rt.block_on(async move {
+                let (_guard, store) = crate::tests::open_store();
+                let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-            let k4 = Rc::new(BytesMut::from("key4"));
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
+                let k4 = BytesMut::from("key4");
+                let k1 = BytesMut::from("key1");
+                let k2 = BytesMut::from("key2");
 
-            let mut keys = Vec::<Rc<BytesMut>>::new();
-            keys.push(k1);
-            keys.push(k4);
-            keys.push(k2);
-            for _ in 0..100 {
-                let locker =
-                    LockManager::lock_multi_internal_keys_exclusive(&keys, client.inner()).unwrap();
-                assert!(locker.write_locks.is_some());
-                assert!(locker.read_locks.is_none());
-                assert_eq!(locker.write_locks.unwrap().len(), keys.len());
-            }
+                let mut keys = Vec::<&BytesMut>::new();
+                keys.push(&k1);
+                keys.push(&k4);
+                keys.push(&k2);
+
+                for _ in 0..100 {
+                    let locker = LockManager::lock_user_keys_exclusive(&keys, client.inner())
+                        .await
+                        .unwrap();
+                    let curvalue_before = COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+                    crate::test_assert!(locker.len(), keys.len());
+                    crate::test_assert!(locker.write_locks_len(), keys.len());
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    // verify that the value is still the same
+                    let curvalue_after = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::test_assert!(curvalue_before, curvalue_after);
+                }
+            });
         });
 
         let h2 = std::thread::spawn(|| {
-            let (_guard, store) = crate::tests::open_store();
-            let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .thread_name("Worker")
+                .build()
+                .unwrap_or_else(|e| {
+                    panic!("failed to create tokio runtime. {:?}", e);
+                });
+            rt.block_on(async move {
+                let (_guard, store) = crate::tests::open_store();
+                let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
-            let k3 = Rc::new(BytesMut::from("key3"));
-            let k4 = Rc::new(BytesMut::from("key4"));
+                let k1 = BytesMut::from("key1");
+                let k2 = BytesMut::from("key2");
+                let k3 = BytesMut::from("key3");
+                let k4 = BytesMut::from("key4");
 
-            let mut keys = Vec::<Rc<BytesMut>>::new();
-            keys.push(k2);
-            keys.push(k3);
-            keys.push(k4);
-            keys.push(k1);
-            for _ in 0..100 {
-                let locker =
-                    LockManager::lock_multi_internal_keys_exclusive(&keys, client.inner()).unwrap();
-                assert!(locker.write_locks.is_some());
-                assert!(locker.read_locks.is_none());
-                assert_eq!(locker.write_locks.unwrap().len(), keys.len());
-            }
+                let mut keys = Vec::<&BytesMut>::new();
+                keys.push(&k1);
+                keys.push(&k3);
+                keys.push(&k4);
+                keys.push(&k2);
+
+                for _ in 0..100 {
+                    let locker = LockManager::lock_user_keys_exclusive(&keys, client.inner())
+                        .await
+                        .unwrap();
+                    let curvalue_before = COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+                    crate::test_assert!(locker.len(), keys.len());
+                    crate::test_assert!(locker.write_locks_len(), keys.len());
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    // verify that the value is still the same
+                    let curvalue_after = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::test_assert!(curvalue_before, curvalue_after);
+                }
+            });
         });
         let _ = h1.join();
         let _ = h2.join();

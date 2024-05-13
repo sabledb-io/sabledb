@@ -221,8 +221,6 @@ impl StorageTrait for StorageRocksDb {
             "Restoring database from checkpoint: {}",
             backup_location.display()
         );
-        let _unused = crate::LockManager::lock_all_keys_shared()?;
-        tracing::info!("Database is now locked (read-only mode)");
 
         if delete_all_before_store {
             // TODO: delete all entries from the database
@@ -474,66 +472,71 @@ mod tests {
 
     #[cfg(feature = "rocks_db")]
     #[test]
-    fn test_checkpoint() -> Result<(), SableError> {
-        let _ = std::fs::create_dir_all("tests");
-        let db_path = PathBuf::from(format!("tests/test_checkpoint.db"));
-        let backup_db_path = PathBuf::from(format!("tests/test_checkpoint.db.checkpoint"));
-        let _ = std::fs::remove_dir_all(db_path.clone());
-        // checkpoint path must not exist
-        let _ = std::fs::remove_dir_all(backup_db_path.clone());
-        let open_params = StorageOpenParams::default()
-            .set_compression(true)
-            .set_cache_size(64)
-            .set_path(&db_path);
-        let db = StorageRocksDb::open(open_params.clone())?;
+    fn test_checkpoint() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let _ = std::fs::create_dir_all("tests");
+            let db_path = PathBuf::from(format!("tests/test_checkpoint.db"));
+            let backup_db_path = PathBuf::from(format!("tests/test_checkpoint.db.checkpoint"));
+            let _ = std::fs::remove_dir_all(db_path.clone());
+            // checkpoint path must not exist
+            let _ = std::fs::remove_dir_all(backup_db_path.clone());
+            let open_params = StorageOpenParams::default()
+                .set_compression(true)
+                .set_cache_size(64)
+                .set_path(&db_path);
+            let db = StorageRocksDb::open(open_params.clone()).unwrap();
 
-        // put some items
-        println!("Populating db...");
-        for i in 0..100_000 {
-            let value = format!("value_string_{}", i);
-            let key = format!("key_{}", i);
-            db.put(
-                &BytesMut::from(&key[..]),
-                &BytesMut::from(&value[..]),
-                PutFlags::Override,
-            )?;
-        }
+            // put some items
+            println!("Populating db...");
+            for i in 0..100_000 {
+                let value = format!("value_string_{}", i);
+                let key = format!("key_{}", i);
+                db.put(
+                    &BytesMut::from(&key[..]),
+                    &BytesMut::from(&value[..]),
+                    PutFlags::Override,
+                )
+                .unwrap();
+            }
 
-        println!(
-            "Creating backup...{}->{}",
-            db_path.display(),
-            backup_db_path.display()
-        );
+            println!(
+                "Creating backup...{}->{}",
+                db_path.display(),
+                backup_db_path.display()
+            );
 
-        // create a snapshot and drop the database
-        db.create_checkpoint(&backup_db_path)?;
-        drop(db);
-        println!("Success");
+            // create a snapshot and drop the database
+            db.create_checkpoint(&backup_db_path).unwrap();
+            drop(db);
+            println!("Success");
 
-        // Delete the db content
-        let _ = std::fs::remove_dir_all(db_path.clone());
-        // Reopen it
-        let db = StorageRocksDb::open(open_params.clone())?;
+            // Delete the db content
+            let _ = std::fs::remove_dir_all(db_path.clone());
+            // Reopen it
+            let db = StorageRocksDb::open(open_params.clone()).unwrap();
 
-        // Confirm that all the keys are missing
-        for i in 0..100_000 {
-            let key = format!("key_{}", i);
-            assert!(db.get(&BytesMut::from(&key[..]))?.is_none());
-        }
+            // Confirm that all the keys are missing
+            for i in 0..100_000 {
+                let key = format!("key_{}", i);
+                assert!(db.get(&BytesMut::from(&key[..])).unwrap().is_none());
+            }
 
-        println!("Restoring database...");
-        db.restore_from_checkpoint(&backup_db_path, false)?;
-        println!("Success");
+            println!("Restoring database...");
+            let _unused = crate::LockManager::lock_all_keys_shared().await.unwrap();
+            tracing::info!("Database is now locked (read-only mode)");
 
-        // Confirm that all the keys are present
-        for i in 0..100_000 {
-            let key = format!("key_{}", i);
-            let expected_value = format!("value_string_{}", i);
-            let value = db.get(&BytesMut::from(&key[..]))?.unwrap();
-            assert_eq!(BytesMutUtils::to_string(&value), expected_value);
-        }
+            db.restore_from_checkpoint(&backup_db_path, false).unwrap();
+            println!("Success");
 
-        println!("All records restored successfully");
-        Ok(())
+            // Confirm that all the keys are present
+            for i in 0..100_000 {
+                let key = format!("key_{}", i);
+                let expected_value = format!("value_string_{}", i);
+                let value = db.get(&BytesMut::from(&key[..])).unwrap().unwrap();
+                assert_eq!(BytesMutUtils::to_string(&value), expected_value);
+            }
+            println!("All records restored successfully");
+        });
     }
 }
