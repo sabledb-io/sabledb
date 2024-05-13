@@ -142,6 +142,24 @@ impl ZSetCommands {
             RedisCommandName::Zpopmin => {
                 Self::zpop_min_or_max(client_state, command, &mut response_buffer, true).await?;
             }
+            RedisCommandName::Bzpopmax => {
+                return Self::blocking_zpop_min_or_max(
+                    client_state,
+                    command,
+                    response_buffer,
+                    false,
+                )
+                .await;
+            }
+            RedisCommandName::Bzpopmin => {
+                return Self::blocking_zpop_min_or_max(
+                    client_state,
+                    command,
+                    response_buffer,
+                    true,
+                )
+                .await;
+            }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
@@ -1075,6 +1093,16 @@ impl ZSetCommands {
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         let builder = RespBuilderV2::default();
+        if !command.expect_args_count(5) {
+            let builder = RespBuilderV2::default();
+            let errmsg = format!(
+                "ERR wrong number of arguments for '{}' command",
+                command.main_command()
+            );
+            builder.error_string(&mut response_buffer, &errmsg);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        }
+
         let numkeys = command_arg_at!(command, 2);
         let timeout = command_arg_at!(command, 1);
         let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
@@ -1244,6 +1272,75 @@ impl ZSetCommands {
             }
         }
         Ok(())
+    }
+
+    /// `BZPOPMIN key [key ...] timeout` / `BZPOPMAX key [key ...] timeout`
+    /// The blocking variant
+    async fn blocking_zpop_min_or_max(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        mut response_buffer: BytesMut,
+        pop_min: bool,
+    ) -> Result<HandleCommandResult, SableError> {
+        if !command.expect_args_count(3) {
+            let builder = RespBuilderV2::default();
+            let errmsg = format!(
+                "ERR wrong number of arguments for '{}' command",
+                command.main_command()
+            );
+            builder.error_string(&mut response_buffer, &errmsg);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        }
+
+        let builder = RespBuilderV2::default();
+        let Some(timeout_secs) = command.args_vec().last() else {
+            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout_secs) else {
+            builder.error_string(&mut response_buffer, Strings::ZERR_TIMEOUT_NOT_FLOAT);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        let end_index = command.args_vec().len().saturating_sub(1);
+        let keys = &command.args_vec()[1usize..end_index];
+
+        let keys_to_lock: Vec<&BytesMut> = keys.iter().collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone())?;
+
+        for key in keys {
+            match Self::try_pop(client_state.clone(), key, 1, pop_min)? {
+                TryPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                TryPopResult::None => { /* try other keys */ }
+                TryPopResult::Some(result) => {
+                    builder.add_array_len(&mut response_buffer, 3);
+                    builder.add_bulk_string(&mut response_buffer, key);
+                    let Some((member, score)) = result.first() else {
+                        // can't really happen...
+                        return Err(SableError::ClientInvalidState);
+                    };
+                    builder.add_bulk_string(&mut response_buffer, member);
+                    builder.add_bulk_string(&mut response_buffer, score);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+            }
+        }
+
+        // If we reached here, we need to block the client
+
+        // Block the client or return null array. If txn is active the macro will return null array
+        let rx = block_client_for_keys_return_null_array!(client_state, keys, response_buffer);
+
+        let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
+        Ok(HandleCommandResult::Blocked((
+            rx,
+            std::time::Duration::from_millis(timeout_ms),
+            TimeoutResponse::NullArrray,
+        )))
     }
 
     /// Try to pop `count` members from `key` set.
@@ -2339,8 +2436,10 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn test_bzmpop() {
+    #[test_case("bzpopmax myset 30", "*3\r\n$5\r\nmyset\r\n$5\r\norisa\r\n$4\r\n2.00\r\n"; "test_bzpopmax")]
+    #[test_case("bzpopmin myset 30", "*3\r\n$5\r\nmyset\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"; "test_bzpopmin")]
+    #[test_case("bzmpop 30 1 myset MAX", "*2\r\n$5\r\nmyset\r\n*1\r\n*2\r\n$5\r\norisa\r\n$4\r\n2.00\r\n"; "test_bzmpop")]
+    fn test_zset_blocking_commands(command: &'static str, expected_result: &'static str) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let (_guard, store) = crate::tests::open_store();
@@ -2349,12 +2448,8 @@ mod test {
             let reader = Client::new(server.clone(), store.clone(), None);
             let writer = Client::new(server, store, None);
 
-            const EXPECTED_RESULT: &str =
-                "*2\r\n$5\r\nmyset\r\n*1\r\n*2\r\n$5\r\norisa\r\n$4\r\n2.00\r\n";
-
-            let read_cmd = Rc::new(RedisCommand::for_test(vec![
-                "bzmpop", "30", "1", "myset", "MAX",
-            ]));
+            let args = command.split(' ').collect();
+            let read_cmd = Rc::new(RedisCommand::for_test(args));
 
             // we expect to get a rx + duration, if we dont "deferred_command" will panic!
             let (rx, duration, _timeout_response) =
@@ -2373,7 +2468,7 @@ mod test {
                     println!("consumer: got something - calling blpop again");
                     let response = crate::tests::execute_command(reader.inner(), read_cmd).await;
                     assert_eq!(
-                        EXPECTED_RESULT,
+                        expected_result,
                         BytesMutUtils::to_string(&response).as_str()
                     );
                 }

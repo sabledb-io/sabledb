@@ -197,9 +197,11 @@ mod tests {
             .await
             .unwrap();
         match next_action {
-            ClientNextAction::NoAction => panic!("expected to be blocked"),
-            ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
-            ClientNextAction::TerminateConnection => panic!("expected to be blocked"),
+            ClientNextAction::NoAction => panic!("NoAction: expected to be blocked"),
+            ClientNextAction::SendResponse(_) => panic!("SendResponse: expected to be blocked"),
+            ClientNextAction::TerminateConnection => {
+                panic!("TerminateConnection: expected to be blocked")
+            }
             ClientNextAction::Wait((rx, duration, timout_response)) => {
                 (rx, duration, timout_response)
             }

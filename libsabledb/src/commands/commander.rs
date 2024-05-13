@@ -128,6 +128,8 @@ pub enum RedisCommandName {
     Zmscore,
     Zpopmax,
     Zpopmin,
+    Bzpopmax,
+    Bzpopmin,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -995,6 +997,26 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zpopmin)
                         .write()
                         .with_arity(-2),
+                ),
+                (
+                    "bzpopmax",
+                    CommandMetadata::new(RedisCommandName::Bzpopmax)
+                        .write()
+                        .blocking()
+                        .with_arity(-3)
+                        .with_first_key(1)
+                        .with_last_key(-2)
+                        .with_step(1),
+                ),
+                (
+                    "bzpopmin",
+                    CommandMetadata::new(RedisCommandName::Bzpopmin)
+                        .write()
+                        .blocking()
+                        .with_arity(-3)
+                        .with_first_key(1)
+                        .with_last_key(-2)
+                        .with_step(1),
                 ),
             ]),
         }
