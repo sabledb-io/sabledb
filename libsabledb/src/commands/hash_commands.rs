@@ -16,9 +16,8 @@ use crate::{
 };
 
 use crate::io::RespWriter;
+use crate::utils;
 use bytes::BytesMut;
-use rand::prelude::*;
-use std::collections::VecDeque;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 use wildmatch::WildMatch;
@@ -700,7 +699,8 @@ impl HashCommands {
         let possible_indexes = (0..hash_md.len() as usize).collect::<Vec<usize>>();
 
         // select the indices we want to pick
-        let mut indices = choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
+        let mut indices =
+            utils::choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
 
         // When returning multiple items, we return an array
         if indices.len() > 1 || with_values {
@@ -973,50 +973,6 @@ impl HashCommands {
     }
 }
 
-/// Given list of values `options`, return up to `count` values.
-/// The output is sorted.
-fn choose_multiple_values(
-    count: usize,
-    options: &Vec<usize>,
-    allow_dups: bool,
-) -> Result<VecDeque<usize>, SableError> {
-    let mut rng = rand::thread_rng();
-    let mut chosen = Vec::<usize>::new();
-    if allow_dups {
-        for _ in 0..count {
-            chosen.push(*options.choose(&mut rng).unwrap_or(&0));
-        }
-    } else {
-        let mut unique_values = options.clone();
-        unique_values.sort();
-        unique_values.dedup();
-        loop {
-            if unique_values.is_empty() {
-                break;
-            }
-
-            if chosen.len() == count {
-                break;
-            }
-
-            let pos = rng.gen_range(0..unique_values.len());
-            let Some(val) = unique_values.get(pos) else {
-                return Err(SableError::OtherError(format!(
-                    "Internal error: failed to read from vector (len: {}, pos: {})",
-                    unique_values.len(),
-                    pos
-                )));
-            };
-            chosen.push(*val);
-            unique_values.remove(pos);
-        }
-    }
-
-    chosen.sort();
-    let chosen: VecDeque<usize> = chosen.iter().copied().collect();
-    Ok(chosen)
-}
-
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
 // | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
 // | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
@@ -1218,16 +1174,6 @@ mod test {
             }
         });
         Ok(())
-    }
-
-    #[test]
-    fn test_rng_selection() {
-        let options = vec![1, 2, 2, 2, 3, 4, 5, 6, 7, 7, 7];
-        let selections = choose_multiple_values(8, &options, false).unwrap();
-        assert_eq!(selections.len(), 7);
-
-        let selections = choose_multiple_values(8, &options, true).unwrap();
-        assert_eq!(selections.len(), 8);
     }
 
     #[test]

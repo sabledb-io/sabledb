@@ -12,7 +12,8 @@ pub use shard_locker::*;
 pub use stopwatch::*;
 
 use bytes::BytesMut;
-
+use rand::prelude::*;
+use std::collections::VecDeque;
 use std::str::FromStr;
 
 pub struct StringUtils {}
@@ -591,5 +592,71 @@ pub fn current_time(res: CurrentTimeResolution) -> u64 {
         CurrentTimeResolution::Microseconds => now.as_micros().try_into().unwrap_or(u64::MAX),
         CurrentTimeResolution::Milliseconds => now.as_millis().try_into().unwrap_or(u64::MAX),
         CurrentTimeResolution::Seconds => now.as_secs(),
+    }
+}
+
+/// Given list of values `options`, return up to `count` values.
+/// The output is sorted.
+pub fn choose_multiple_values(
+    count: usize,
+    options: &Vec<usize>,
+    allow_dups: bool,
+) -> Result<VecDeque<usize>, SableError> {
+    let mut rng = rand::thread_rng();
+    let mut chosen = Vec::<usize>::new();
+    if allow_dups {
+        for _ in 0..count {
+            chosen.push(*options.choose(&mut rng).unwrap_or(&0));
+        }
+    } else {
+        let mut unique_values = options.clone();
+        unique_values.sort();
+        unique_values.dedup();
+        loop {
+            if unique_values.is_empty() {
+                break;
+            }
+
+            if chosen.len() == count {
+                break;
+            }
+
+            let pos = rng.gen_range(0..unique_values.len());
+            let Some(val) = unique_values.get(pos) else {
+                return Err(SableError::OtherError(format!(
+                    "Internal error: failed to read from vector (len: {}, pos: {})",
+                    unique_values.len(),
+                    pos
+                )));
+            };
+            chosen.push(*val);
+            unique_values.remove(pos);
+        }
+    }
+
+    chosen.sort();
+    let chosen: VecDeque<usize> = chosen.iter().copied().collect();
+    Ok(chosen)
+}
+
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rng_selection() {
+        let options = vec![1, 2, 2, 2, 3, 4, 5, 6, 7, 7, 7];
+        let selections = choose_multiple_values(8, &options, false).unwrap();
+        assert_eq!(selections.len(), 7);
+
+        let selections = choose_multiple_values(8, &options, true).unwrap();
+        assert_eq!(selections.len(), 8);
     }
 }
