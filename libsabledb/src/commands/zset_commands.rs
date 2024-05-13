@@ -7,6 +7,7 @@ use crate::{
         ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult,
         ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
     },
+    utils,
     utils::RespBuilderV2,
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
@@ -1429,6 +1430,147 @@ impl ZSetCommands {
             }
             UpperLimitState::Found => current_key.starts_with(end_prefix),
         }
+    }
+
+    /// `ZRANDMEMBER key [count [WITHSCORES]]`
+    #[allow(dead_code)]
+    async fn zrandmember(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let key = command_arg_at!(command, 1);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // skip "ZRANDMEMBER"
+        iter.next(); // skips the key
+
+        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
+
+        // Parse the arguments
+        let builder = RespBuilderV2::default();
+        let mut response_buffer = BytesMut::with_capacity(4096);
+        let (count, with_scores, allow_dups) = match (iter.next(), iter.next()) {
+            (Some(count), None) => {
+                let Some(count) = BytesMutUtils::parse::<i64>(count) else {
+                    writer
+                        .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                        .await?;
+                    writer.flush().await?;
+                    return Ok(());
+                };
+                (count.abs(), false, count < 0)
+            }
+            (Some(count), Some(with_values)) => {
+                let Some(count) = BytesMutUtils::parse::<i64>(count) else {
+                    writer
+                        .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                        .await?;
+                    writer.flush().await?;
+                    return Ok(());
+                };
+                if BytesMutUtils::to_string(with_values).to_lowercase() != "withscores" {
+                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+                    tx.write_all(&response_buffer).await?;
+                    return Ok(());
+                }
+                (count.abs(), true, count < 0)
+            }
+            (_, _) => (1i64, false, false),
+        };
+
+        // multiple db calls, requires exclusive lock
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        // determine the array length
+        let md = match zset_db.get_metadata(key)? {
+            ZSetGetMetadataResult::Some(hash_md) => hash_md,
+            ZSetGetMetadataResult::NotFound => {
+                writer.null_string().await?;
+                writer.flush().await?;
+                return Ok(());
+            }
+            ZSetGetMetadataResult::WrongType => {
+                writer.error_string(Strings::WRONGTYPE).await?;
+                writer.flush().await?;
+                return Ok(());
+            }
+        };
+
+        // Adjust the "count"
+        let count = if allow_dups {
+            count
+        } else {
+            std::cmp::min(count, md.len() as i64)
+        };
+
+        // fast bail out
+        if count.eq(&0) {
+            writer.empty_array().await?;
+            writer.flush().await?;
+            return Ok(());
+        }
+
+        let possible_indexes = (0..md.len() as usize).collect::<Vec<usize>>();
+
+        // select the indices we want to pick
+        let mut indices =
+            utils::choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
+
+        // When returning multiple items, we return an array
+        if indices.len() > 1 || with_scores {
+            builder.add_array_len(
+                &mut response_buffer,
+                if with_scores {
+                    indices.len() * 2
+                } else {
+                    indices.len()
+                },
+            );
+        }
+
+        // create an iterator and place at at the start of the set memberss
+        let mut curidx = 0usize;
+        let prefix = md.prefix_by_member(None);
+
+        // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
+        // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
+        // chosen indices
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
+
+        while db_iter.valid() && !indices.is_empty() {
+            // get the key & value
+            let Some((key, value)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            // extract the key from the row data
+            while let Some(wanted_index) = indices.front() {
+                if curidx.eq(wanted_index) {
+                    let member_field = ZSetMemberItem::from_bytes(key)?;
+                    writer.add_bulk_string(member_field.member()).await?;
+                    if with_scores {
+                        writer.add_bulk_string(value).await?;
+                    }
+                    // pop the first element
+                    indices.pop_front();
+
+                    // Don't progress the iterator here,  we might have another item with the same index
+                } else {
+                    break;
+                }
+            }
+            curidx = curidx.saturating_add(1);
+            db_iter.next();
+        }
+        writer.flush().await?;
+        Ok(())
     }
 
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
