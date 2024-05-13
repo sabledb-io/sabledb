@@ -136,6 +136,12 @@ impl ZSetCommands {
             RedisCommandName::Zmscore => {
                 Self::zmscore(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Zpopmax => {
+                Self::zpop_min_or_max(client_state, command, &mut response_buffer, false).await?;
+            }
+            RedisCommandName::Zpopmin => {
+                Self::zpop_min_or_max(client_state, command, &mut response_buffer, true).await?;
+            }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
@@ -1189,6 +1195,57 @@ impl ZSetCommands {
         }
         Ok(())
     }
+
+    /// `ZPOPMAX key [count]` / `ZPOPMIN key [count]`
+    /// Removes and returns up to count members with the highest/minimal scores in the sorted set stored at key
+    /// When left unspecified, the default value for count is 1. Specifying a count value that is higher than the
+    /// sorted set's cardinality will not produce an error
+    async fn zpop_min_or_max(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+        pop_min: bool,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let builder = RespBuilderV2::default();
+
+        let count = match command.arg_count() {
+            2 => 1usize,
+            3 => {
+                let count = command_arg_at_as_str!(command, 2);
+                let Ok(count) = count.parse::<usize>() else {
+                    builder.error_string(response_buffer, Strings::ZERR_VALUE_MUST_BE_POSITIVE);
+                    return Ok(());
+                };
+                count
+            }
+            _ => {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+        };
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+
+        match Self::try_pop(client_state.clone(), key, count, pop_min)? {
+            TryPopResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            TryPopResult::None => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            TryPopResult::Some(result) => {
+                builder.add_array_len(response_buffer, result.len().saturating_mul(2));
+                for (member, score) in &result {
+                    builder.add_bulk_string(response_buffer, member);
+                    builder.add_bulk_string(response_buffer, score);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Try to pop `count` members from `key` set.
     /// If `lowest_score_items` is `true`, remove the members with lowest score
     fn try_pop(
@@ -2239,6 +2296,22 @@ mod test {
         ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
         ("zmscore myset rein dva sigma no_such_tank roadhog", "*5\r\n$4\r\n1.00\r\n$4\r\n2.00\r\n$4\r\n3.00\r\n$-1\r\n$4\r\n4.00\r\n"),
     ]; "test_zmscore")]
+    #[test_case(vec![
+        ("zpopmin notsuchkey 5", "*0\r\n"),
+        ("set strkey value", "+OK\r\n"),
+        ("zpopmin strkey 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
+        ("zpopmin myset 1", "*2\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"),
+        ("zpopmin myset 5", "*6\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n"),
+    ]; "test_zpopmin")]
+    #[test_case(vec![
+        ("zpopmax notsuchkey1 5", "*0\r\n"),
+        ("set strkey value", "+OK\r\n"),
+        ("zpopmax strkey 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
+        ("zpopmax myset 1", "*2\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n"),
+        ("zpopmax myset 5", "*6\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"),
+    ]; "test_zpopmax")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

@@ -126,6 +126,8 @@ pub enum RedisCommandName {
     Zmpop,
     Bzmpop,
     Zmscore,
+    Zpopmax,
+    Zpopmin,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -981,6 +983,18 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zmscore)
                         .read_only()
                         .with_arity(-3),
+                ),
+                (
+                    "zpopmax",
+                    CommandMetadata::new(RedisCommandName::Zpopmax)
+                        .write()
+                        .with_arity(-2),
+                ),
+                (
+                    "zpopmin",
+                    CommandMetadata::new(RedisCommandName::Zpopmin)
+                        .write()
+                        .with_arity(-2),
                 ),
             ]),
         }

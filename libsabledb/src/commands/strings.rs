@@ -28,4 +28,6 @@ impl Strings {
     pub const DISCARD_WITHOUT_MULTI: &'static str = "ERR DISCARD without MULTI";
     pub const WATCH_INSIDE_MULTI: &'static str = "ERR WATCH inside MULTI is not allowed";
     pub const ZERR_MIN_MAX_NOT_FLOAT: &'static str = "ERR min or max is not a float";
+    pub const ZERR_VALUE_MUST_BE_POSITIVE: &'static str =
+        "ERR value is out of range, must be positive";
 }

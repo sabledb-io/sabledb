@@ -186,6 +186,8 @@ and visit this page again in couple of days
 | zlexcount | ✓ |✓ | |
 | zmpop | ✓ |✓ | |
 | zmscore | ✓ |✓ | |
+| zpopmax | ✓ |✓ | |
+| zpopmin | ✓ |✓ | |
 
 ### Generic commands
 
