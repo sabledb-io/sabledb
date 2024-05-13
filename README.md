@@ -172,7 +172,7 @@ and visit this page again in couple of days
 
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
-| bmpop | ✓ |✓ | |
+| bzmpop | ✓ |✓ | |
 | zadd | ✓ |✓ | |
 | zcard | ✓ |✓ | |
 | zincrby | ✓ |✓ | |
@@ -185,6 +185,7 @@ and visit this page again in couple of days
 | zinterstore | ✓ |✓ | |
 | zlexcount | ✓ |✓ | |
 | zmpop | ✓ |✓ | |
+| zmscore | ✓ |✓ | |
 
 ### Generic commands
 

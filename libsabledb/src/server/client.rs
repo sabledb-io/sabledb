@@ -656,7 +656,8 @@ impl Client {
             | RedisCommandName::Zinterstore
             | RedisCommandName::Zlexcount
             | RedisCommandName::Zmpop
-            | RedisCommandName::Bzmpop => {
+            | RedisCommandName::Bzmpop
+            | RedisCommandName::Zmscore => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
                         ClientNextAction::Wait((rx, duration, timeout_response))

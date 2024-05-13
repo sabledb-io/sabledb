@@ -125,6 +125,7 @@ pub enum RedisCommandName {
     Zlexcount,
     Zmpop,
     Bzmpop,
+    Zmscore,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -974,6 +975,12 @@ impl Default for CommandsManager {
                         .with_first_key(0)
                         .with_last_key(0)
                         .with_step(0),
+                ),
+                (
+                    "zmscore",
+                    CommandMetadata::new(RedisCommandName::Zmscore)
+                        .read_only()
+                        .with_arity(-3),
                 ),
             ]),
         }

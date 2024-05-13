@@ -131,8 +131,10 @@ impl ZSetCommands {
                 Self::zmpop(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Bzmpop => {
-                // default response
                 return Self::bzmpop(client_state, command, response_buffer).await;
+            }
+            RedisCommandName::Zmscore => {
+                Self::zmscore(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -1147,6 +1149,46 @@ impl ZSetCommands {
         )))
     }
 
+    /// `ZMSCORE key member [member ...]`
+    /// Returns the scores associated with the specified members in the sorted set stored at key. For every member that
+    /// does not exist in the sorted set, a nil value is returned.
+    async fn zmscore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 1);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // zmscore
+        iter.next(); // key
+
+        let mut members = Vec::<&BytesMut>::new();
+        for member in iter {
+            members.push(member);
+        }
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone())?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        builder.add_array_len(response_buffer, members.len());
+        for member in members {
+            match zset_db.get_score(key, member)? {
+                ZSetGetScoreResult::WrongType => {
+                    builder_return_wrong_type!(builder, response_buffer);
+                }
+                ZSetGetScoreResult::NotFound => {
+                    builder.add_null_string(response_buffer);
+                }
+                ZSetGetScoreResult::Score(score) => {
+                    builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes());
+                }
+            }
+        }
+        Ok(())
+    }
     /// Try to pop `count` members from `key` set.
     /// If `lowest_score_items` is `true`, remove the members with lowest score
     fn try_pop(
@@ -2190,6 +2232,13 @@ mod test {
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
         ("ZMPOP 1 myzset MIN COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
     ]; "test_zmpop")]
+    #[test_case(vec![
+        ("zmscore notsuchkey a b", "*2\r\n$-1\r\n$-1\r\n"),
+        ("set strkey value", "+OK\r\n"),
+        ("zmscore strkey value", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
+        ("zmscore myset rein dva sigma no_such_tank roadhog", "*5\r\n$4\r\n1.00\r\n$4\r\n2.00\r\n$4\r\n3.00\r\n$-1\r\n$4\r\n4.00\r\n"),
+    ]; "test_zmscore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
