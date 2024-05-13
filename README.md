@@ -172,6 +172,7 @@ and visit this page again in couple of days
 
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
+| bmpop | ✓ |✓ | |
 | zadd | ✓ |✓ | |
 | zcard | ✓ |✓ | |
 | zincrby | ✓ |✓ | |

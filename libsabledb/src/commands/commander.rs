@@ -124,6 +124,7 @@ pub enum RedisCommandName {
     Zinterstore,
     Zlexcount,
     Zmpop,
+    Bzmpop,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -960,6 +961,16 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zmpop)
                         .write()
                         .with_arity(-4)
+                        .with_first_key(0)
+                        .with_last_key(0)
+                        .with_step(0),
+                ),
+                (
+                    "bzmpop",
+                    CommandMetadata::new(RedisCommandName::Bzmpop)
+                        .write()
+                        .blocking()
+                        .with_arity(-5)
                         .with_first_key(0)
                         .with_last_key(0)
                         .with_step(0),

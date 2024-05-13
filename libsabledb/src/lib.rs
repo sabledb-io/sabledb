@@ -121,9 +121,14 @@ macro_rules! error_with_throttling {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::{ClientNextAction, TimeoutResponse};
+    use bytes::BytesMut;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::{atomic, atomic::Ordering};
     use tokio::io::AsyncReadExt;
+    use tokio::sync::mpsc::Receiver;
+    use tokio::time::Duration;
 
     #[allow(dead_code)]
     pub struct ResponseSink {
@@ -179,6 +184,43 @@ mod tests {
                     std::fs::remove_dir_all(self.dirpath.clone()).unwrap();
                 }
             }
+        }
+    }
+
+    /// Run a command that should be deferred by the server
+    pub async fn deferred_command(
+        client_state: Rc<ClientState>,
+        cmd: Rc<RedisCommand>,
+    ) -> (Receiver<u8>, Duration, TimeoutResponse) {
+        let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+        let next_action = Client::handle_command(client_state, cmd, &mut sink.fp)
+            .await
+            .unwrap();
+        match next_action {
+            ClientNextAction::NoAction => panic!("expected to be blocked"),
+            ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
+            ClientNextAction::TerminateConnection => panic!("expected to be blocked"),
+            ClientNextAction::Wait((rx, duration, timout_response)) => {
+                (rx, duration, timout_response)
+            }
+        }
+    }
+
+    /// Execute a command
+    pub async fn execute_command(client_state: Rc<ClientState>, cmd: Rc<RedisCommand>) -> BytesMut {
+        let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+        let next_action = Client::handle_command(client_state, cmd.clone(), &mut sink.fp)
+            .await
+            .unwrap();
+        match next_action {
+            ClientNextAction::SendResponse(buffer) => buffer,
+            ClientNextAction::NoAction => {
+                BytesMutUtils::from_string(sink.read_all_as_string().await.unwrap().as_str())
+            }
+            ClientNextAction::TerminateConnection => {
+                panic!("Command {:?} is not expected to be blocked", cmd)
+            }
+            ClientNextAction::Wait(_) => panic!("Command {:?} is not expected to be blocked", cmd),
         }
     }
 

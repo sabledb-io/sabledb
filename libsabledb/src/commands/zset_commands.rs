@@ -1,5 +1,5 @@
 use crate::{
-    commands::{HandleCommandResult, Strings},
+    commands::{HandleCommandResult, Strings, TimeoutResponse},
     io::RespWriter,
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
@@ -8,7 +8,7 @@ use crate::{
         ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
     },
     utils::RespBuilderV2,
-    BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
+    BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
 use bytes::BytesMut;
 use std::cell::RefCell;
@@ -129,6 +129,10 @@ impl ZSetCommands {
             }
             RedisCommandName::Zmpop => {
                 Self::zmpop(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Bzmpop => {
+                // default response
+                return Self::bzmpop(client_state, command, response_buffer).await;
             }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
@@ -297,8 +301,8 @@ impl ZSetCommands {
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut items_added = 0usize;
-        for (score, member) in pairs {
-            match zset_db.add(key, member, score, &flags, false)? {
+        for (score, member) in &pairs {
+            match zset_db.add(key, member, *score, &flags, false)? {
                 ZSetAddMemberResult::Some(incr) => items_added = items_added.saturating_add(incr),
                 ZSetAddMemberResult::WrongType => {
                     builder.error_string(response_buffer, Strings::WRONGTYPE);
@@ -309,6 +313,12 @@ impl ZSetCommands {
 
         // commit the changes
         zset_db.commit()?;
+
+        // Wakeup up to pairs.len() clients waiting on `key`
+        client_state
+            .server_inner_state()
+            .wakeup_clients(key, pairs.len())
+            .await;
         builder.number_usize(response_buffer, items_added);
         Ok(())
     }
@@ -1045,6 +1055,96 @@ impl ZSetCommands {
         // if we reached here, nothing was popped
         builder.null_array(response_buffer);
         Ok(())
+    }
+
+    /// `BZMPOP timeout numkeys key [key ...] <MIN | MAX> [COUNT count]`
+    /// `BZMPOP` is the blocking variant of `ZMPOP`.
+    /// Pops one or more elements, that are member-score pairs, from the first non-empty sorted set in the provided list
+    /// of key names
+    async fn bzmpop(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        mut response_buffer: BytesMut,
+    ) -> Result<HandleCommandResult, SableError> {
+        let builder = RespBuilderV2::default();
+        let numkeys = command_arg_at!(command, 2);
+        let timeout = command_arg_at!(command, 1);
+        let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
+            builder.error_string(
+                &mut response_buffer,
+                "ERR timeout is not a float or out of range",
+            );
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder.error_string(
+                &mut response_buffer,
+                Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+            );
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        let reserved_words: HashSet<&'static str> =
+            ["COUNT", "MIN", "MAX"].iter().copied().collect();
+        let Ok(keys_to_lock) =
+            Self::parse_keys_to_lock(command.clone(), 3, numkeys, &reserved_words, None)
+        else {
+            builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        let count = match Self::get_count(command.clone(), 1) {
+            GetCountResult::Count(count) => count,
+            GetCountResult::SyntaxError => {
+                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+            }
+        };
+
+        let min_members = match Self::get_min_or_max(command.clone()) {
+            MinOrMaxResult::None => {
+                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+            }
+            MinOrMaxResult::Max => false,
+            MinOrMaxResult::Min => true,
+        };
+
+        let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
+        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone())?;
+
+        for key in &user_keys {
+            match Self::try_pop(client_state.clone(), key, count, min_members)? {
+                TryPopResult::Some(items) => {
+                    // build response
+                    builder.add_array_len(&mut response_buffer, 2);
+                    builder.add_bulk_string(&mut response_buffer, key);
+                    builder.add_array_len(&mut response_buffer, items.len());
+                    for (member, score) in &items {
+                        builder.add_array_len(&mut response_buffer, 2);
+                        builder.add_bulk_string(&mut response_buffer, member);
+                        builder.add_bulk_string(&mut response_buffer, score);
+                    }
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                TryPopResult::None => {}
+                TryPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+            }
+        }
+
+        // Block the client or return null array. If txn is active the macro will return null array
+        let rx =
+            block_client_for_keys_return_null_array!(client_state, &keys_to_lock, response_buffer);
+        let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
+        Ok(HandleCommandResult::Blocked((
+            rx,
+            std::time::Duration::from_millis(timeout_ms),
+            TimeoutResponse::NullArrray,
+        )))
     }
 
     /// Try to pop `count` members from `key` set.
@@ -2115,5 +2215,50 @@ mod test {
             }
         });
         Ok(())
+    }
+
+    #[test]
+    fn test_bzmpop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+
+            let server = Arc::<ServerState>::default();
+            let reader = Client::new(server.clone(), store.clone(), None);
+            let writer = Client::new(server, store, None);
+
+            const EXPECTED_RESULT: &str =
+                "*2\r\n$5\r\nmyset\r\n*1\r\n*2\r\n$5\r\norisa\r\n$4\r\n2.00\r\n";
+
+            let read_cmd = Rc::new(RedisCommand::for_test(vec![
+                "bzmpop", "30", "1", "myset", "MAX",
+            ]));
+
+            // we expect to get a rx + duration, if we dont "deferred_command" will panic!
+            let (rx, duration, _timeout_response) =
+                crate::tests::deferred_command(reader.inner(), read_cmd.clone()).await;
+
+            // second connection: push data to the list
+            let pus_cmd = Rc::new(RedisCommand::for_test(vec![
+                "zadd", "myset", "1", "rein", "2", "orisa",
+            ]));
+            let response = crate::tests::execute_command(writer.inner(), pus_cmd.clone()).await;
+            assert_eq!(":2\r\n", BytesMutUtils::to_string(&response).as_str());
+
+            // Try reading again now
+            match Client::wait_for(rx, duration).await {
+                crate::server::WaitResult::TryAgain => {
+                    println!("consumer: got something - calling blpop again");
+                    let response = crate::tests::execute_command(reader.inner(), read_cmd).await;
+                    assert_eq!(
+                        EXPECTED_RESULT,
+                        BytesMutUtils::to_string(&response).as_str()
+                    );
+                }
+                crate::server::WaitResult::Timeout => {
+                    assert!(false, "consumer: Expected `TryAagain` not a `Timeout`!");
+                }
+            }
+        });
     }
 }

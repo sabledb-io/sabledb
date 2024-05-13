@@ -655,12 +655,11 @@ impl Client {
             | RedisCommandName::Zintercard
             | RedisCommandName::Zinterstore
             | RedisCommandName::Zlexcount
-            | RedisCommandName::Zmpop => {
+            | RedisCommandName::Zmpop
+            | RedisCommandName::Bzmpop => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
-                    HandleCommandResult::Blocked(_) => {
-                        return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
-                        ));
+                    HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response))
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {

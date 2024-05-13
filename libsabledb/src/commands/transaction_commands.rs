@@ -478,6 +478,43 @@ mod test {
         });
     }
 
+    #[test]
+    #[serial_test::serial]
+    fn test_blocking_zset_commands_in_multi() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let myclient = Client::new(Arc::<ServerState>::default(), store.clone(), None);
+
+            assert!(!myclient.inner().is_txn_state_multi());
+            assert!(!myclient.inner().is_txn_state_exec());
+            assert!(!myclient.inner().is_txn_state_calc_slots());
+
+            // Start a transaction
+            check_command(myclient.inner(), "multi", RedisObject::Status("OK".into())).await;
+
+            // state should be "multi"
+            assert!(myclient.inner().is_txn_state_multi());
+            assert!(!myclient.inner().is_txn_state_exec());
+            assert!(!myclient.inner().is_txn_state_calc_slots());
+
+            check_command(
+                myclient.inner(),
+                "bzmpop 30 1 mylist MAX",
+                RedisObject::Status(Strings::QUEUED.into()),
+            )
+            .await;
+            assert_eq!(myclient.inner().txn_commands_vec_len(), 1);
+
+            check_command(
+                myclient.inner(),
+                "exec",
+                RedisObject::Array(vec![RedisObject::NullArray]),
+            )
+            .await;
+        });
+    }
+
     use crate::utils::RedisObject;
 
     #[test]

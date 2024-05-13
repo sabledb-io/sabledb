@@ -970,8 +970,6 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
     use test_case::test_case;
-    use tokio::sync::mpsc::Receiver;
-    use tokio::time::Duration;
 
     #[test_case(vec![
         (vec!["lpush", "lpush_mykey", "foo", "bar", "baz"], ":3\r\n"),
@@ -1229,7 +1227,7 @@ mod tests {
                                     "--> got TryAgain after {}ms",
                                     sw.elapsed_micros().unwrap() / 1000
                                 );
-                                execute_command(client.inner(), cmd.clone()).await
+                                crate::tests::execute_command(client.inner(), cmd.clone()).await
                             }
                             crate::server::WaitResult::Timeout => {
                                 let builder = RespBuilderV2::default();
@@ -1255,43 +1253,6 @@ mod tests {
         });
     }
 
-    /// Run a command that should be deferred by the server
-    async fn deferred_command(
-        client_state: Rc<ClientState>,
-        cmd: Rc<RedisCommand>,
-    ) -> (Receiver<u8>, Duration, TimeoutResponse) {
-        let mut sink = crate::tests::ResponseSink::with_name("deferred_command").await;
-        let next_action = Client::handle_command(client_state, cmd, &mut sink.fp)
-            .await
-            .unwrap();
-        match next_action {
-            ClientNextAction::NoAction => panic!("expected to be blocked"),
-            ClientNextAction::SendResponse(_) => panic!("expected to be blocked"),
-            ClientNextAction::TerminateConnection => panic!("expected to be blocked"),
-            ClientNextAction::Wait((rx, duration, timout_response)) => {
-                (rx, duration, timout_response)
-            }
-        }
-    }
-
-    /// Execute a command
-    async fn execute_command(client_state: Rc<ClientState>, cmd: Rc<RedisCommand>) -> BytesMut {
-        let mut sink = crate::tests::ResponseSink::with_name("deferred_command").await;
-        let next_action = Client::handle_command(client_state, cmd.clone(), &mut sink.fp)
-            .await
-            .unwrap();
-        match next_action {
-            ClientNextAction::SendResponse(buffer) => buffer,
-            ClientNextAction::NoAction => {
-                BytesMutUtils::from_string(sink.read_all().await.as_str())
-            }
-            ClientNextAction::TerminateConnection => {
-                panic!("Command {:?} is not expected to be blocked", cmd)
-            }
-            ClientNextAction::Wait(_) => panic!("Command {:?} is not expected to be blocked", cmd),
-        }
-    }
-
     #[test]
     fn test_blocking_pop() {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1312,7 +1273,7 @@ mod tests {
 
             // we expect to get a rx + duration, if we dont "deferred_command" will panic!
             let (rx, duration, _timeout_response) =
-                deferred_command(reader.inner(), read_cmd.clone()).await;
+                crate::tests::deferred_command(reader.inner(), read_cmd.clone()).await;
 
             // second connection: push data to the list
             let pus_cmd = Rc::new(RedisCommand::for_test(vec![
@@ -1320,14 +1281,14 @@ mod tests {
                 "test_blocking_pop_list1",
                 "value",
             ]));
-            let response = execute_command(writer.inner(), pus_cmd.clone()).await;
+            let response = crate::tests::execute_command(writer.inner(), pus_cmd.clone()).await;
             assert_eq!(":1\r\n", BytesMutUtils::to_string(&response).as_str());
 
             // Try reading again now
             match Client::wait_for(rx, duration).await {
                 crate::server::WaitResult::TryAgain => {
                     println!("consumer: got something - calling blpop again");
-                    let response = execute_command(reader.inner(), read_cmd).await;
+                    let response = crate::tests::execute_command(reader.inner(), read_cmd).await;
                     assert_eq!(
                         EXPECTED_RESULT,
                         BytesMutUtils::to_string(&response).as_str()
