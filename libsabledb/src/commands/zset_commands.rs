@@ -161,6 +161,11 @@ impl ZSetCommands {
                 )
                 .await;
             }
+            RedisCommandName::Zrandmember => {
+                // write directly to the client
+                Self::zrandmember(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
             RedisCommandName::Zrangebyscore => {
                 Self::zrangebyscore(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
@@ -538,7 +543,8 @@ impl ZSetCommands {
             builder_return_empty_array!(builder, response_buffer);
         }
 
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         let mut iter = user_keys.iter();
         let Some(main_key) = iter.next() else {
@@ -647,7 +653,8 @@ impl ZSetCommands {
         }
         user_keys.push(destination);
 
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         let mut iter = user_keys.iter();
         let Some(main_key) = iter.next() else {
@@ -752,7 +759,8 @@ impl ZSetCommands {
         };
 
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         let result_set = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
@@ -818,7 +826,8 @@ impl ZSetCommands {
             builder_return_syntax_error!(builder, response_buffer);
         };
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         let result = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
@@ -893,7 +902,8 @@ impl ZSetCommands {
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
 
         // Lock the database. The lock must be done here (it has to do with how txn are working)
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         let result = match Self::intersect(client_state.clone(), command.clone(), 3, numkeys)? {
             IntersectError::SyntaxError => {
@@ -1057,7 +1067,8 @@ impl ZSetCommands {
         };
 
         let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         for key in &user_keys {
             match Self::try_pop(client_state.clone(), key, count, min_members)? {
@@ -1149,7 +1160,8 @@ impl ZSetCommands {
         };
 
         let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
 
         for key in &user_keys {
             match Self::try_pop(client_state.clone(), key, count, min_members)? {
@@ -1308,7 +1320,8 @@ impl ZSetCommands {
         let keys = &command.args_vec()[1usize..end_index];
 
         let keys_to_lock: Vec<&BytesMut> = keys.iter().collect();
-        let _unused = LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
 
         for key in keys {
             match Self::try_pop(client_state.clone(), key, 1, pop_min)? {
@@ -1433,7 +1446,6 @@ impl ZSetCommands {
     }
 
     /// `ZRANDMEMBER key [count [WITHSCORES]]`
-    #[allow(dead_code)]
     async fn zrandmember(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -1449,31 +1461,19 @@ impl ZSetCommands {
         let mut writer = RespWriter::new(tx, 1024, client_state.clone());
 
         // Parse the arguments
-        let builder = RespBuilderV2::default();
-        let mut response_buffer = BytesMut::with_capacity(4096);
         let (count, with_scores, allow_dups) = match (iter.next(), iter.next()) {
             (Some(count), None) => {
                 let Some(count) = BytesMutUtils::parse::<i64>(count) else {
-                    writer
-                        .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
-                        .await?;
-                    writer.flush().await?;
-                    return Ok(());
+                    writer_return_value_not_int!(writer);
                 };
                 (count.abs(), false, count < 0)
             }
-            (Some(count), Some(with_values)) => {
+            (Some(count), Some(with_scores)) => {
                 let Some(count) = BytesMutUtils::parse::<i64>(count) else {
-                    writer
-                        .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
-                        .await?;
-                    writer.flush().await?;
-                    return Ok(());
+                    writer_return_value_not_int!(writer);
                 };
-                if BytesMutUtils::to_string(with_values).to_lowercase() != "withscores" {
-                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                    tx.write_all(&response_buffer).await?;
-                    return Ok(());
+                if BytesMutUtils::to_string(with_scores).to_lowercase() != "withscores" {
+                    writer_return_syntax_error!(writer);
                 }
                 (count.abs(), true, count < 0)
             }
@@ -1486,16 +1486,12 @@ impl ZSetCommands {
 
         // determine the array length
         let md = match zset_db.get_metadata(key)? {
-            ZSetGetMetadataResult::Some(hash_md) => hash_md,
+            ZSetGetMetadataResult::Some(md) => md,
             ZSetGetMetadataResult::NotFound => {
-                writer.null_string().await?;
-                writer.flush().await?;
-                return Ok(());
+                writer_return_null_string!(writer);
             }
             ZSetGetMetadataResult::WrongType => {
-                writer.error_string(Strings::WRONGTYPE).await?;
-                writer.flush().await?;
-                return Ok(());
+                writer_return_wrong_type!(writer);
             }
         };
 
@@ -1508,30 +1504,27 @@ impl ZSetCommands {
 
         // fast bail out
         if count.eq(&0) {
-            writer.empty_array().await?;
-            writer.flush().await?;
-            return Ok(());
+            writer_return_empty_array!(writer);
         }
 
-        let possible_indexes = (0..md.len() as usize).collect::<Vec<usize>>();
+        let possible_indexes: Vec<usize> = (0..md.len() as usize).collect();
 
-        // select the indices we want to pick
+        // select the indices we want to pick (indices is sorted, descending order)
         let mut indices =
             utils::choose_multiple_values(count as usize, &possible_indexes, allow_dups)?;
 
         // When returning multiple items, we return an array
         if indices.len() > 1 || with_scores {
-            builder.add_array_len(
-                &mut response_buffer,
-                if with_scores {
+            writer
+                .add_array_len(if with_scores {
                     indices.len() * 2
                 } else {
                     indices.len()
-                },
-            );
+                })
+                .await?;
         }
 
-        // create an iterator and place at at the start of the set memberss
+        // Create an iterator and place at at the start of the set members
         let mut curidx = 0usize;
         let prefix = md.prefix_by_member(None);
 
@@ -1556,11 +1549,13 @@ impl ZSetCommands {
                     let member_field = ZSetMemberItem::from_bytes(key)?;
                     writer.add_bulk_string(member_field.member()).await?;
                     if with_scores {
-                        writer.add_bulk_string(value).await?;
+                        let score = zset_db.score_from_bytes(value)?;
+                        writer
+                            .add_bulk_string(format!("{:.2}", score).as_bytes())
+                            .await?;
                     }
                     // pop the first element
                     indices.pop_front();
-
                     // Don't progress the iterator here,  we might have another item with the same index
                 } else {
                     break;
@@ -2551,6 +2546,17 @@ mod test {
         ("zpopmax myset 1", "*2\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n"),
         ("zpopmax myset 5", "*6\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"),
     ]; "test_zpopmax")]
+    #[test_case(vec![
+        ("zrandmember notsuchkey1", "$-1\r\n"),
+        ("set strkey value", "+OK\r\n"),
+        ("zrandmember strkey 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
+        ("zrandmember myset a", "-ERR value is not an integer or out of range\r\n"),
+        ("zrandmember myset withscores", "-ERR value is not an integer or out of range\r\n"),
+        ("zrandmember myset 10 00", "-ERR syntax error\r\n"),
+        ("zrandmember myset 4", "*4\r\n$3\r\ndva\r\n$4\r\nrein\r\n$7\r\nroadhog\r\n$5\r\nsigma\r\n"),
+        ("zrandmember myset 4 withscores", "*8\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n"),
+    ]; "test_zrandmember")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

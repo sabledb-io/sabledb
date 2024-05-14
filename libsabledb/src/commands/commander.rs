@@ -130,6 +130,7 @@ pub enum RedisCommandName {
     Zpopmin,
     Bzpopmax,
     Bzpopmin,
+    Zrandmember,
     Zrangebyscore,
     NotSupported(String),
 }
@@ -1017,6 +1018,12 @@ impl Default for CommandsManager {
                         .with_first_key(1)
                         .with_last_key(-2)
                         .with_step(1),
+                ),
+                (
+                    "zrandmember",
+                    CommandMetadata::new(RedisCommandName::Zrandmember)
+                        .read_only()
+                        .with_arity(-2),
                 ),
             ]),
         }

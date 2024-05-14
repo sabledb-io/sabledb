@@ -210,6 +210,15 @@ macro_rules! writer_return_empty_array {
 }
 
 #[macro_export]
+macro_rules! writer_return_null_string {
+    ($writer:expr) => {
+        $writer.null_string().await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! writer_return_wrong_type {
     ($writer:expr) => {
         $writer.error_string(Strings::WRONGTYPE).await?;

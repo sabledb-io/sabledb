@@ -190,6 +190,7 @@ and visit this page again in couple of days
 | zmscore | ✓ |✓ | |
 | zpopmax | ✓ |✓ | |
 | zpopmin | ✓ |✓ | |
+| zrandmember | ✓ |✓ | |
 
 ### Generic commands
 

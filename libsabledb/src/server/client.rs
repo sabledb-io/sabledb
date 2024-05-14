@@ -661,7 +661,8 @@ impl Client {
             | RedisCommandName::Zpopmax
             | RedisCommandName::Zpopmin
             | RedisCommandName::Bzpopmax
-            | RedisCommandName::Bzpopmin => {
+            | RedisCommandName::Bzpopmin
+            | RedisCommandName::Zrandmember => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
                         ClientNextAction::Wait((rx, duration, timeout_response))
