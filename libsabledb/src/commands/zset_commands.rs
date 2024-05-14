@@ -13,7 +13,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -57,14 +57,8 @@ enum LexIndex<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum GetLimitResult {
-    Limit(usize),
-    SyntaxError,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum GetCountResult {
-    Count(usize),
+enum FindKeyWithValueResult<NumberT> {
+    Value(NumberT),
     SyntaxError,
 }
 
@@ -166,9 +160,15 @@ impl ZSetCommands {
                 Self::zrandmember(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
+            RedisCommandName::Zrange => {
+                // write directly to the client
+                Self::zrange(client_state, command, &mut response_buffer).await?;
+            }
             RedisCommandName::Zrangebyscore => {
-                Self::zrangebyscore(client_state, command, tx).await?;
-                return Ok(HandleCommandResult::ResponseSent);
+                Self::zrangebyscore(client_state, command, &mut response_buffer, false).await?;
+            }
+            RedisCommandName::Zrevrangebyscore => {
+                Self::zrangebyscore(client_state, command, &mut response_buffer, true).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -847,10 +847,10 @@ impl ZSetCommands {
 
         // Do we have a limit?
         let limit = match Self::get_limit(command.clone()) {
-            GetLimitResult::SyntaxError => {
+            FindKeyWithValueResult::SyntaxError => {
                 builder_return_syntax_error!(builder, response_buffer);
             }
-            GetLimitResult::Limit(limit) => limit,
+            FindKeyWithValueResult::Value(limit) => limit,
         };
 
         // Finally, write the result
@@ -1052,8 +1052,8 @@ impl ZSetCommands {
         };
 
         let count = match Self::get_count(command.clone(), 1) {
-            GetCountResult::Count(count) => count,
-            GetCountResult::SyntaxError => {
+            FindKeyWithValueResult::Value(count) => count,
+            FindKeyWithValueResult::SyntaxError => {
                 builder_return_syntax_error!(builder, response_buffer);
             }
         };
@@ -1143,8 +1143,8 @@ impl ZSetCommands {
         };
 
         let count = match Self::get_count(command.clone(), 1) {
-            GetCountResult::Count(count) => count,
-            GetCountResult::SyntaxError => {
+            FindKeyWithValueResult::Value(count) => count,
+            FindKeyWithValueResult::SyntaxError => {
                 builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
@@ -1568,31 +1568,44 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`
+    /// Returns the specified range of elements in the sorted set stored at <key>
+    async fn zrange(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let reverse = Self::has_optional_arg(command.clone(), "rev", 4);
+        if Self::has_optional_arg(command.clone(), "byscore", 4) {
+            return Self::zrangebyscore(client_state, command, response_buffer, reverse).await;
+        }
+        Ok(())
+    }
+
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
     /// Returns all the elements in the sorted set at key with a score between min and max (including elements with score
     /// equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zrangebyscore(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        response_buffer: &mut BytesMut,
+        reverse: bool,
     ) -> Result<(), SableError> {
-        check_args_count_tx!(command, 4, tx);
+        check_args_count!(command, 4, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let min = command_arg_at!(command, 2);
         let max = command_arg_at!(command, 3);
 
-        let mut writer = RespWriter::new(tx, 4096, client_state.clone());
-        let Some((start_score, include_start_score)) = Self::parse_score_index(min) else {
-            writer.error_string(Strings::ZERR_MIN_MAX_NOT_FLOAT).await?;
-            writer.flush().await?;
-            return Ok(());
+        let builder = RespBuilderV2::default();
+        let Some((mut start_score, mut include_start_score)) = Self::parse_score_index(min) else {
+            builder_return_min_max_not_float!(builder, response_buffer);
         };
 
-        let Some((end_score, include_end_score)) = Self::parse_score_index(max) else {
-            writer.error_string(Strings::ZERR_MIN_MAX_NOT_FLOAT).await?;
-            writer.flush().await?;
-            return Ok(());
+        let Some((mut end_score, mut include_end_score)) = Self::parse_score_index(max) else {
+            builder_return_min_max_not_float!(builder, response_buffer);
         };
 
         // parse the remaining arguments
@@ -1616,21 +1629,21 @@ impl ZSetCommands {
                 "limit" => {
                     // The following 2 arguments should the offset and limit
                     let (Some(start_index), Some(limit)) = (iter.next(), iter.next()) else {
-                        writer_return_syntax_error!(writer);
+                        builder_return_syntax_error!(builder, response_buffer);
                     };
 
                     let Some(start_index) = BytesMutUtils::parse::<u64>(start_index) else {
-                        writer_return_value_not_int!(writer);
+                        builder_return_value_not_int!(builder, response_buffer);
                     };
 
                     let Some(limit) = BytesMutUtils::parse::<i64>(limit) else {
-                        writer_return_value_not_int!(writer);
+                        builder_return_value_not_int!(builder, response_buffer);
                     };
 
                     // Negative value means: all items
                     count = match limit {
                         0 => {
-                            writer_return_empty_array!(writer);
+                            builder_return_empty_array!(builder, response_buffer);
                         }
                         num if num < 0 => u64::MAX,
                         _ => limit as u64,
@@ -1638,7 +1651,7 @@ impl ZSetCommands {
                     offset = start_index;
                 }
                 _ => {
-                    writer_return_syntax_error!(writer);
+                    builder_return_syntax_error!(builder, response_buffer);
                 }
             }
         }
@@ -1646,37 +1659,43 @@ impl ZSetCommands {
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = zset_md_or_nil!(zset_db, key, writer);
+        let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
 
         // empty set? empty array
         if md.is_empty() {
-            writer_return_empty_array!(writer);
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        if reverse {
+            std::mem::swap(&mut start_score, &mut end_score);
+            std::mem::swap(&mut include_start_score, &mut include_end_score);
         }
 
         // Determine the starting score
         let prefix = md.prefix_by_score(None);
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
+
         if !db_iter.valid() {
             // invalud iterator
-            writer_return_empty_array!(writer);
+            builder_return_empty_array!(builder, response_buffer);
         }
 
         // Find the first item in the set that complies with the start condition
         while db_iter.valid() {
             // get the key & value
             let Some((key, _)) = db_iter.key_value() else {
-                writer_return_empty_array!(writer);
+                builder_return_empty_array!(builder, response_buffer);
             };
 
             if !key.starts_with(&prefix) {
-                writer_return_empty_array!(writer);
+                builder_return_empty_array!(builder, response_buffer);
             }
 
-            let set_item = ZSetScoreItem::from_bytes(key)?;
-            if (include_start_score && set_item.score() >= start_score)
-                || (!include_start_score && set_item.score() > start_score)
+            let cur_item_score = ZSetScoreItem::from_bytes(key)?;
+            if (include_start_score && cur_item_score.score() >= start_score)
+                || (!include_start_score && cur_item_score.score() > start_score)
             {
-                let prefix = md.prefix_by_score(Some(set_item.score()));
+                let prefix = md.prefix_by_score(Some(cur_item_score.score()));
                 // place the iterator on the range start
                 db_iter = client_state.database().create_iterator(&prefix)?;
                 break;
@@ -1684,27 +1703,11 @@ impl ZSetCommands {
             db_iter.next();
         }
 
-        // Apply the LIMIT <OFFSET> <COUNT> condition
-        while offset > 0 && db_iter.valid() {
-            db_iter.next();
-            offset = offset.saturating_sub(1);
-        }
-
-        // Sanity checks
-        if offset != 0 || !db_iter.valid() {
-            writer_return_empty_array!(writer);
-        }
-
-        enum MatchValue {
-            Member(BytesMut),
-            Score(f64),
-        }
-
         // All items must start with `zset_prefix` regardless of the user conditions
         let zset_prefix = md.prefix_by_score(None);
 
-        let mut response = Vec::<MatchValue>::new();
-        while db_iter.valid() && count > 0 {
+        let mut result_set = Vec::<(BytesMut, Option<f64>)>::new();
+        while db_iter.valid() {
             // get the key & value
             let Some((key, _)) = db_iter.key_value() else {
                 break;
@@ -1725,29 +1728,48 @@ impl ZSetCommands {
             }
 
             // Store the member + score
-            response.push(MatchValue::Member(BytesMut::from(field.member())));
-            if with_scores {
-                response.push(MatchValue::Score(field.score()));
-            }
+            let (member, score) = if with_scores {
+                (BytesMut::from(field.member()), Some(field.score()))
+            } else {
+                (BytesMut::from(field.member()), None)
+            };
+
+            result_set.push((member, score));
             db_iter.next();
-            count = count.saturating_sub(1);
         }
 
-        if response.is_empty() {
-            writer_return_empty_array!(writer);
+        if result_set.is_empty() {
+            builder_return_empty_array!(builder, response_buffer);
         } else {
-            writer.add_array_len(response.len()).await?;
-            for v in response {
-                match v {
-                    MatchValue::Score(score) => {
-                        writer
-                            .add_bulk_string(format!("{score:.2}").as_bytes())
-                            .await?
-                    }
-                    MatchValue::Member(member) => writer.add_bulk_string(&member).await?,
+            if reverse {
+                result_set.reverse();
+            }
+
+            let mut result_set: VecDeque<(BytesMut, Option<f64>)> =
+                result_set.iter().cloned().collect();
+
+            // Apply the OFFSET limit (remove first `offset` elements)
+            while offset > 0 && !result_set.is_empty() {
+                result_set.pop_front();
+                offset = offset.saturating_sub(1);
+            }
+
+            // shrink the result set to fit the "LIMIT COUNT" restriction
+            result_set.truncate(count.try_into().unwrap_or(usize::MAX));
+
+            let response_len = if with_scores {
+                result_set.len().saturating_mul(2)
+            } else {
+                result_set.len()
+            };
+
+            builder.add_array_len(response_buffer, response_len);
+            for (member, score) in result_set {
+                builder.add_bulk_string(response_buffer, &member);
+                if let Some(score) = score {
+                    builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
                 }
             }
-            writer.flush().await?;
         }
         Ok(())
     }
@@ -2057,43 +2079,63 @@ impl ZSetCommands {
     }
 
     /// Return the LIMIT <value> from the command line
-    fn get_limit(command: Rc<RedisCommand>) -> GetLimitResult {
-        let mut iter = command.args_vec().iter();
-        while let Some(arg) = iter.next() {
-            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
-            if token_lowercase.eq("limit") {
-                let Some(val) = iter.next() else {
-                    return GetLimitResult::SyntaxError;
-                };
-
-                let Some(val) = BytesMutUtils::parse::<usize>(val) else {
-                    return GetLimitResult::SyntaxError;
-                };
-
-                return GetLimitResult::Limit(val);
-            }
-        }
-        GetLimitResult::Limit(usize::MAX)
+    fn get_limit(command: Rc<RedisCommand>) -> FindKeyWithValueResult<usize> {
+        Self::find_keyval_or::<usize>(command, "limit", usize::MAX)
     }
 
     /// Return the `COUNT <value>` from the command line
-    fn get_count(command: Rc<RedisCommand>, default_value: usize) -> GetCountResult {
+    fn get_count(command: Rc<RedisCommand>, default_value: usize) -> FindKeyWithValueResult<usize> {
+        Self::find_keyval_or::<usize>(command, "count", default_value)
+    }
+
+    fn find_keyval_or<NumberT: std::str::FromStr>(
+        command: Rc<RedisCommand>,
+        key_name: &'static str,
+        default_value: NumberT,
+    ) -> FindKeyWithValueResult<NumberT> {
         let mut iter = command.args_vec().iter();
         while let Some(arg) = iter.next() {
             let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
-            if token_lowercase.eq("count") {
+            if token_lowercase.eq(key_name) {
                 let Some(val) = iter.next() else {
-                    return GetCountResult::SyntaxError;
+                    return FindKeyWithValueResult::SyntaxError;
                 };
 
-                let Some(val) = BytesMutUtils::parse::<usize>(val) else {
-                    return GetCountResult::SyntaxError;
+                let Some(val) = BytesMutUtils::parse::<NumberT>(val) else {
+                    return FindKeyWithValueResult::SyntaxError;
                 };
 
-                return GetCountResult::Count(val);
+                return FindKeyWithValueResult::Value(val);
             }
         }
-        GetCountResult::Count(default_value)
+        FindKeyWithValueResult::Value(default_value)
+    }
+
+    /// Find an optional argument in the command. An "argument" is a reserved
+    /// word without value. e.g. `WITHSCORES`
+    fn has_optional_arg(
+        command: Rc<RedisCommand>,
+        arg_name: &'static str,
+        start_from: usize,
+    ) -> bool {
+        // parse the remaining arguments
+        let mut iter = command.args_vec().iter();
+        let mut start_from = start_from;
+
+        // skip the requested elements
+        while start_from > 0 {
+            start_from = start_from.saturating_sub(1);
+            iter.next();
+        }
+
+        let arg_name_lowercase = arg_name.to_lowercase();
+        for arg in iter {
+            let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
+            if token_lowercase.eq(&arg_name_lowercase) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Locate `MIN` or `MAX` in the command line
@@ -2409,6 +2451,27 @@ mod test {
         ("zrangebyscore tanks 1 1 LIMIT 2 -1", "*0\r\n"),
     ]; "test_zrangebyscore")]
     #[test_case(vec![
+        //("set mystr value", "+OK\r\n"),
+        //("zrevrangebyscore mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zadd tanks 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
+        // everything without knowing their ranks
+        ("zrevrangebyscore tanks -inf +inf", "*0\r\n"),
+        ("zrevrangebyscore tanks -inf 1", "*0\r\n"),
+        ("zrevrangebyscore tanks -inf (1", "*0\r\n"),
+        ("zrevrangebyscore tanks 1 2", "*0\r\n"),
+        ("zrevrangebyscore tanks 2 1", "*4\r\n$5\r\nsigma\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
+        ("zrevrangebyscore tanks (2 1", "*2\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
+        ("zrevrangebyscore tanks 3 1 WITHSCORES", "*12\r\n$3\r\nram\r\n$4\r\n3.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$3\r\ndva\r\n$4\r\n1.00\r\n"),
+        // exclude sigma
+        ("zrevrangebyscore tanks 2 1 LIMIT 1 5", "*3\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
+        //// only mauga
+        ("zrevrangebyscore tanks 3 1 LIMIT 1 1", "*1\r\n$5\r\nmauga\r\n"),
+        ("zrevrangebyscore tanks 3 1 LIMIT 1 -1", "*5\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
+        ("zrevrangebyscore tanks 3 1 LIMIT 1 -1 withScores", "*10\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$3\r\ndva\r\n$4\r\n1.00\r\n"),
+        //// all of score 1 but dva & rein (empty array)
+        ("zrevrangebyscore tanks 1 1 LIMIT 2 -1", "*0\r\n"),
+    ]; "test_zrevrangebyscore")]
+    #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
         ("zcount mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zcount mystr 1", "-ERR wrong number of arguments for 'zcount' command\r\n"),
@@ -2613,7 +2676,6 @@ mod test {
             // Try reading again now
             match Client::wait_for(rx, duration).await {
                 crate::server::WaitResult::TryAgain => {
-                    println!("consumer: got something - calling blpop again");
                     let response = crate::tests::execute_command(reader.inner(), read_cmd).await;
                     assert_eq!(
                         expected_result,

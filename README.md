@@ -182,6 +182,7 @@ and visit this page again in couple of days
 | zdiff | ✓ |✓ | |
 | zdiffstore | ✓ |✓ | |
 | zrangebyscore | ✓ |✓ | |
+| zrevrangebyscore | ✓ |✓ | |
 | zinter | ✓ |✓ | |
 | zintercard | ✓ |✓ | |
 | zinterstore | ✓ |✓ | |
