@@ -664,7 +664,9 @@ impl Client {
             | RedisCommandName::Zrandmember
             | RedisCommandName::Zrangebyscore
             | RedisCommandName::Zrevrangebyscore
-            | RedisCommandName::Zrange => {
+            | RedisCommandName::Zrange
+            | RedisCommandName::Zrangebylex
+            | RedisCommandName::Zrevrangebylex => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
                         ClientNextAction::Wait((rx, duration, timeout_response))

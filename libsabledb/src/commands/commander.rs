@@ -134,6 +134,8 @@ pub enum RedisCommandName {
     Zrange,
     Zrangebyscore,
     Zrevrangebyscore,
+    Zrangebylex,
+    Zrevrangebylex,
     NotSupported(String),
 }
 
@@ -913,6 +915,18 @@ impl Default for CommandsManager {
                 (
                     "zrevrangebyscore",
                     CommandMetadata::new(RedisCommandName::Zrevrangebyscore)
+                        .read_only()
+                        .with_arity(-4),
+                ),
+                (
+                    "zrangebylex",
+                    CommandMetadata::new(RedisCommandName::Zrangebylex)
+                        .read_only()
+                        .with_arity(-4),
+                ),
+                (
+                    "zrevrangebylex",
+                    CommandMetadata::new(RedisCommandName::Zrevrangebylex)
                         .read_only()
                         .with_arity(-4),
                 ),
