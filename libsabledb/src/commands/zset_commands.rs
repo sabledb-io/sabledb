@@ -13,7 +13,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -92,6 +92,30 @@ enum TryPopResult {
     None,
     Some(Vec<(BytesMut, BytesMut)>),
     WrongType,
+}
+
+type OutputHandler = fn(Vec<(BytesMut, f64)>, bool, &mut BytesMut);
+
+/// Default output handler: write the set to the `response_buffer`
+fn output_writer_handler(
+    result_set: Vec<(BytesMut, f64)>,
+    with_scores: bool,
+    response_buffer: &mut BytesMut,
+) {
+    let builder = RespBuilderV2::default();
+    let response_len = if with_scores {
+        result_set.len().saturating_mul(2)
+    } else {
+        result_set.len()
+    };
+
+    builder.add_array_len(response_buffer, response_len);
+    for (member, score) in result_set {
+        builder.add_bulk_string(response_buffer, &member);
+        if with_scores {
+            builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
+        }
+    }
 }
 
 pub struct ZSetCommands {}
@@ -175,19 +199,53 @@ impl ZSetCommands {
             }
             RedisCommandName::Zrange => {
                 // write directly to the client
-                Self::zrange(client_state, command, &mut response_buffer).await?;
+                Self::zrange(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    output_writer_handler,
+                )
+                .await?;
             }
             RedisCommandName::Zrangebyscore => {
-                Self::zrangebyscore(client_state, command, &mut response_buffer, false).await?;
+                Self::zrangebyscore(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    false,
+                    output_writer_handler,
+                )
+                .await?;
             }
             RedisCommandName::Zrevrangebyscore => {
-                Self::zrangebyscore(client_state, command, &mut response_buffer, true).await?;
+                Self::zrangebyscore(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    true,
+                    output_writer_handler,
+                )
+                .await?;
             }
             RedisCommandName::Zrangebylex => {
-                Self::zrangebylex(client_state, command, &mut response_buffer, false).await?;
+                Self::zrangebylex(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    false,
+                    output_writer_handler,
+                )
+                .await?;
             }
             RedisCommandName::Zrevrangebylex => {
-                Self::zrangebylex(client_state, command, &mut response_buffer, true).await?;
+                Self::zrangebylex(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    true,
+                    output_writer_handler,
+                )
+                .await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -1593,16 +1651,38 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
+        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
 
         let reverse = Self::has_optional_arg(command.clone(), "rev", 4);
         if Self::has_optional_arg(command.clone(), "byscore", 4) {
-            Self::zrangebyscore(client_state, command, response_buffer, reverse).await
+            Self::zrangebyscore(
+                client_state,
+                command,
+                response_buffer,
+                reverse,
+                output_handler,
+            )
+            .await
         } else if Self::has_optional_arg(command.clone(), "bylex", 4) {
-            Self::zrangebylex(client_state, command, response_buffer, reverse).await
+            Self::zrangebylex(
+                client_state,
+                command,
+                response_buffer,
+                reverse,
+                output_handler,
+            )
+            .await
         } else {
-            Self::zrangebyrank(client_state, command, response_buffer, reverse).await
+            Self::zrangebyrank(
+                client_state,
+                command,
+                response_buffer,
+                reverse,
+                output_handler,
+            )
+            .await
         }
     }
 
@@ -1614,6 +1694,7 @@ impl ZSetCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         reverse: bool,
+        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
         let key = command_arg_at!(command, 1);
@@ -1687,7 +1768,7 @@ impl ZSetCommands {
             };
 
         let zset_prefix = md.prefix_by_member(None);
-        let mut result_set = Vec::<(BytesMut, Option<f64>)>::new();
+        let mut result_set = Vec::<(BytesMut, f64)>::new();
         let mut state = UpperLimitState::NotFound;
         while db_iter.valid() {
             let Some((key, value)) = db_iter.key_value() else {
@@ -1706,53 +1787,27 @@ impl ZSetCommands {
 
             // Store the member + score
             let field = ZSetMemberItem::from_bytes(key)?;
-            let (member, score) = if with_scores {
-                (
-                    BytesMut::from(field.member()),
-                    Some(zset_db.score_from_bytes(value)?),
-                )
-            } else {
-                (BytesMut::from(field.member()), None)
-            };
-
-            result_set.push((member, score));
+            result_set.push((
+                BytesMut::from(field.member()),
+                zset_db.score_from_bytes(value)?,
+            ));
             db_iter.next();
         }
 
-        if result_set.is_empty() {
-            builder_return_empty_array!(builder, response_buffer);
-        } else {
-            if reverse {
-                result_set.reverse();
-            }
-
-            let mut result_set: VecDeque<(BytesMut, Option<f64>)> =
-                result_set.iter().cloned().collect();
-
-            // Apply the OFFSET limit (remove first `offset` elements)
-            while offset > 0 && !result_set.is_empty() {
-                result_set.pop_front();
-                offset = offset.saturating_sub(1);
-            }
-
-            // shrink the result set to fit the "LIMIT OFFSET COUNT" restriction
-            result_set.truncate(count);
-
-            let response_len = if with_scores {
-                result_set.len().saturating_mul(2)
-            } else {
-                result_set.len()
-            };
-
-            builder.add_array_len(response_buffer, response_len);
-            for (member, score) in result_set {
-                builder.add_bulk_string(response_buffer, &member);
-                if let Some(score) = score {
-                    builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
-                }
-            }
+        if reverse {
+            result_set.reverse();
         }
 
+        // Apply the OFFSET limit (remove first `offset` elements)
+        while offset > 0 && !result_set.is_empty() {
+            let _ = result_set.remove(0);
+            offset = offset.saturating_sub(1);
+        }
+
+        // shrink the result set to fit the "LIMIT OFFSET COUNT" restriction
+        result_set.truncate(count);
+
+        output_handler(result_set, with_scores, response_buffer);
         Ok(())
     }
 
@@ -1764,6 +1819,7 @@ impl ZSetCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         reverse: bool,
+        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
 
@@ -1848,7 +1904,7 @@ impl ZSetCommands {
         // All items must start with `zset_prefix` regardless of the user conditions
         let zset_prefix = md.prefix_by_score(None);
 
-        let mut result_set = Vec::<(BytesMut, Option<f64>)>::new();
+        let mut result_set = Vec::<(BytesMut, f64)>::new();
         while db_iter.valid() {
             // get the key & value
             let Some((key, _)) = db_iter.key_value() else {
@@ -1869,50 +1925,26 @@ impl ZSetCommands {
                 break;
             }
 
-            // Store the member + score
-            let (member, score) = if with_scores {
-                (BytesMut::from(field.member()), Some(field.score()))
-            } else {
-                (BytesMut::from(field.member()), None)
-            };
-
-            result_set.push((member, score));
+            result_set.push((BytesMut::from(field.member()), field.score()));
             db_iter.next();
         }
 
-        if result_set.is_empty() {
-            builder_return_empty_array!(builder, response_buffer);
-        } else {
-            if reverse {
-                result_set.reverse();
-            }
-
-            let mut result_set: VecDeque<(BytesMut, Option<f64>)> =
-                result_set.iter().cloned().collect();
-
-            // Apply the OFFSET limit (remove first `offset` elements)
-            while offset > 0 && !result_set.is_empty() {
-                result_set.pop_front();
-                offset = offset.saturating_sub(1);
-            }
-
-            // shrink the result set to fit the "LIMIT COUNT" restriction
-            result_set.truncate(count);
-
-            let response_len = if with_scores {
-                result_set.len().saturating_mul(2)
-            } else {
-                result_set.len()
-            };
-
-            builder.add_array_len(response_buffer, response_len);
-            for (member, score) in result_set {
-                builder.add_bulk_string(response_buffer, &member);
-                if let Some(score) = score {
-                    builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
-                }
-            }
+        if reverse {
+            result_set.reverse();
         }
+
+        // Apply the OFFSET limit (remove first `offset` elements)
+        while offset > 0 && !result_set.is_empty() {
+            let _ = result_set.remove(0);
+            offset = offset.saturating_sub(1);
+        }
+
+        // Shrink the result set to fit the "LIMIT COUNT" restriction
+        result_set.truncate(count);
+
+        // Call the handler
+        output_handler(result_set, with_scores, response_buffer);
+
         Ok(())
     }
 
@@ -1925,6 +1957,7 @@ impl ZSetCommands {
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
         reverse: bool,
+        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
 
@@ -2042,27 +2075,12 @@ impl ZSetCommands {
             cur_idx = cur_idx.saturating_add(1);
         }
 
-        if result_set.is_empty() {
-            builder_return_empty_array!(builder, response_buffer);
-        } else {
-            if reverse {
-                result_set.reverse();
-            }
-
-            let response_len = if with_scores {
-                result_set.len().saturating_mul(2)
-            } else {
-                result_set.len()
-            };
-
-            builder.add_array_len(response_buffer, response_len);
-            for (member, score) in result_set {
-                builder.add_bulk_string(response_buffer, &member);
-                if with_scores {
-                    builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
-                }
-            }
+        if reverse {
+            result_set.reverse();
         }
+
+        // Call the handler
+        output_handler(result_set, with_scores, response_buffer);
         Ok(())
     }
 
