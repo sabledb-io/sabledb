@@ -185,6 +185,7 @@ and visit this page again in couple of days
 | zrevrangebyscore | ✓ |✓ | |
 | zrangebylex | ✓ |✓ | |
 | zrevrangebylex | ✓ |✓ | |
+| zrange | ✓ |✓ | |
 | zinter | ✓ |✓ | |
 | zintercard | ✓ |✓ | |
 | zinterstore | ✓ |✓ | |

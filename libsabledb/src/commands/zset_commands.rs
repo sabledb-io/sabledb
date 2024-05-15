@@ -56,6 +56,13 @@ enum LexIndex<'a> {
     Invalid,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+enum RankIndex {
+    Value(isize),
+    SyntaxError,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum FindKeyWithValueResult<NumberT> {
     Value(NumberT),
@@ -1591,11 +1598,12 @@ impl ZSetCommands {
 
         let reverse = Self::has_optional_arg(command.clone(), "rev", 4);
         if Self::has_optional_arg(command.clone(), "byscore", 4) {
-            return Self::zrangebyscore(client_state, command, response_buffer, reverse).await;
+            Self::zrangebyscore(client_state, command, response_buffer, reverse).await
         } else if Self::has_optional_arg(command.clone(), "bylex", 4) {
-            return Self::zrangebylex(client_state, command, response_buffer, reverse).await;
+            Self::zrangebylex(client_state, command, response_buffer, reverse).await
+        } else {
+            Self::zrangebyrank(client_state, command, response_buffer, reverse).await
         }
-        Ok(())
     }
 
     /// `ZRANGEBYLEX key min max [LIMIT offset count]`
@@ -1670,12 +1678,13 @@ impl ZSetCommands {
             }
         };
 
-        let (mut offset, count) = match Self::parse_offset_and_limit(command.clone()) {
-            LimitAndOffsetResult::SyntaxError => {
-                builder_return_syntax_error!(builder, response_buffer);
-            }
-            LimitAndOffsetResult::Value((offset, count)) => (offset, count),
-        };
+        let (mut offset, count) =
+            match Self::parse_offset_and_limit(command.clone(), md.len() as usize) {
+                LimitAndOffsetResult::SyntaxError => {
+                    builder_return_syntax_error!(builder, response_buffer);
+                }
+                LimitAndOffsetResult::Value((offset, count)) => (offset, count),
+            };
 
         let zset_prefix = md.prefix_by_member(None);
         let mut result_set = Vec::<(BytesMut, Option<f64>)>::new();
@@ -1780,18 +1789,19 @@ impl ZSetCommands {
         iter.next(); // min
         iter.next(); // max
 
-        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 4);
-        let (mut offset, count) = match Self::parse_offset_and_limit(command.clone()) {
-            LimitAndOffsetResult::Value((offset, count)) => (offset, count),
-            LimitAndOffsetResult::SyntaxError => {
-                builder_return_syntax_error!(builder, response_buffer);
-            }
-        };
-
         let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
+
+        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 4);
+        let (mut offset, count) =
+            match Self::parse_offset_and_limit(command.clone(), md.len() as usize) {
+                LimitAndOffsetResult::Value((offset, count)) => (offset, count),
+                LimitAndOffsetResult::SyntaxError => {
+                    builder_return_syntax_error!(builder, response_buffer);
+                }
+            };
 
         // empty set? empty array
         if md.is_empty() {
@@ -1906,6 +1916,156 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZRANGEBYRANK key min max [WITHSCORES]`
+    /// This function does not really exists, its basically `ZRANGE` without any `BY*` property
+    ///
+    /// Returns all the elements in the sorted set at key with a rank. Items are sorted by rank
+    async fn zrangebyrank(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+        reverse: bool,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let mut min = command_arg_at!(command, 2).clone();
+        let mut max = command_arg_at!(command, 3).clone();
+
+        let builder = RespBuilderV2::default();
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
+
+        // empty set? empty array
+        if md.is_empty() {
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        if reverse {
+            // range is <max> <min>
+            std::mem::swap(&mut min, &mut max);
+        }
+
+        // parse the start / stop
+        let start_idx = match Self::parse_rank_index(&min) {
+            RankIndex::SyntaxError => {
+                builder_return_min_max_not_float!(builder, response_buffer);
+            }
+            RankIndex::Value(index) => index,
+        };
+
+        let end_idx = match Self::parse_rank_index(&max) {
+            RankIndex::SyntaxError => {
+                builder_return_min_max_not_float!(builder, response_buffer);
+            }
+            RankIndex::Value(index) => index,
+        };
+
+        let llen = md.len() as isize;
+        let mut start_idx = Self::fix_range_index(start_idx, reverse, llen);
+        let mut end_idx = Self::fix_range_index(end_idx, reverse, llen);
+
+        if start_idx > end_idx || end_idx < 0 || start_idx >= llen {
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        if start_idx < 0 {
+            start_idx = 0;
+        }
+
+        if end_idx >= llen {
+            end_idx = llen - 1;
+        }
+
+        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 4);
+        if Self::has_optional_arg(command.clone(), "limit", 0) {
+            builder.error_string(
+                response_buffer,
+                "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX",
+            );
+            return Ok(());
+        }
+
+        // Determine the starting score
+        let set_prefix = md.prefix_by_score(None);
+        let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
+
+        if !db_iter.valid() {
+            // invalid iterator
+            builder_return_empty_array!(builder, response_buffer);
+        }
+
+        let mut cur_idx = 0isize;
+
+        // Find the first index (inclusive range)
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                builder_return_empty_array!(builder, response_buffer);
+            };
+
+            if !key.starts_with(&set_prefix) {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+
+            if cur_idx == start_idx {
+                break;
+            } else {
+                cur_idx = cur_idx.saturating_add(1);
+            }
+            db_iter.next();
+        }
+
+        // Start reading the values
+        let mut result_set = Vec::<(BytesMut, f64)>::new();
+        while db_iter.valid() {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&set_prefix) {
+                // reached the set limit
+                break;
+            }
+
+            if cur_idx > end_idx {
+                break;
+            }
+
+            let field = ZSetScoreItem::from_bytes(key)?;
+            result_set.push((BytesMut::from(field.member()), field.score()));
+            db_iter.next();
+            cur_idx = cur_idx.saturating_add(1);
+        }
+
+        if result_set.is_empty() {
+            builder_return_empty_array!(builder, response_buffer);
+        } else {
+            if reverse {
+                result_set.reverse();
+            }
+
+            let response_len = if with_scores {
+                result_set.len().saturating_mul(2)
+            } else {
+                result_set.len()
+            };
+
+            builder.add_array_len(response_buffer, response_len);
+            for (member, score) in result_set {
+                builder.add_bulk_string(response_buffer, &member);
+                if with_scores {
+                    builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
+                }
+            }
+        }
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -1934,6 +2094,31 @@ impl ZSetCommands {
         };
 
         Self::parse_score(&BytesMut::from(mod_index)).map(|val| (val, !exclude_index))
+    }
+
+    /// Parse rank index. If index is negative, translate it to the positive index using
+    /// the current set length
+    fn parse_rank_index(index: &BytesMut) -> RankIndex {
+        let Some(index) = BytesMutUtils::parse::<isize>(index) else {
+            return RankIndex::SyntaxError;
+        };
+
+        RankIndex::Value(index)
+    }
+
+    fn fix_range_index(index: isize, reverse: bool, llen: isize) -> isize {
+        if reverse {
+            // 0 is the last element, 1 is second last element and so on
+            if index < 0 {
+                index.abs() - 1
+            } else {
+                llen - index - 1
+            }
+        } else if index < 0 {
+            llen + index
+        } else {
+            index
+        }
     }
 
     /// Valid `index` must start with `(` (exclude) or `[` (include), in order to specify whether the range
@@ -2216,7 +2401,10 @@ impl ZSetCommands {
     }
 
     /// Return the `LIMIT <offset> <count>` from the command line
-    fn parse_offset_and_limit(command: Rc<RedisCommand>) -> LimitAndOffsetResult {
+    fn parse_offset_and_limit(
+        command: Rc<RedisCommand>,
+        default_value: usize,
+    ) -> LimitAndOffsetResult {
         let mut iter = command.args_vec().iter();
         while let Some(arg) = iter.next() {
             let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
@@ -2241,7 +2429,7 @@ impl ZSetCommands {
                 }
             }
         }
-        LimitAndOffsetResult::Value((0, usize::MAX))
+        LimitAndOffsetResult::Value((0, default_value))
     }
 
     /// Return the `COUNT <value>` from the command line
@@ -2803,6 +2991,20 @@ mod test {
         ("zrandmember myset 4", "*4\r\n$3\r\ndva\r\n$4\r\nrein\r\n$7\r\nroadhog\r\n$5\r\nsigma\r\n"),
         ("zrandmember myset 4 withscores", "*8\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n"),
     ]; "test_zrandmember")]
+    #[test_case(vec![
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZRANGE myzset 0 -1", "*3\r\n$3\r\none\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
+        ("ZRANGE myzset 2 3", "*1\r\n$5\r\nthree\r\n"),
+        ("ZRANGE myzset -2 -1", "*2\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
+        ("ZRANGE myzset -2 -1 LIMIT 0 1", "-ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX\r\n"),
+        ("ZRANGE myzset -2 -1", "*2\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
+        ("ZRANGE myzset -2 -1 REV", "*2\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+        ("ZRANGE myzset 0 -1 REV", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+        ("ZRANGE myzset 0 2 REV", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+        ("ZRANGE myzset 0 10 REV", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+        ("ZRANGE myzset -10 -7 REV", "*0\r\n"),
+        ("ZRANGE myzset -5 2 REV", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+    ]; "test_zrangerank")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

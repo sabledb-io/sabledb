@@ -401,7 +401,8 @@ impl StringCommands {
                 let end_index = to_number!(end, i64, response_buffer, Ok(()));
 
                 // translate negative index into valid index in value
-                let index_pair = BaseCommands::fix_range_indexes(&value, start_index, end_index);
+                let index_pair =
+                    BaseCommands::fix_range_indexes(value.len(), start_index, end_index);
 
                 match index_pair {
                     Some((start, end)) => {

@@ -1,16 +1,14 @@
-use bytes::BytesMut;
-
 pub struct BaseCommands {}
 
 #[allow(dead_code)]
 impl BaseCommands {
     /// Redis uses weird indexing: inclusive, both ways and it supports negative indexes
     pub fn fix_range_indexes(
-        value: &BytesMut,
+        range_len: usize,
         mut start: i64,
         mut end: i64,
     ) -> Option<(usize, usize)> {
-        let strlen = value.len() as i64;
+        let strlen = range_len as i64;
         if strlen == 0 {
             return None;
         }
@@ -55,6 +53,7 @@ impl BaseCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
     use test_case::test_case;
 
     #[test_case("mystring", -1, -1, Some((7, 8)); "start and end are negative -1")]
@@ -71,7 +70,7 @@ mod tests {
     ) {
         let buffer = BytesMut::from(input_str.as_bytes());
         assert_eq!(
-            BaseCommands::fix_range_indexes(&buffer, start, end),
+            BaseCommands::fix_range_indexes(buffer.len(), start, end),
             expected_indexes
         );
     }
