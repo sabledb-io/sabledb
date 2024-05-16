@@ -181,11 +181,6 @@ and visit this page again in couple of days
 | zcount | ✓ |✓ | |
 | zdiff | ✓ |✓ | |
 | zdiffstore | ✓ |✓ | |
-| zrangebyscore | ✓ |✓ | |
-| zrevrangebyscore | ✓ |✓ | |
-| zrangebylex | ✓ |✓ | |
-| zrevrangebylex | ✓ |✓ | |
-| zrange | ✓ |✓ | |
 | zinter | ✓ |✓ | |
 | zintercard | ✓ |✓ | |
 | zinterstore | ✓ |✓ | |
@@ -195,6 +190,12 @@ and visit this page again in couple of days
 | zpopmax | ✓ |✓ | |
 | zpopmin | ✓ |✓ | |
 | zrandmember | ✓ |✓ | |
+| zrangebyscore | ✓ |✓ | |
+| zrevrangebyscore | ✓ |✓ | |
+| zrangebylex | ✓ |✓ | |
+| zrevrangebylex | ✓ |✓ | |
+| zrange | ✓ |✓ | |
+| zrangestore | ✓ |✓ | |
 
 ### Generic commands
 

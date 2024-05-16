@@ -94,6 +94,18 @@ enum TryPopResult {
     WrongType,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+/// Defines the output type of the ZRANGE* various methods
+enum ActionType {
+    /// Print the output result set
+    Print,
+    /// The result set is stored should be stored in destination (argument at position 1)
+    Store,
+    /// Remove all the members found
+    #[allow(dead_code)]
+    Remove,
+}
+
 /// Callback for handling the output of the Zrange* family of commands
 /// - The client state
 /// - The command
@@ -133,7 +145,6 @@ fn output_writer_handler(
     Ok(())
 }
 
-#[allow(dead_code)]
 /// Default output handler: store the output in a new destination
 fn output_store_handler(
     client_state: Rc<ClientState>,
@@ -161,7 +172,11 @@ fn output_store_handler(
         }
         count = count.saturating_add(1);
     }
-    zset_db.commit()
+
+    zset_db.commit()?;
+    let builder = RespBuilderV2::default();
+    builder.number_usize(response_buffer, result_set.len());
+    Ok(())
 }
 
 pub struct ZSetCommands {}
@@ -253,45 +268,80 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zrangestore => {
+                // store the output into a new destination
+                Self::zrangestore(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    output_store_handler,
+                )
+                .await?;
+            }
             RedisCommandName::Zrangebyscore => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
                 Self::zrangebyscore(
                     client_state,
                     command,
                     &mut response_buffer,
-                    1, // <key> is placed at position 1
+                    ActionType::Print,
                     false,
                     output_writer_handler,
                 )
                 .await?;
             }
             RedisCommandName::Zrevrangebyscore => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
+
                 Self::zrangebyscore(
                     client_state,
                     command,
                     &mut response_buffer,
-                    1, // <key> is placed at position 1
+                    ActionType::Print,
                     true,
                     output_writer_handler,
                 )
                 .await?;
             }
             RedisCommandName::Zrangebylex => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
                 Self::zrangebylex(
                     client_state,
                     command,
                     &mut response_buffer,
-                    1, // <key> is placed at position 1
+                    ActionType::Print,
                     false,
                     output_writer_handler,
                 )
                 .await?;
             }
             RedisCommandName::Zrevrangebylex => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
                 Self::zrangebylex(
                     client_state,
                     command,
                     &mut response_buffer,
-                    1, // <key> is placed at position 1
+                    ActionType::Print,
                     true,
                     output_writer_handler,
                 )
@@ -1695,6 +1745,50 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZRANGESTORE dst key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`
+    /// Returns the specified range of elements in the sorted set stored at <key>
+    async fn zrangestore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+        output_handler: OutputHandler,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 5, response_buffer);
+
+        let reverse = Self::has_optional_arg(command.clone(), "rev", 5);
+        if Self::has_optional_arg(command.clone(), "byscore", 5) {
+            Self::zrangebyscore(
+                client_state,
+                command,
+                response_buffer,
+                ActionType::Store,
+                reverse,
+                output_handler,
+            )
+            .await
+        } else if Self::has_optional_arg(command.clone(), "bylex", 5) {
+            Self::zrangebylex(
+                client_state,
+                command,
+                response_buffer,
+                ActionType::Store,
+                reverse,
+                output_handler,
+            )
+            .await
+        } else {
+            Self::zrangebyrank(
+                client_state,
+                command,
+                response_buffer,
+                ActionType::Store,
+                reverse,
+                output_handler,
+            )
+            .await
+        }
+    }
+
     /// `ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`
     /// Returns the specified range of elements in the sorted set stored at <key>
     async fn zrange(
@@ -1711,7 +1805,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
-                1,
+                ActionType::Print,
                 reverse,
                 output_handler,
             )
@@ -1721,7 +1815,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
-                1,
+                ActionType::Print,
                 reverse,
                 output_handler,
             )
@@ -1731,7 +1825,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
-                1,
+                ActionType::Print,
                 reverse,
                 output_handler,
             )
@@ -1746,10 +1840,15 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
-        first_key_pos: usize,
+        action_type: ActionType,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
+        let (first_key_pos, dest) = match action_type {
+            ActionType::Print | ActionType::Remove => (1, None),
+            ActionType::Store => (2, Some(command_arg_at!(command, 1))),
+        };
+
         let key = command_arg_at!(command, first_key_pos);
         let min = command_arg_at!(command, first_key_pos + 1);
         let max = command_arg_at!(command, first_key_pos + 2);
@@ -1761,7 +1860,15 @@ impl ZSetCommands {
             std::mem::swap(&mut min, &mut max);
         }
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        // If we have a destination key, lock it as well
+        let keys_to_lock = if let Some(dest) = dest {
+            vec![key, dest]
+        } else {
+            vec![key]
+        };
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = match zset_db.get_metadata(key)? {
@@ -1865,16 +1972,22 @@ impl ZSetCommands {
     }
 
     /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
+    /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`
     /// Returns all the elements in the sorted set at key with a score between min and max (including elements with
     /// score equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zrangebyscore(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
-        first_key_pos: usize,
+        action_type: ActionType,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
+        let (first_key_pos, dest) = match action_type {
+            ActionType::Print | ActionType::Remove => (1, None),
+            ActionType::Store => (2, Some(command_arg_at!(command, 1))),
+        };
+
         let key = command_arg_at!(command, first_key_pos);
         let min = command_arg_at!(command, first_key_pos + 1);
         let max = command_arg_at!(command, first_key_pos + 2);
@@ -1888,16 +2001,15 @@ impl ZSetCommands {
             builder_return_min_max_not_float!(builder, response_buffer);
         };
 
-        // parse the remaining arguments
-        let mut iter = command.args_vec().iter();
+        // If we have a destination key, lock it as well
+        let keys_to_lock = if let Some(dest) = dest {
+            vec![key, dest]
+        } else {
+            vec![key]
+        };
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
 
-        // Skip mandatory arguments
-        iter.next(); // ZRANGEBYSCORE
-        iter.next(); // key
-        iter.next(); // min
-        iter.next(); // max
-
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
@@ -2015,11 +2127,14 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
-        first_key_pos: usize,
+        action_type: ActionType,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
-        check_args_count!(command, 4, response_buffer);
+        let (first_key_pos, dest) = match action_type {
+            ActionType::Print | ActionType::Remove => (1, None),
+            ActionType::Store => (2, Some(command_arg_at!(command, 1))),
+        };
 
         let key = command_arg_at!(command, first_key_pos);
         let mut min = command_arg_at!(command, first_key_pos + 1).clone();
@@ -2027,7 +2142,14 @@ impl ZSetCommands {
 
         let builder = RespBuilderV2::default();
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        // If we have a destination key, lock it as well
+        let keys_to_lock = if let Some(dest) = dest {
+            vec![key, dest]
+        } else {
+            vec![key]
+        };
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
@@ -2074,7 +2196,7 @@ impl ZSetCommands {
         }
 
         let with_scores = Self::has_optional_arg(command.clone(), "withscores", first_key_pos + 3);
-        if Self::has_optional_arg(command.clone(), "limit", 0) {
+        if Self::has_optional_arg(command.clone(), "limit", first_key_pos + 3) {
             builder.error_string(
                 response_buffer,
                 "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX",
@@ -3092,6 +3214,11 @@ mod test {
         ("ZRANGE myzset -10 -7 REV", "*0\r\n"),
         ("ZRANGE myzset -5 2 REV", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
     ]; "test_zrangerank")]
+    #[test_case(vec![
+        ("ZADD srczset 1 one 2 two 3 three 4 four", ":4\r\n"),
+        ("ZRANGESTORE dstzset srczset 2 -1", ":2\r\n"),
+        ("ZRANGE dstzset 0 -1", "*2\r\n$5\r\nthree\r\n$4\r\nfour\r\n"),
+    ]; "test_zrangestore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

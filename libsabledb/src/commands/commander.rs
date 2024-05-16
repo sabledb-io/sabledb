@@ -136,6 +136,7 @@ pub enum RedisCommandName {
     Zrevrangebyscore,
     Zrangebylex,
     Zrevrangebylex,
+    Zrangestore,
     NotSupported(String),
 }
 
@@ -1052,6 +1053,15 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zrange)
                         .read_only()
                         .with_arity(-4),
+                ),
+                (
+                    "zrangestore",
+                    CommandMetadata::new(RedisCommandName::Zrangestore)
+                        .write()
+                        .with_arity(-5)
+                        .with_first_key(1)
+                        .with_last_key(2)
+                        .with_step(1),
                 ),
             ]),
         }
