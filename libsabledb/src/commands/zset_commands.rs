@@ -94,14 +94,28 @@ enum TryPopResult {
     WrongType,
 }
 
-type OutputHandler = fn(Vec<(BytesMut, f64)>, bool, &mut BytesMut);
+/// Callback for handling the output of the Zrange* family of commands
+/// - The client state
+/// - The command
+/// - The result set (can be empty)
+/// - Does the output should include the score?
+/// - The response buffer
+type OutputHandler = fn(
+    Rc<ClientState>,
+    Rc<RedisCommand>,
+    Vec<(BytesMut, f64)>,
+    bool,
+    &mut BytesMut,
+) -> Result<(), SableError>;
 
 /// Default output handler: write the set to the `response_buffer`
 fn output_writer_handler(
+    _client_state: Rc<ClientState>,
+    _command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
     with_scores: bool,
     response_buffer: &mut BytesMut,
-) {
+) -> Result<(), SableError> {
     let builder = RespBuilderV2::default();
     let response_len = if with_scores {
         result_set.len().saturating_mul(2)
@@ -116,6 +130,38 @@ fn output_writer_handler(
             builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
         }
     }
+    Ok(())
+}
+
+#[allow(dead_code)]
+/// Default output handler: store the output in a new destination
+fn output_store_handler(
+    client_state: Rc<ClientState>,
+    command: Rc<RedisCommand>,
+    result_set: Vec<(BytesMut, f64)>,
+    _with_scores: bool,
+    response_buffer: &mut BytesMut,
+) -> Result<(), SableError> {
+    let Some(dst) = command.args_vec().get(1) else {
+        let builder = RespBuilderV2::default();
+        builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+    };
+
+    let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+    // Delete any previous entry we had there and create a new set
+    zset_db.delete(dst, false)?;
+    let mut count: usize = 0;
+    for (member, score) in &result_set {
+        zset_db.add(dst, member, *score, &ZWriteFlags::None, false)?;
+        if count >= 1000 {
+            // commit every 1000 adds (to avoid too much memory used)
+            zset_db.commit()?;
+            count = 0;
+        }
+        count = count.saturating_add(1);
+    }
+    zset_db.commit()
 }
 
 pub struct ZSetCommands {}
@@ -212,6 +258,7 @@ impl ZSetCommands {
                     client_state,
                     command,
                     &mut response_buffer,
+                    1, // <key> is placed at position 1
                     false,
                     output_writer_handler,
                 )
@@ -222,6 +269,7 @@ impl ZSetCommands {
                     client_state,
                     command,
                     &mut response_buffer,
+                    1, // <key> is placed at position 1
                     true,
                     output_writer_handler,
                 )
@@ -232,6 +280,7 @@ impl ZSetCommands {
                     client_state,
                     command,
                     &mut response_buffer,
+                    1, // <key> is placed at position 1
                     false,
                     output_writer_handler,
                 )
@@ -242,6 +291,7 @@ impl ZSetCommands {
                     client_state,
                     command,
                     &mut response_buffer,
+                    1, // <key> is placed at position 1
                     true,
                     output_writer_handler,
                 )
@@ -1661,6 +1711,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
+                1,
                 reverse,
                 output_handler,
             )
@@ -1670,6 +1721,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
+                1,
                 reverse,
                 output_handler,
             )
@@ -1679,6 +1731,7 @@ impl ZSetCommands {
                 client_state,
                 command,
                 response_buffer,
+                1,
                 reverse,
                 output_handler,
             )
@@ -1693,18 +1746,17 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
+        first_key_pos: usize,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
-        check_args_count!(command, 4, response_buffer);
-        let key = command_arg_at!(command, 1);
-        let min = command_arg_at!(command, 2);
-        let max = command_arg_at!(command, 3);
+        let key = command_arg_at!(command, first_key_pos);
+        let min = command_arg_at!(command, first_key_pos + 1);
+        let max = command_arg_at!(command, first_key_pos + 2);
 
         let builder = RespBuilderV2::default();
         let mut min = Self::parse_lex_index(min.as_ref());
         let mut max = Self::parse_lex_index(max.as_ref());
-        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 3);
         if reverse {
             std::mem::swap(&mut min, &mut max);
         }
@@ -1723,17 +1775,18 @@ impl ZSetCommands {
             ZSetGetMetadataResult::Some(md) => md,
         };
 
+        let client_state_cloned = client_state.clone();
         let mut db_iter = match min {
             LexIndex::Invalid => {
                 builder_return_syntax_error!(builder, response_buffer);
             }
             LexIndex::Include(prefix) => {
                 let prefix = md.prefix_by_member(Some(prefix));
-                client_state.database().create_iterator(&prefix)?
+                client_state_cloned.database().create_iterator(&prefix)?
             }
             LexIndex::Exclude(prefix) => {
                 let prefix = md.prefix_by_member(Some(prefix));
-                let mut db_iter = client_state.database().create_iterator(&prefix)?;
+                let mut db_iter = client_state_cloned.database().create_iterator(&prefix)?;
                 db_iter.next(); // skip this entry
                 db_iter
             }
@@ -1742,7 +1795,7 @@ impl ZSetCommands {
             }
             LexIndex::Min => {
                 let prefix = md.prefix_by_member(None);
-                client_state.database().create_iterator(&prefix)?
+                client_state_cloned.database().create_iterator(&prefix)?
             }
         };
 
@@ -1807,7 +1860,7 @@ impl ZSetCommands {
         // shrink the result set to fit the "LIMIT OFFSET COUNT" restriction
         result_set.truncate(count);
 
-        output_handler(result_set, with_scores, response_buffer);
+        output_handler(client_state, command, result_set, false, response_buffer)?;
         Ok(())
     }
 
@@ -1818,14 +1871,13 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
+        first_key_pos: usize,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
-        check_args_count!(command, 4, response_buffer);
-
-        let key = command_arg_at!(command, 1);
-        let min = command_arg_at!(command, 2);
-        let max = command_arg_at!(command, 3);
+        let key = command_arg_at!(command, first_key_pos);
+        let min = command_arg_at!(command, first_key_pos + 1);
+        let max = command_arg_at!(command, first_key_pos + 2);
 
         let builder = RespBuilderV2::default();
         let Some((mut start_score, mut include_start_score)) = Self::parse_score_index(min) else {
@@ -1850,7 +1902,7 @@ impl ZSetCommands {
 
         let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
 
-        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 4);
+        let with_scores = Self::has_optional_arg(command.clone(), "withscores", first_key_pos + 3);
         let (mut offset, count) =
             match Self::parse_offset_and_limit(command.clone(), md.len() as usize) {
                 LimitAndOffsetResult::Value((offset, count)) => (offset, count),
@@ -1871,7 +1923,8 @@ impl ZSetCommands {
 
         // Determine the starting score
         let prefix = md.prefix_by_score(None);
-        let mut db_iter = client_state.database().create_iterator(&prefix)?;
+        let client_state_cloned = client_state.clone();
+        let mut db_iter = client_state_cloned.database().create_iterator(&prefix)?;
 
         if !db_iter.valid() {
             // invalud iterator
@@ -1895,7 +1948,7 @@ impl ZSetCommands {
             {
                 let prefix = md.prefix_by_score(Some(cur_item_score.score()));
                 // place the iterator on the range start
-                db_iter = client_state.database().create_iterator(&prefix)?;
+                db_iter = client_state_cloned.database().create_iterator(&prefix)?;
                 break;
             }
             db_iter.next();
@@ -1943,7 +1996,13 @@ impl ZSetCommands {
         result_set.truncate(count);
 
         // Call the handler
-        output_handler(result_set, with_scores, response_buffer);
+        output_handler(
+            client_state,
+            command,
+            result_set,
+            with_scores,
+            response_buffer,
+        )?;
 
         Ok(())
     }
@@ -1956,14 +2015,15 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
+        first_key_pos: usize,
         reverse: bool,
         output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
 
-        let key = command_arg_at!(command, 1);
-        let mut min = command_arg_at!(command, 2).clone();
-        let mut max = command_arg_at!(command, 3).clone();
+        let key = command_arg_at!(command, first_key_pos);
+        let mut min = command_arg_at!(command, first_key_pos + 1).clone();
+        let mut max = command_arg_at!(command, first_key_pos + 2).clone();
 
         let builder = RespBuilderV2::default();
 
@@ -2013,7 +2073,7 @@ impl ZSetCommands {
             end_idx = llen - 1;
         }
 
-        let with_scores = Self::has_optional_arg(command.clone(), "withscores", 4);
+        let with_scores = Self::has_optional_arg(command.clone(), "withscores", first_key_pos + 3);
         if Self::has_optional_arg(command.clone(), "limit", 0) {
             builder.error_string(
                 response_buffer,
@@ -2024,7 +2084,10 @@ impl ZSetCommands {
 
         // Determine the starting score
         let set_prefix = md.prefix_by_score(None);
-        let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
+        let client_state_cloned = client_state.clone();
+        let mut db_iter = client_state_cloned
+            .database()
+            .create_iterator(&set_prefix)?;
 
         if !db_iter.valid() {
             // invalid iterator
@@ -2080,7 +2143,13 @@ impl ZSetCommands {
         }
 
         // Call the handler
-        output_handler(result_set, with_scores, response_buffer);
+        output_handler(
+            client_state,
+            command,
+            result_set,
+            with_scores,
+            response_buffer,
+        )?;
         Ok(())
     }
 
