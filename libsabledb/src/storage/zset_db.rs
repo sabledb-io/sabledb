@@ -50,6 +50,10 @@ pub enum ZSetDeleteMemberResult {
     WrongType,
     /// Delete was successful
     Ok,
+    /// Member was not found
+    MemberNotFound,
+    /// The set does not exist
+    SetNotFound,
 }
 
 #[derive(PartialEq, Debug)]
@@ -290,7 +294,7 @@ impl<'a> ZSetDb<'a> {
         let mut md = match self.get_metadata(user_key)? {
             ZSetGetMetadataResult::WrongType => return Ok(ZSetDeleteMemberResult::WrongType),
             ZSetGetMetadataResult::NotFound => {
-                return Ok(ZSetDeleteMemberResult::Ok);
+                return Ok(ZSetDeleteMemberResult::SetNotFound);
             }
             ZSetGetMetadataResult::Some(set) => set,
         };
@@ -302,6 +306,8 @@ impl<'a> ZSetDb<'a> {
             } else {
                 self.put_metadata(user_key, &md)?;
             }
+        } else {
+            return Ok(ZSetDeleteMemberResult::MemberNotFound);
         }
 
         if flush_cache {

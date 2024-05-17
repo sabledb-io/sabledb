@@ -197,6 +197,7 @@ and visit this page again in couple of days
 | zrange | ✓ |✓ | |
 | zrangestore | ✓ |✓ | |
 | zrank | ✓ |✓ | |
+| zrem | ✓ |✓ | |
 
 ### Generic commands
 

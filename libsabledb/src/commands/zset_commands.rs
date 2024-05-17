@@ -4,8 +4,8 @@ use crate::{
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
-        ZSetAddMemberResult, ZSetDb, ZSetGetMetadataResult, ZSetGetScoreResult,
-        ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
+        ZSetAddMemberResult, ZSetDb, ZSetDeleteMemberResult, ZSetGetMetadataResult,
+        ZSetGetScoreResult, ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
     },
     utils,
     utils::RespBuilderV2,
@@ -349,6 +349,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zrank => {
                 Self::zrank(client_state, command, &mut response_buffer, false).await?;
+            }
+            RedisCommandName::Zrem => {
+                Self::zrem(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -2379,6 +2382,49 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZREM key member [member ...]`
+    /// Removes the specified members from the sorted set stored at key. Non existing members are ignored. An error is
+    /// returned when key exists and does not hold a sorted set.
+    async fn zrem(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 1);
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // command
+        iter.next(); // key
+
+        let mut items_deleted: usize = 0;
+        for member in iter {
+            match zset_db.delete_member(key, member, false)? {
+                ZSetDeleteMemberResult::WrongType => {
+                    builder_return_wrong_type!(builder, response_buffer);
+                }
+                ZSetDeleteMemberResult::Ok => {
+                    items_deleted = items_deleted.saturating_add(1);
+                }
+                ZSetDeleteMemberResult::SetNotFound => {
+                    builder.number_usize(response_buffer, items_deleted);
+                    return Ok(());
+                }
+                ZSetDeleteMemberResult::MemberNotFound => {}
+            }
+        }
+
+        if items_deleted > 0 {
+            zset_db.commit()?;
+        }
+        builder.number_usize(response_buffer, items_deleted);
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -3335,6 +3381,14 @@ mod test {
         ("zrank no_such_set one", "$-1\r\n"),
         ("zrank no_such_set one WITHSCORE", "*-1\r\n"),
     ]; "test_zrank")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zrem mystr bla", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZREM myzset two", ":1\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\none\r\n$4\r\n1.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("zrem sddsd a", ":0\r\n"),
+    ]; "test_zrem")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
