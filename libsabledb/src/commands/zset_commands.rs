@@ -179,6 +179,40 @@ fn output_store_handler(
     Ok(())
 }
 
+/// Default remove handler: delete all items from `result_set`. Return the number of items deleted
+fn output_remove_handler(
+    client_state: Rc<ClientState>,
+    command: Rc<RedisCommand>,
+    result_set: Vec<(BytesMut, f64)>,
+    _with_scores: bool,
+    response_buffer: &mut BytesMut,
+) -> Result<(), SableError> {
+    let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+    let key = command_arg_at!(command, 1);
+
+    let builder = RespBuilderV2::default();
+    let mut count: usize = 0;
+    for (member, _) in &result_set {
+        match zset_db.delete_member(key, member, false)? {
+            ZSetDeleteMemberResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ZSetDeleteMemberResult::Ok => {
+                count = count.saturating_add(1);
+            }
+            ZSetDeleteMemberResult::SetNotFound => {
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+            ZSetDeleteMemberResult::MemberNotFound => {}
+        }
+    }
+
+    zset_db.commit()?;
+    builder.number_usize(response_buffer, count);
+    Ok(())
+}
+
 pub struct ZSetCommands {}
 
 #[allow(dead_code)]
@@ -352,6 +386,23 @@ impl ZSetCommands {
             }
             RedisCommandName::Zrem => {
                 Self::zrem(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zremrangebylex => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
+                Self::zrangebylex(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Remove,
+                    false,
+                    output_remove_handler,
+                )
+                .await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -1613,18 +1664,22 @@ impl ZSetCommands {
     ) -> bool {
         match state {
             UpperLimitState::NotFound => {
-                if !current_key.starts_with(end_prefix) {
+                if current_key.lt(end_prefix) {
                     true
-                } else {
+                } else if current_key.eq(end_prefix) {
                     *state = UpperLimitState::Found;
                     // We found the upper limit, "upper limit reached" is
                     // now determined based on whether or not we should include it
                     // i.e if the upper limit is NOT included, then we reached the upper
                     // limit boundary
                     end_prefix_included
+                } else {
+                    // We passed the upper limit
+                    *state = UpperLimitState::Found;
+                    false
                 }
             }
-            UpperLimitState::Found => current_key.starts_with(end_prefix),
+            UpperLimitState::Found => current_key.eq(end_prefix),
         }
     }
 
@@ -3162,7 +3217,9 @@ mod test {
         ("set mystr value", "+OK\r\n"),
         ("zrangebylex mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("ZADD myzset 0 a 0 b 0 c 0 d 0 e 0 f 0 g", ":7\r\n"),
-        ("ZRANGEBYLEX myzset - [c", "*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"),
+        ("ZADD myzset2 0 foo 0 zap 0 zip 0 ALPHA 0 alpha", ":5\r\n"),
+        ("ZADD myzset2 0 aaaa 0 b 0 c 0 d 0 e", ":5\r\n"),
+        ("ZRANGEBYLEX myzset2 [alpha [omega", "*6\r\n$5\r\nalpha\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n$3\r\nfoo\r\n"),
         ("ZRANGEBYLEX myzset - (c", "*2\r\n$1\r\na\r\n$1\r\nb\r\n"),
         ("ZRANGEBYLEX myzset [aaa (g", "*5\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n$1\r\nf\r\n"),
         ("ZRANGEBYLEX myzset + -", "*0\r\n"),
@@ -3389,6 +3446,16 @@ mod test {
         ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\none\r\n$4\r\n1.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
         ("zrem sddsd a", ":0\r\n"),
     ]; "test_zrem")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zremrangebylex mystr min", "-ERR wrong number of arguments for 'zremrangebylex' command\r\n"),
+        ("zremrangebylex mystr min max", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 0 aaaa 0 b 0 c 0 d 0 e", ":5\r\n"),
+        ("ZADD myzset 0 foo 0 zap 0 zip 0 ALPHA 0 alpha", ":5\r\n"),
+        ("ZRANGE myzset 0 -1", "*10\r\n$5\r\nALPHA\r\n$4\r\naaaa\r\n$5\r\nalpha\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n$3\r\nfoo\r\n$3\r\nzap\r\n$3\r\nzip\r\n"),
+        ("ZREMRANGEBYLEX myzset [alpha [omega", ":6\r\n"),
+        ("ZRANGE myzset 0 -1", "*4\r\n$5\r\nALPHA\r\n$4\r\naaaa\r\n$3\r\nzap\r\n$3\r\nzip\r\n"),
+    ]; "test_zremrangebylex")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

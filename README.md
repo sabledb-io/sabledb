@@ -198,6 +198,8 @@ and visit this page again in couple of days
 | zrangestore | ✓ |✓ | |
 | zrank | ✓ |✓ | |
 | zrem | ✓ |✓ | |
+| zremrangebylex | ✓ |✓ | |
+
 
 ### Generic commands
 
