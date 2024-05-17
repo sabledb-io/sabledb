@@ -199,6 +199,7 @@ and visit this page again in couple of days
 | zrank | ✓ |✓ | |
 | zrem | ✓ |✓ | |
 | zremrangebylex | ✓ |✓ | |
+| zremrangebyrank | ✓ |✓ | |
 
 
 ### Generic commands

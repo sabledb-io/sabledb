@@ -140,6 +140,7 @@ pub enum RedisCommandName {
     Zrank,
     Zrem,
     Zremrangebylex,
+    Zremrangebyrank,
     NotSupported(String),
 }
 
@@ -1081,6 +1082,12 @@ impl Default for CommandsManager {
                 (
                     "zremrangebylex",
                     CommandMetadata::new(RedisCommandName::Zremrangebylex)
+                        .write()
+                        .with_arity(4),
+                ),
+                (
+                    "zremrangebyrank",
+                    CommandMetadata::new(RedisCommandName::Zremrangebyrank)
                         .write()
                         .with_arity(4),
                 ),

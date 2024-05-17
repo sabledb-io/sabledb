@@ -388,13 +388,30 @@ impl ZSetCommands {
                 Self::zrem(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zremrangebylex => {
-                expect_args_count!(
+                expect_exact_args_count!(
                     command,
                     4,
                     &mut response_buffer,
                     HandleCommandResult::ResponseBufferUpdated(response_buffer)
                 );
                 Self::zrangebylex(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Remove,
+                    false,
+                    output_remove_handler,
+                )
+                .await?;
+            }
+            RedisCommandName::Zremrangebyrank => {
+                expect_exact_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
+                Self::zrangebyrank(
                     client_state,
                     command,
                     &mut response_buffer,
@@ -3456,6 +3473,16 @@ mod test {
         ("ZREMRANGEBYLEX myzset [alpha [omega", ":6\r\n"),
         ("ZRANGE myzset 0 -1", "*4\r\n$5\r\nALPHA\r\n$4\r\naaaa\r\n$3\r\nzap\r\n$3\r\nzip\r\n"),
     ]; "test_zremrangebylex")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("ZREMRANGEBYRANK mystr min 1 3", "-ERR wrong number of arguments for 'zremrangebyrank' command\r\n"),
+        ("ZREMRANGEBYRANK mystr min max", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one", ":1\r\n"),
+        ("ZADD myzset 2 two", ":1\r\n"),
+        ("ZADD myzset 3 three", ":1\r\n"),
+        ("ZREMRANGEBYRANK myzset 0 1", ":2\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+    ]; "test_zremrangebyrank")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

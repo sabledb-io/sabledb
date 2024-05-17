@@ -670,7 +670,8 @@ impl Client {
             | RedisCommandName::Zrangestore
             | RedisCommandName::Zrank
             | RedisCommandName::Zrem
-            | RedisCommandName::Zremrangebylex => {
+            | RedisCommandName::Zremrangebylex
+            | RedisCommandName::Zremrangebyrank => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
                         ClientNextAction::Wait((rx, duration, timeout_response))

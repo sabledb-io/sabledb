@@ -14,6 +14,21 @@ macro_rules! expect_args_count {
 }
 
 #[macro_export]
+macro_rules! expect_exact_args_count {
+    ($cmd:expr, $expected_args_count:expr, $response_buffer:expr, $return_value:expr) => {
+        if $cmd.arg_count() != $expected_args_count {
+            let builder = RespBuilderV2::default();
+            let errmsg = format!(
+                "ERR wrong number of arguments for '{}' command",
+                $cmd.main_command()
+            );
+            builder.error_string($response_buffer, &errmsg);
+            return Ok($return_value);
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! expect_args_count_writer {
     ($cmd:expr, $expected_args_count:expr, $writer:expr, $return_value:expr) => {
         if !$cmd.expect_args_count($expected_args_count) {
