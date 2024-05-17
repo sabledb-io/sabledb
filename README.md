@@ -200,6 +200,7 @@ and visit this page again in couple of days
 | zrem | ✓ |✓ | |
 | zremrangebylex | ✓ |✓ | |
 | zremrangebyrank | ✓ |✓ | |
+| zremrangebyscore | ✓ |✓ | |
 
 
 ### Generic commands

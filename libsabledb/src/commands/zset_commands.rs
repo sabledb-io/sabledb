@@ -421,6 +421,23 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zremrangebyscore => {
+                expect_exact_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
+                Self::zrangebyscore(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Remove,
+                    false,
+                    output_remove_handler,
+                )
+                .await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non ZSet command {}",
@@ -3483,6 +3500,16 @@ mod test {
         ("ZREMRANGEBYRANK myzset 0 1", ":2\r\n"),
         ("ZRANGE myzset 0 -1 WITHSCORES", "*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
     ]; "test_zremrangebyrank")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zremrangebyscore mystr -inf (2 1 3", "-ERR wrong number of arguments for 'zremrangebyscore' command\r\n"),
+        ("zremrangebyscore mystr -inf (2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one", ":1\r\n"),
+        ("ZADD myzset 2 two", ":1\r\n"),
+        ("ZADD myzset 3 three", ":1\r\n"),
+        ("zremrangebyscore myzset -inf (2", ":1\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+    ]; "test_zremrangebyscore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
