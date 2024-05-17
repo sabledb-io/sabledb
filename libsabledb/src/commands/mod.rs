@@ -377,6 +377,42 @@ macro_rules! zset_md_or_nil_builder {
 }
 
 #[macro_export]
+macro_rules! zset_md_or_nil_string_builder {
+    ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $builder.null_string($response_buffer);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
+#[macro_export]
+macro_rules! zset_md_or_nil_array_builder {
+    ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
+        let md = match $zset_db.get_metadata($key)? {
+            ZSetGetMetadataResult::WrongType => {
+                $builder.error_string($response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                $builder.null_array($response_buffer);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
+#[macro_export]
 macro_rules! zset_md_or_0_builder {
     ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
         let md = match $zset_db.get_metadata($key)? {

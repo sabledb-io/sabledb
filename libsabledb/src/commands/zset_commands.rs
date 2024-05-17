@@ -347,6 +347,9 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zrank => {
+                Self::zrank(client_state, command, &mut response_buffer, false).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non ZSet command {}",
@@ -2275,6 +2278,107 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZRANK key member [WITHSCORE]`
+    /// Returns the rank of member in the sorted set stored at key, with the scores ordered from low to high.
+    /// The rank (or index) is 0-based, which means that the member with the lowest score has rank 0.
+    async fn zrank(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+        reverse: bool,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let builder = RespBuilderV2::default();
+        let key = command_arg_at!(command, 1);
+        let member = command_arg_at!(command, 2);
+        let with_scores = if let Some(withscore) = command.args_vec().get(3) {
+            if BytesMutUtils::to_string(withscore)
+                .to_lowercase()
+                .eq("withscore")
+            {
+                true
+            } else {
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+        } else {
+            false
+        };
+
+        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = if with_scores {
+            zset_md_or_nil_array_builder!(zset_db, key, builder, response_buffer)
+        } else {
+            zset_md_or_nil_string_builder!(zset_db, key, builder, response_buffer)
+        };
+
+        let zset_prefix = md.prefix_by_score(None);
+        let mut db_iter = if reverse {
+            let upper_bound = md.score_upper_bound_prefix();
+            client_state
+                .database()
+                .create_reverse_iterator(&upper_bound)?
+        } else {
+            client_state.database().create_iterator(&zset_prefix)?
+        };
+
+        let mut rank: usize = if reverse {
+            md.len().saturating_sub(1) as usize
+        } else {
+            0
+        };
+
+        while db_iter.valid() {
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&zset_prefix) {
+                // could not find a match
+                break;
+            }
+
+            let item = ZSetScoreItem::from_bytes(key)?;
+            if item.member().eq(member) {
+                if with_scores {
+                    // note that we return an array of different types here
+                    builder.add_array_len(response_buffer, 2);
+                    builder.add_number::<usize>(response_buffer, rank, false);
+                    builder.add_bulk_string(
+                        response_buffer,
+                        format!("{:.2}", item.score()).as_bytes(),
+                    );
+                } else {
+                    builder.number_usize(response_buffer, rank);
+                }
+                return Ok(());
+            }
+
+            if reverse {
+                let Some(res) = rank.checked_sub(1) else {
+                    break;
+                };
+                rank = res;
+            } else {
+                rank = rank.saturating_add(1);
+                if rank >= md.len() as usize {
+                    break;
+                }
+            }
+            db_iter.next();
+        }
+
+        // if we reached here, no match was found
+        if with_scores {
+            builder.null_array(response_buffer);
+        } else {
+            builder.null_string(response_buffer);
+        }
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -3219,6 +3323,18 @@ mod test {
         ("ZRANGESTORE dstzset srczset 2 -1", ":2\r\n"),
         ("ZRANGE dstzset 0 -1", "*2\r\n$5\r\nthree\r\n$4\r\nfour\r\n"),
     ]; "test_zrangestore")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("ZRANK mystr bla", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
+        ("ZRANK myzset", "-ERR wrong number of arguments for 'zrank' command\r\n"),
+        ("ZRANK myzset three", ":2\r\n"),
+        ("ZRANK myzset four", "$-1\r\n"),
+        ("ZRANK myzset three WITHSCORE", "*2\r\n:2\r\n$4\r\n3.00\r\n"),
+        ("ZRANK myzset four WITHSCORE", "*-1\r\n"),
+        ("zrank no_such_set one", "$-1\r\n"),
+        ("zrank no_such_set one WITHSCORE", "*-1\r\n"),
+    ]; "test_zrank")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
