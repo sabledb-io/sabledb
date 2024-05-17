@@ -1,7 +1,6 @@
 mod generic_db;
 mod hash_db;
 mod scan_cursor;
-mod sorted_set_db;
 mod storage_adapter;
 mod storage_rocksdb;
 mod storage_trait;
