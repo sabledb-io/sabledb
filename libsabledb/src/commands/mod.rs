@@ -29,6 +29,19 @@ macro_rules! expect_exact_args_count {
 }
 
 #[macro_export]
+macro_rules! check_optional_arg_at_pos {
+    ($cmd:expr, $pos:expr, $expected_val:expr, $response_buffer:expr) => {
+        if let Some(arg) = $cmd.arg($pos) {
+            if BytesMutUtils::to_string(arg).to_lowercase() != $expected_val {
+                let builder = RespBuilderV2::default();
+                builder.error_string(&mut $response_buffer, Strings::SYNTAX_ERROR);
+                return Ok(HandleCommandResult::ResponseBufferUpdated($response_buffer));
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! expect_args_count_writer {
     ($cmd:expr, $expected_args_count:expr, $writer:expr, $return_value:expr) => {
         if !$cmd.expect_args_count($expected_args_count) {

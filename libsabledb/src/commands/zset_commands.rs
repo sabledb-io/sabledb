@@ -355,14 +355,7 @@ impl ZSetCommands {
                     HandleCommandResult::ResponseBufferUpdated(response_buffer)
                 );
 
-                // if we have 5th arg -> it must be "withscores"
-                if let Some(arg) = command.arg(4) {
-                    if BytesMutUtils::to_string(arg).to_lowercase() != "withscores" {
-                        let builder = RespBuilderV2::default();
-                        builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
-                    }
-                }
+                check_optional_arg_at_pos!(command, 4, "withscores", response_buffer);
 
                 Self::zrangebyrank(
                     client_state,
@@ -398,6 +391,10 @@ impl ZSetCommands {
                     &mut response_buffer,
                     HandleCommandResult::ResponseBufferUpdated(response_buffer)
                 );
+
+                // if we have 5th arg -> it must be "limit"
+                check_optional_arg_at_pos!(command, 4, "limit", response_buffer);
+
                 Self::zrangebylex(
                     client_state,
                     command,
@@ -3299,8 +3296,8 @@ mod test {
         ("ZREVRANGEBYLEX myzset + - LIMIT 1 -2", "*6\r\n$1\r\nf\r\n$1\r\ne\r\n$1\r\nd\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n"),
     ]; "test_zrevrangebylex")]
     #[test_case(vec![
-        //("set mystr value", "+OK\r\n"),
-        //("zrevrangebyscore mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("set mystr value", "+OK\r\n"),
+        ("zrevrangebyscore mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zadd tanks 1 rein 1 dva 2 orisa 2 sigma 3 mauga 3 ram", ":6\r\n"),
         // everything without knowing their ranks
         ("zrevrangebyscore tanks -inf +inf", "*0\r\n"),
