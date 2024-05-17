@@ -347,6 +347,33 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zrevrange => {
+                expect_args_count!(
+                    command,
+                    4,
+                    &mut response_buffer,
+                    HandleCommandResult::ResponseBufferUpdated(response_buffer)
+                );
+
+                // if we have 5th arg -> it must be "withscores"
+                if let Some(arg) = command.arg(4) {
+                    if BytesMutUtils::to_string(arg).to_lowercase() != "withscores" {
+                        let builder = RespBuilderV2::default();
+                        builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
+                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                    }
+                }
+
+                Self::zrangebyrank(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Print,
+                    true,
+                    output_writer_handler,
+                )
+                .await?;
+            }
             RedisCommandName::Zrangebylex => {
                 expect_args_count!(
                     command,
@@ -3510,6 +3537,17 @@ mod test {
         ("zremrangebyscore myzset -inf (2", ":1\r\n"),
         ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
     ]; "test_zremrangebyscore")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("ZREVRANGE mystr 1 2 4", "-ERR syntax error\r\n"),
+        ("ZREVRANGE mystr 1 2", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one", ":1\r\n"),
+        ("ZADD myzset 2 two", ":1\r\n"),
+        ("ZADD myzset 3 three", ":1\r\n"),
+        ("ZREVRANGE myzset 0 -1", "*3\r\n$5\r\nthree\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+        ("ZREVRANGE myzset 2 3", "*1\r\n$3\r\none\r\n"),
+        ("ZREVRANGE myzset -2 -1", "*2\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
+    ]; "test_zrevrange")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

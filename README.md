@@ -201,6 +201,7 @@ and visit this page again in couple of days
 | zremrangebylex | ✓ |✓ | |
 | zremrangebyrank | ✓ |✓ | |
 | zremrangebyscore | ✓ |✓ | |
+| Zrevrange | ✓ |✓ | |
 
 
 ### Generic commands
