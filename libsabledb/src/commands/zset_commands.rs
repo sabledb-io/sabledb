@@ -107,26 +107,73 @@ enum ActionType {
     Remove,
 }
 
+bitflags::bitflags! {
+#[derive(Clone)]
+struct OutputFlags: u32  {
+    const None = 0;
+    const WithScores = 1 << 0;
+    const Reverse = 2 << 0;
+}
+}
+
+struct OutputFlagsBuilder {
+    flags: OutputFlags,
+}
+impl OutputFlagsBuilder {
+    pub fn new() -> Self {
+        OutputFlagsBuilder {
+            flags: OutputFlags::None,
+        }
+    }
+
+    pub fn with_scores(mut self, scores: bool) -> Self {
+        if scores {
+            self.flags |= OutputFlags::WithScores;
+        }
+        self
+    }
+
+    pub fn with_reverse(mut self, rev: bool) -> Self {
+        if rev {
+            self.flags |= OutputFlags::Reverse;
+        }
+        self
+    }
+
+    pub fn build(&self) -> OutputFlags {
+        self.flags.clone()
+    }
+}
+
 /// Default output handler: write the set to the `response_buffer`
 async fn output_writer_handler(
     _client_state: Rc<ClientState>,
     _command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
-    with_scores: bool,
+    flags: OutputFlags,
     response_buffer: &mut BytesMut,
 ) -> Result<(), SableError> {
     let builder = RespBuilderV2::default();
-    let response_len = if with_scores {
+    let response_len = if flags.intersects(OutputFlags::WithScores) {
         result_set.len().saturating_mul(2)
     } else {
         result_set.len()
     };
 
+    // sort the items by score
+    //let mut sorted_result = btreemultimap::BTreeMultiMap::<BytesMut, (BytesMut, BytesMut)>::new();
+    //for (_member, _score) in &result_set {
+    //    //let key =
+    //}
+
     builder.add_array_len(response_buffer, response_len);
     for (member, score) in result_set {
         builder.add_bulk_string(response_buffer, &member);
-        if with_scores {
-            builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
+        if flags.intersects(OutputFlags::WithScores) {
+            builder.add_bulk_string(
+                response_buffer,
+                ZSetCommands::format_score(&score).as_bytes(),
+            );
         }
     }
     Ok(())
@@ -137,7 +184,7 @@ async fn output_store_handler(
     client_state: Rc<ClientState>,
     command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
-    _with_scores: bool,
+    _flags: OutputFlags,
     response_buffer: &mut BytesMut,
 ) -> Result<(), SableError> {
     let Some(dst) = command.args_vec().get(1) else {
@@ -178,7 +225,7 @@ async fn output_remove_handler(
     client_state: Rc<ClientState>,
     command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
-    _with_scores: bool,
+    _flags: OutputFlags,
     response_buffer: &mut BytesMut,
 ) -> Result<(), SableError> {
     let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
@@ -213,39 +260,18 @@ async fn output_handler_dispatcher(
     client_state: Rc<ClientState>,
     command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
-    with_scores: bool,
+    flags: OutputFlags,
     response_buffer: &mut BytesMut,
 ) -> Result<(), SableError> {
     match action_type {
         ActionType::Print => {
-            output_writer_handler(
-                client_state,
-                command,
-                result_set,
-                with_scores,
-                response_buffer,
-            )
-            .await
+            output_writer_handler(client_state, command, result_set, flags, response_buffer).await
         }
         ActionType::Remove => {
-            output_remove_handler(
-                client_state,
-                command,
-                result_set,
-                with_scores,
-                response_buffer,
-            )
-            .await
+            output_remove_handler(client_state, command, result_set, flags, response_buffer).await
         }
         ActionType::Store => {
-            output_store_handler(
-                client_state,
-                command,
-                result_set,
-                with_scores,
-                response_buffer,
-            )
-            .await
+            output_store_handler(client_state, command, result_set, flags, response_buffer).await
         }
     }
 }
@@ -728,8 +754,7 @@ impl ZSetCommands {
                         return Err(SableError::ClientInvalidState);
                     }
                     ZSetGetScoreResult::Score(sc) => {
-                        let score = format!("{:.2}", sc);
-                        builder.bulk_string(response_buffer, score.as_bytes());
+                        builder.bulk_string(response_buffer, Self::format_score(&sc).as_bytes());
                     }
                 }
             }
@@ -946,7 +971,7 @@ impl ZSetCommands {
         for (key, score) in result_set.borrow().iter() {
             builder.add_bulk_string(response_buffer, key);
             if with_scores {
-                builder.add_bulk_string(response_buffer, format!("{score:.2}").as_bytes());
+                builder.add_bulk_string(response_buffer, Self::format_score(score).as_bytes());
             }
         }
         Ok(())
@@ -1140,7 +1165,7 @@ impl ZSetCommands {
         for (member, score) in result_set.borrow().iter() {
             builder.add_bulk_string(response_buffer, member);
             if with_scores {
-                builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes())
+                builder.add_bulk_string(response_buffer, Self::format_score(score).as_bytes())
             }
         }
         Ok(())
@@ -1583,7 +1608,7 @@ impl ZSetCommands {
                     builder.add_null_string(response_buffer);
                 }
                 ZSetGetScoreResult::Score(score) => {
-                    builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes());
+                    builder.add_bulk_string(response_buffer, Self::format_score(&score).as_bytes());
                 }
             }
         }
@@ -1614,7 +1639,7 @@ impl ZSetCommands {
                 builder.add_null_string(response_buffer);
             }
             ZSetGetScoreResult::Score(score) => {
-                builder.bulk_string(response_buffer, format!("{:.2}", score).as_bytes());
+                builder.bulk_string(response_buffer, Self::format_score(&score).as_bytes());
             }
         }
         Ok(())
@@ -1787,7 +1812,7 @@ impl ZSetCommands {
             }
 
             let score_member = ZSetScoreItem::from_bytes(key)?;
-            let score_value = format!("{:.2}", score_member.score());
+            let score_value = Self::format_score(&score_member.score());
             result.push((score_member.member().into(), score_value.as_str().into()));
             db_iter.next();
         }
@@ -1938,7 +1963,7 @@ impl ZSetCommands {
                     if with_scores {
                         let score = zset_db.score_from_bytes(value)?;
                         writer
-                            .add_bulk_string(format!("{:.2}", score).as_bytes())
+                            .add_bulk_string(Self::format_score(&score).as_bytes())
                             .await?;
                     }
                     // pop the first element
@@ -2168,13 +2193,15 @@ impl ZSetCommands {
         // shrink the result set to fit the "LIMIT OFFSET COUNT" restriction
         result_set.truncate(count);
 
+        let flags = OutputFlagsBuilder::new().with_reverse(reverse).build();
+
         // Call the handler
         output_handler_dispatcher(
             action_type,
             client_state,
             command,
             result_set,
-            false,
+            flags,
             response_buffer,
         )
         .await?;
@@ -2317,13 +2344,18 @@ impl ZSetCommands {
         // Shrink the result set to fit the "LIMIT COUNT" restriction
         result_set.truncate(count);
 
+        let flags = OutputFlagsBuilder::new()
+            .with_reverse(reverse)
+            .with_scores(with_scores)
+            .build();
+
         // Call the handler
         output_handler_dispatcher(
             action_type,
             client_state,
             command,
             result_set,
-            with_scores,
+            flags,
             response_buffer,
         )
         .await?;
@@ -2475,13 +2507,18 @@ impl ZSetCommands {
             result_set.reverse();
         }
 
+        let flags = OutputFlagsBuilder::new()
+            .with_reverse(reverse)
+            .with_scores(with_scores)
+            .build();
+
         // Call the handler
         output_handler_dispatcher(
             action_type,
             client_state,
             command,
             result_set,
-            with_scores,
+            flags,
             response_buffer,
         )
         .await?;
@@ -2554,7 +2591,7 @@ impl ZSetCommands {
                     builder.add_number::<usize>(response_buffer, rank, false);
                     builder.add_bulk_string(
                         response_buffer,
-                        format!("{:.2}", item.score()).as_bytes(),
+                        Self::format_score(&item.score()).as_bytes(),
                     );
                 } else {
                     builder.number_usize(response_buffer, rank);
@@ -2749,13 +2786,16 @@ impl ZSetCommands {
             .map(|(name, score)| (name.clone(), *score))
             .collect();
 
-        let with_scores = Self::withscores(command.clone());
+        let flags = OutputFlagsBuilder::new()
+            .with_scores(Self::withscores(command.clone()))
+            .build();
+
         output_handler_dispatcher(
             action_type,
             client_state,
             command,
             result_vec,
-            with_scores,
+            flags,
             response_buffer,
         )
         .await?;
@@ -3501,6 +3541,10 @@ impl ZSetCommands {
 
         Ok(())
     }
+
+    fn format_score(score: &f64) -> String {
+        format!("{}", score)
+    }
 }
 
 #[allow(dead_code)]
@@ -3653,8 +3697,8 @@ mod test {
         ("set mystr value", "+OK\r\n"),
         ("zincrby mystr 1 value", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zincrby mystr 1", "-ERR wrong number of arguments for 'zincrby' command\r\n"),
-        ("zincrby myset 1 value", "$4\r\n1.00\r\n"),
-        ("zincrby myset 3.5 value", "$4\r\n4.50\r\n"),
+        ("zincrby myset 1 value", "$1\r\n1\r\n"),
+        ("zincrby myset 3.5 value", "$3\r\n4.5\r\n"),
     ]; "test_zincrby")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
@@ -3670,7 +3714,7 @@ mod test {
         ("zrangebyscore tanks (1 1", "*0\r\n"),
         ("zrangebyscore tanks 10 1", "*0\r\n"),
         ("zrangebyscore tanks 1 3", "*6\r\n$3\r\ndva\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
-        ("zrangebyscore tanks 1 3 WITHSCORES", "*12\r\n$3\r\ndva\r\n$4\r\n1.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$3\r\nram\r\n$4\r\n3.00\r\n"),
+        ("zrangebyscore tanks 1 3 WITHSCORES", "*12\r\n$3\r\ndva\r\n$1\r\n1\r\n$4\r\nrein\r\n$1\r\n1\r\n$5\r\norisa\r\n$1\r\n2\r\n$5\r\nsigma\r\n$1\r\n2\r\n$5\r\nmauga\r\n$1\r\n3\r\n$3\r\nram\r\n$1\r\n3\r\n"),
         // exclude dva
         ("zrangebyscore tanks 1 3 LIMIT 1 5", "*5\r\n$4\r\nrein\r\n$5\r\norisa\r\n$5\r\nsigma\r\n$5\r\nmauga\r\n$3\r\nram\r\n"),
         // only rein
@@ -3713,13 +3757,13 @@ mod test {
         ("zrevrangebyscore tanks 1 2", "*0\r\n"),
         ("zrevrangebyscore tanks 2 1", "*4\r\n$5\r\nsigma\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
         ("zrevrangebyscore tanks (2 1", "*2\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
-        ("zrevrangebyscore tanks 3 1 WITHSCORES", "*12\r\n$3\r\nram\r\n$4\r\n3.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$3\r\ndva\r\n$4\r\n1.00\r\n"),
+        ("zrevrangebyscore tanks 3 1 WITHSCORES", "*12\r\n$3\r\nram\r\n$1\r\n3\r\n$5\r\nmauga\r\n$1\r\n3\r\n$5\r\nsigma\r\n$1\r\n2\r\n$5\r\norisa\r\n$1\r\n2\r\n$4\r\nrein\r\n$1\r\n1\r\n$3\r\ndva\r\n$1\r\n1\r\n"),
         // exclude sigma
         ("zrevrangebyscore tanks 2 1 LIMIT 1 5", "*3\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
         //// only mauga
         ("zrevrangebyscore tanks 3 1 LIMIT 1 1", "*1\r\n$5\r\nmauga\r\n"),
         ("zrevrangebyscore tanks 3 1 LIMIT 1 -1", "*5\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n$5\r\norisa\r\n$4\r\nrein\r\n$3\r\ndva\r\n"),
-        ("zrevrangebyscore tanks 3 1 LIMIT 1 -1 withScores", "*10\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n$5\r\norisa\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$3\r\ndva\r\n$4\r\n1.00\r\n"),
+        ("zrevrangebyscore tanks 3 1 LIMIT 1 -1 withScores", "*10\r\n$5\r\nmauga\r\n$1\r\n3\r\n$5\r\nsigma\r\n$1\r\n2\r\n$5\r\norisa\r\n$1\r\n2\r\n$4\r\nrein\r\n$1\r\n1\r\n$3\r\ndva\r\n$1\r\n1\r\n"),
         //// all of score 1 but dva & rein (empty array)
         ("zrevrangebyscore tanks 1 1 LIMIT 2 -1", "*0\r\n"),
     ]; "test_zrevrangebyscore")]
@@ -3746,7 +3790,7 @@ mod test {
         ("zdiff 2 tanks_1 tanks_2", "*5\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\norisa\r\n$3\r\nram\r\n$5\r\nsigma\r\n"),
         ("zdiff 2 tanks_2 tanks_1", "*3\r\n$8\r\ndoomfist\r\n$3\r\nmei\r\n$7\r\nroadhog\r\n"),
         ("zdiff 3 tanks_1 tanks_2 tanks_3", "*3\r\n$3\r\ndva\r\n$5\r\nmauga\r\n$5\r\nsigma\r\n"),
-        ("zdiff 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*6\r\n$3\r\ndva\r\n$4\r\n1.00\r\n$5\r\nmauga\r\n$4\r\n3.00\r\n$5\r\nsigma\r\n$4\r\n2.00\r\n"),
+        ("zdiff 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*6\r\n$3\r\ndva\r\n$1\r\n1\r\n$5\r\nmauga\r\n$1\r\n3\r\n$5\r\nsigma\r\n$1\r\n2\r\n"),
     ]; "test_zdiff")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
@@ -3767,13 +3811,13 @@ mod test {
         ("zinter 3 tanks_1 tanks_2 tanks_3", "*0\r\n"),
         ("zadd tanks_3 1 rein", ":1\r\n"),
         ("zinter 3 tanks_1 tanks_2 tanks_3", "*1\r\n$4\r\nrein\r\n"),
-        ("zinter 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n3.00\r\n"),
+        ("zinter 3 tanks_1 tanks_2 tanks_3 WITHSCORES", "*2\r\n$4\r\nrein\r\n$1\r\n3\r\n"),
         ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5", "-ERR syntax error\r\n"),
         ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5", "*1\r\n$4\r\nrein\r\n"),
-        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES", "*2\r\n$4\r\nrein\r\n$5\r\n15.00\r\n"),
-        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MIN", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
-        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MAX", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
-        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "*2\r\n$4\r\nrein\r\n$5\r\n15.00\r\n"),
+        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES", "*2\r\n$4\r\nrein\r\n$2\r\n15\r\n"),
+        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MIN", "*2\r\n$4\r\nrein\r\n$1\r\n5\r\n"),
+        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE MAX", "*2\r\n$4\r\nrein\r\n$1\r\n5\r\n"),
+        ("zinter 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "*2\r\n$4\r\nrein\r\n$2\r\n15\r\n"),
         ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 5 WITHSCORES AGGREGATE SUM", "-ERR syntax error\r\n"),
         ("zinter 2 tanks_1 no_such_set WEIGHTS 5 5 WITHSCORES AGGREGATE SUM", "*0\r\n"),
     ]; "test_zinter")]
@@ -3796,14 +3840,14 @@ mod test {
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3", ":0\r\n"),
         ("zadd tanks_3 1 rein", ":1\r\n"),
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3", ":1\r\n"),
-        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n3.00\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$1\r\n3\r\n"),
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5", "-ERR syntax error\r\n"),
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 1 2 3", ":1\r\n"),
-        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n6.00\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$1\r\n6\r\n"),
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5", ":1\r\n"),
-        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$5\r\n15.00\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$2\r\n15\r\n"),
         ("zinterstore new_set 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 AGGREGATE MIN", ":1\r\n"),
-        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$4\r\n5.00\r\n"),
+        ("zdiff 2 new_set no_such_zset WITHSCORES", "*2\r\n$4\r\nrein\r\n$1\r\n5\r\n"),
         ("zinterstore 3 tanks_1 tanks_2 tanks_3 WEIGHTS 5 5 5 AGGREGATE MIN", "-ERR value is not an integer or out of range\r\n"),
         ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 5 AGGREGATE SUM", "-ERR syntax error\r\n"),
         ("zinterstore new_set 2 tanks_1 no_such_set WEIGHTS 5 5 AGGREGATE SUM", ":0\r\n"),
@@ -3823,43 +3867,43 @@ mod test {
     #[test_case(vec![
         ("ZMPOP 1 notsuchkey MIN", "*-1\r\n"),
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
-        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
-        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n"),
-        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$1\r\n2\r\n"),
+        ("ZMPOP 1 myzset MAX", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$1\r\n1\r\n"),
         ("ZMPOP 1 myzset MAX", "*-1\r\n"),
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
-        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
-        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n"),
-        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\none\r\n$1\r\n1\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$3\r\ntwo\r\n$1\r\n2\r\n"),
+        ("ZMPOP 1 myzset MIN", "*2\r\n$6\r\nmyzset\r\n*1\r\n*2\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
         ("ZMPOP 1 myzset MAX", "*-1\r\n"),
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
-        ("ZMPOP 1 myzset MAX COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n"),
+        ("ZMPOP 1 myzset MAX COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$5\r\nthree\r\n$1\r\n3\r\n*2\r\n$3\r\ntwo\r\n$1\r\n2\r\n*2\r\n$3\r\none\r\n$1\r\n1\r\n"),
         ("ZMPOP 1 myzset MAX", "*-1\r\n"),
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
-        ("ZMPOP 1 myzset MIN COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$3\r\none\r\n$4\r\n1.00\r\n*2\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZMPOP 1 myzset MIN COUNT 4", "*2\r\n$6\r\nmyzset\r\n*3\r\n*2\r\n$3\r\none\r\n$1\r\n1\r\n*2\r\n$3\r\ntwo\r\n$1\r\n2\r\n*2\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
     ]; "test_zmpop")]
     #[test_case(vec![
         ("zmscore notsuchkey a b", "*2\r\n$-1\r\n$-1\r\n"),
         ("set strkey value", "+OK\r\n"),
         ("zmscore strkey value", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
-        ("zmscore myset rein dva sigma no_such_tank roadhog", "*5\r\n$4\r\n1.00\r\n$4\r\n2.00\r\n$4\r\n3.00\r\n$-1\r\n$4\r\n4.00\r\n"),
+        ("zmscore myset rein dva sigma no_such_tank roadhog", "*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$-1\r\n$1\r\n4\r\n"),
     ]; "test_zmscore")]
     #[test_case(vec![
         ("zpopmin notsuchkey 5", "*0\r\n"),
         ("set strkey value", "+OK\r\n"),
         ("zpopmin strkey 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
-        ("zpopmin myset 1", "*2\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"),
-        ("zpopmin myset 5", "*6\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n"),
+        ("zpopmin myset 1", "*2\r\n$4\r\nrein\r\n$1\r\n1\r\n"),
+        ("zpopmin myset 5", "*6\r\n$3\r\ndva\r\n$1\r\n2\r\n$5\r\nsigma\r\n$1\r\n3\r\n$7\r\nroadhog\r\n$1\r\n4\r\n"),
     ]; "test_zpopmin")]
     #[test_case(vec![
         ("zpopmax notsuchkey1 5", "*0\r\n"),
         ("set strkey value", "+OK\r\n"),
         ("zpopmax strkey 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zadd myset 1 rein 2 dva 3 sigma 4 roadhog", ":4\r\n"),
-        ("zpopmax myset 1", "*2\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n"),
-        ("zpopmax myset 5", "*6\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"),
+        ("zpopmax myset 1", "*2\r\n$7\r\nroadhog\r\n$1\r\n4\r\n"),
+        ("zpopmax myset 5", "*6\r\n$5\r\nsigma\r\n$1\r\n3\r\n$3\r\ndva\r\n$1\r\n2\r\n$4\r\nrein\r\n$1\r\n1\r\n"),
     ]; "test_zpopmax")]
     #[test_case(vec![
         ("zrandmember notsuchkey1", "$-1\r\n"),
@@ -3870,7 +3914,7 @@ mod test {
         ("zrandmember myset withscores", "-ERR value is not an integer or out of range\r\n"),
         ("zrandmember myset 10 00", "-ERR syntax error\r\n"),
         ("zrandmember myset 4", "*4\r\n$3\r\ndva\r\n$4\r\nrein\r\n$7\r\nroadhog\r\n$5\r\nsigma\r\n"),
-        ("zrandmember myset 4 withscores", "*8\r\n$3\r\ndva\r\n$4\r\n2.00\r\n$4\r\nrein\r\n$4\r\n1.00\r\n$7\r\nroadhog\r\n$4\r\n4.00\r\n$5\r\nsigma\r\n$4\r\n3.00\r\n"),
+        ("zrandmember myset 4 withscores", "*8\r\n$3\r\ndva\r\n$1\r\n2\r\n$4\r\nrein\r\n$1\r\n1\r\n$7\r\nroadhog\r\n$1\r\n4\r\n$5\r\nsigma\r\n$1\r\n3\r\n"),
     ]; "test_zrandmember")]
     #[test_case(vec![
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
@@ -3898,7 +3942,7 @@ mod test {
         ("ZRANK myzset", "-ERR wrong number of arguments for 'zrank' command\r\n"),
         ("ZRANK myzset three", ":2\r\n"),
         ("ZRANK myzset four", "$-1\r\n"),
-        ("ZRANK myzset three WITHSCORE", "*2\r\n:2\r\n$4\r\n3.00\r\n"),
+        ("ZRANK myzset three WITHSCORE", "*2\r\n:2\r\n$1\r\n3\r\n"),
         ("ZRANK myzset four WITHSCORE", "*-1\r\n"),
         ("zrank no_such_set one", "$-1\r\n"),
         ("zrank no_such_set one WITHSCORE", "*-1\r\n"),
@@ -3908,7 +3952,7 @@ mod test {
         ("zrem mystr bla", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("ZADD myzset 1 one 2 two 3 three", ":3\r\n"),
         ("ZREM myzset two", ":1\r\n"),
-        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\none\r\n$4\r\n1.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\none\r\n$1\r\n1\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
         ("zrem sddsd a", ":0\r\n"),
     ]; "test_zrem")]
     #[test_case(vec![
@@ -3929,7 +3973,7 @@ mod test {
         ("ZADD myzset 2 two", ":1\r\n"),
         ("ZADD myzset 3 three", ":1\r\n"),
         ("ZREMRANGEBYRANK myzset 0 1", ":2\r\n"),
-        ("ZRANGE myzset 0 -1 WITHSCORES", "*2\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*2\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
     ]; "test_zremrangebyrank")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
@@ -3939,7 +3983,7 @@ mod test {
         ("ZADD myzset 2 two", ":1\r\n"),
         ("ZADD myzset 3 three", ":1\r\n"),
         ("zremrangebyscore myzset -inf (2", ":1\r\n"),
-        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\ntwo\r\n$4\r\n2.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n"),
+        ("ZRANGE myzset 0 -1 WITHSCORES", "*4\r\n$3\r\ntwo\r\n$1\r\n2\r\n$5\r\nthree\r\n$1\r\n3\r\n"),
     ]; "test_zremrangebyscore")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
@@ -3960,7 +4004,7 @@ mod test {
         ("ZADD myzset 3 three", ":1\r\n"),
         ("ZREVRANK myzset one", ":2\r\n"),
         ("ZREVRANK myzset four", "$-1\r\n"),
-        ("ZREVRANK myzset three WITHSCORE", "*2\r\n:0\r\n$4\r\n3.00\r\n"),
+        ("ZREVRANK myzset three WITHSCORE", "*2\r\n:0\r\n$1\r\n3\r\n"),
         ("ZREVRANK myzset four WITHSCORE", "*-1\r\n"),
     ]; "test_zrevrank")]
     #[test_case(vec![
@@ -3969,7 +4013,7 @@ mod test {
         ("ZADD zset1 1 one 2 two", ":2\r\n"),
         ("ZADD zset2 1 one 2 two 3 three", ":3\r\n"),
         ("ZUNION 2 zset1 zset2", "*3\r\n$3\r\none\r\n$5\r\nthree\r\n$3\r\ntwo\r\n"),
-        ("ZUNION 2 zset1 zset2 WITHSCORES", "*6\r\n$3\r\none\r\n$4\r\n2.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n$3\r\ntwo\r\n$4\r\n4.00\r\n"),
+        ("ZUNION 2 zset1 zset2 WITHSCORES", "*6\r\n$3\r\none\r\n$1\r\n2\r\n$5\r\nthree\r\n$1\r\n3\r\n$3\r\ntwo\r\n$1\r\n4\r\n"),
     ]; "test_zunion")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
@@ -3977,14 +4021,14 @@ mod test {
         ("ZADD zset1 1 one 2 two", ":2\r\n"),
         ("ZADD zset2 1 one 2 two 3 three", ":3\r\n"),
         ("ZUNIONSTORE out 2 zset1 zset2 WEIGHTS 2 3", ":3\r\n"),
-        ("ZRANGE out 0 -1 WITHSCORES", "*6\r\n$3\r\none\r\n$4\r\n5.00\r\n$5\r\nthree\r\n$4\r\n9.00\r\n$3\r\ntwo\r\n$5\r\n10.00\r\n"),
+        ("ZRANGE out 0 -1 WITHSCORES", "*6\r\n$3\r\none\r\n$1\r\n5\r\n$5\r\nthree\r\n$1\r\n9\r\n$3\r\ntwo\r\n$2\r\n10\r\n"),
     ]; "test_zunionstore")]
     #[test_case(vec![
         ("set mystr value", "+OK\r\n"),
         ("zscore mystr member", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("zscore mystr", "-ERR wrong number of arguments for 'zscore' command\r\n"),
         ("ZADD myzset 1 one", ":1\r\n"),
-        ("zscore myzset one", "$4\r\n1.00\r\n"),
+        ("zscore myzset one", "$1\r\n1\r\n"),
         ("zscore myzset two", "$-1\r\n"),
         ("zscore myzset_non_existing one", "$-1\r\n"),
     ]; "test_zscore")]
@@ -4021,9 +4065,9 @@ mod test {
         Ok(())
     }
 
-    #[test_case("bzpopmax myset 30", "*3\r\n$5\r\nmyset\r\n$5\r\norisa\r\n$4\r\n2.00\r\n"; "test_bzpopmax")]
-    #[test_case("bzpopmin myset 30", "*3\r\n$5\r\nmyset\r\n$4\r\nrein\r\n$4\r\n1.00\r\n"; "test_bzpopmin")]
-    #[test_case("bzmpop 30 1 myset MAX", "*2\r\n$5\r\nmyset\r\n*1\r\n*2\r\n$5\r\norisa\r\n$4\r\n2.00\r\n"; "test_bzmpop")]
+    #[test_case("bzpopmax myset 30", "*3\r\n$5\r\nmyset\r\n$5\r\norisa\r\n$1\r\n2\r\n"; "test_bzpopmax")]
+    #[test_case("bzpopmin myset 30", "*3\r\n$5\r\nmyset\r\n$4\r\nrein\r\n$1\r\n1\r\n"; "test_bzpopmin")]
+    #[test_case("bzmpop 30 1 myset MAX", "*2\r\n$5\r\nmyset\r\n*1\r\n*2\r\n$5\r\norisa\r\n$1\r\n2\r\n"; "test_bzmpop")]
     fn test_zset_blocking_commands(command: &'static str, expected_result: &'static str) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
