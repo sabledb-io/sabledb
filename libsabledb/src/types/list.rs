@@ -47,6 +47,7 @@ pub enum MultiPopResult {
 enum IterResult {
     Some(Rc<RefCell<ListItem>>),
     WrongType,
+    ListNotFound,
     None,
 }
 #[derive(Debug, Clone)]
@@ -275,7 +276,7 @@ impl<'a> List<'a> {
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
         let item = match self.find_by_index(list_name, index)? {
-            IterResult::None => {
+            IterResult::None | IterResult::ListNotFound => {
                 builder.null_string(response_buffer);
                 return Ok(());
             }
@@ -305,6 +306,10 @@ impl<'a> List<'a> {
             }
             IterResult::WrongType => {
                 builder.error_string(response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            IterResult::ListNotFound => {
+                builder.error_string(response_buffer, "ERR no such key");
                 return Ok(());
             }
             IterResult::Some(item) => item,
@@ -442,7 +447,7 @@ impl<'a> List<'a> {
                 return Ok(());
             }
             GetListMetadataResult::None => {
-                builder.ok(response_buffer);
+                builder.null_array(response_buffer);
                 return Ok(());
             }
             GetListMetadataResult::Some(list) => list,
@@ -472,7 +477,7 @@ impl<'a> List<'a> {
                     builder.error_string(response_buffer, Strings::WRONGTYPE);
                     return Ok(());
                 }
-                IterResult::None => {
+                IterResult::None | IterResult::ListNotFound /* shouldn't happen as we check this before*/=> {
                     break;
                 }
                 IterResult::Some(list_item) => list_item,
@@ -537,7 +542,7 @@ impl<'a> List<'a> {
                     builder.error_string(response_buffer, Strings::WRONGTYPE);
                     return Ok(());
                 }
-                IterResult::None => {
+                IterResult::None | IterResult::ListNotFound => {
                     break;
                 }
                 IterResult::Some(list_item) => list_item,
@@ -892,7 +897,7 @@ impl<'a> List<'a> {
                 return Ok(IterResult::WrongType);
             }
             GetListMetadataResult::None => {
-                return Ok(IterResult::None);
+                return Ok(IterResult::ListNotFound);
             }
             GetListMetadataResult::Some(list) => list,
         };

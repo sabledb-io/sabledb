@@ -1023,6 +1023,7 @@ mod tests {
         (vec!["lindex", "lindex_list", "not_a_number"], "-ERR value is not an integer or out of range\r\n"),
         ], "lindex"; "lindex")]
     #[test_case(vec![
+        (vec!["lset", "no_such_list", "0", "value"], "-ERR no such key\r\n"),
         (vec!["rpush", "lset_list", "hellow", "world", "foo", "bar"], ":4\r\n"),
         (vec!["lindex", "lset_list", "0"], "$6\r\nhellow\r\n"),
         (vec!["lset", "lset_list", "0", "hello"], "+OK\r\n"),
@@ -1058,12 +1059,13 @@ mod tests {
         (vec!["ltrim", "ltrim_list_not_existing", "1", "2"], "+OK\r\n"),
         ], "ltrim"; "ltrim")]
     #[test_case(vec![
+        (vec!["lrange", "no_such_list", "0", "-1"], "*-1\r\n"),
         (vec!["rpush", "lrange_list", "one", "two", "three"], ":3\r\n"),
         (vec!["lrange", "lrange_list", "1", "-1"], "*2\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
         (vec!["lrange", "lrange_list"], "-ERR wrong number of arguments for 'lrange' command\r\n"),
         (vec!["llen", "lrange_list"], ":3\r\n"),
         (vec!["lpos", "lrange_list", "one"], ":0\r\n"),
-        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "+OK\r\n"),
+        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "*-1\r\n"),
         ], "lrange"; "lrange")]
     #[test_case(vec![
         (vec!["rpush", "lmove_list1", "a", "b", "c"], ":3\r\n"),
