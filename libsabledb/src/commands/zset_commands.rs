@@ -427,6 +427,9 @@ impl ZSetCommands {
             RedisCommandName::Zrank => {
                 Self::zrank(client_state, command, &mut response_buffer, false).await?;
             }
+            RedisCommandName::Zrevrank => {
+                Self::zrank(client_state, command, &mut response_buffer, true).await?;
+            }
             RedisCommandName::Zrem => {
                 Self::zrem(client_state, command, &mut response_buffer).await?;
             }
@@ -2476,11 +2479,7 @@ impl ZSetCommands {
             client_state.database().create_iterator(&zset_prefix)?
         };
 
-        let mut rank: usize = if reverse {
-            md.len().saturating_sub(1) as usize
-        } else {
-            0
-        };
+        let mut rank: usize = 0;
 
         while db_iter.valid() {
             let Some((key, _)) = db_iter.key_value() else {
@@ -2508,16 +2507,9 @@ impl ZSetCommands {
                 return Ok(());
             }
 
-            if reverse {
-                let Some(res) = rank.checked_sub(1) else {
-                    break;
-                };
-                rank = res;
-            } else {
-                rank = rank.saturating_add(1);
-                if rank >= md.len() as usize {
-                    break;
-                }
+            rank = rank.saturating_add(1);
+            if rank >= md.len() as usize {
+                break;
             }
             db_iter.next();
         }
@@ -3581,6 +3573,17 @@ mod test {
         ("ZREVRANGE myzset 2 3", "*1\r\n$3\r\none\r\n"),
         ("ZREVRANGE myzset -2 -1", "*2\r\n$3\r\ntwo\r\n$3\r\none\r\n"),
     ]; "test_zrevrange")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zrevrank mystr 1 WITHSCORE", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD myzset 1 one", ":1\r\n"),
+        ("ZADD myzset 2 two", ":1\r\n"),
+        ("ZADD myzset 3 three", ":1\r\n"),
+        ("ZREVRANK myzset one", ":2\r\n"),
+        ("ZREVRANK myzset four", "$-1\r\n"),
+        ("ZREVRANK myzset three WITHSCORE", "*2\r\n:0\r\n$4\r\n3.00\r\n"),
+        ("ZREVRANK myzset four WITHSCORE", "*-1\r\n"),
+    ]; "test_zrevrank")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
