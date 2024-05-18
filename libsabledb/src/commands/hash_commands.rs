@@ -861,7 +861,8 @@ impl HashCommands {
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
         // otherwise, return respond with an error
-        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::new())) else {
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::default()))
+        else {
             resp_writer
                 .error_string(format!("ERR: Invalid cursor id {}", cursor_id).as_str())
                 .await?;

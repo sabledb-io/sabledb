@@ -112,7 +112,7 @@ bitflags::bitflags! {
 struct OutputFlags: u32  {
     const None = 0;
     const WithScores = 1 << 0;
-    const Reverse = 2 << 0;
+    const Reverse = 1 << 1;
 }
 }
 
@@ -160,19 +160,33 @@ async fn output_writer_handler(
         result_set.len()
     };
 
-    // sort the items by score
-    //let mut sorted_result = btreemultimap::BTreeMultiMap::<BytesMut, (BytesMut, BytesMut)>::new();
-    //for (_member, _score) in &result_set {
-    //    //let key =
-    //}
+    // We need to sort the result by score. Create a vector with a key
+    // that is a combination of the score+member (binary format). As the payload, we keep the
+    // member + score as is
+    let mut sorted_vec: Vec<(BytesMut, (BytesMut, f64))> = result_set
+        .iter()
+        .map(|(member, score)| {
+            let mut key = BytesMut::new();
+            let mut builder = crate::U8ArrayBuilder::with_buffer(&mut key);
+            builder.write_f64(*score);
+            builder.write_bytes(member);
+            (key, (member.clone(), *score))
+        })
+        .collect();
+
+    if flags.intersects(OutputFlags::Reverse) {
+        sorted_vec.sort_by(|(member1, _payload1), (member2, _payload2)| member2.cmp(member1));
+    } else {
+        sorted_vec.sort_by(|(member1, _payload1), (member2, _payload2)| member1.cmp(member2));
+    }
 
     builder.add_array_len(response_buffer, response_len);
-    for (member, score) in result_set {
-        builder.add_bulk_string(response_buffer, &member);
+    for (_, (member, score)) in &sorted_vec {
+        builder.add_bulk_string(response_buffer, member);
         if flags.intersects(OutputFlags::WithScores) {
             builder.add_bulk_string(
                 response_buffer,
-                ZSetCommands::format_score(&score).as_bytes(),
+                ZSetCommands::format_score(score).as_bytes(),
             );
         }
     }
@@ -3172,7 +3186,8 @@ impl ZSetCommands {
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
         // otherwise, return respond with an error
-        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::new())) else {
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::default()))
+        else {
             builder.error_string(
                 response_buffer,
                 format!("ERR: Invalid cursor id {}", cursor_id).as_str(),

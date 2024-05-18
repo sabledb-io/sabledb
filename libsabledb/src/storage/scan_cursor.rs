@@ -15,6 +15,12 @@ pub struct ScanCursor {
     search_prefix: Option<BytesMut>,
 }
 
+impl Default for ScanCursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScanCursor {
     /// Create a new cursor for a given data type with a unique ID
     pub fn new() -> Self {
