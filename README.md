@@ -205,6 +205,7 @@ and visit this page again in couple of days
 | zrevrank | ✓ |✓ | |
 | zunion | ✓ |✓ | |
 | zunionstore | ✓ |✓ | |
+| zscore | ✓ |✓ | |
 
 
 ### Generic commands

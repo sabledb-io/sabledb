@@ -499,6 +499,9 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zscore => {
+                Self::zscore(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non ZSet command {}",
@@ -1578,6 +1581,36 @@ impl ZSetCommands {
                 ZSetGetScoreResult::Score(score) => {
                     builder.add_bulk_string(response_buffer, format!("{:.2}", score).as_bytes());
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// `ZSCORE key member`
+    /// Returns the score of member in the sorted set at key.
+    /// If member does not exist in the sorted set, or key does not exist, nil is returned
+    async fn zscore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let key = command_arg_at!(command, 1);
+        let member = command_arg_at!(command, 2);
+        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        match zset_db.get_score(key, member)? {
+            ZSetGetScoreResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ZSetGetScoreResult::NotFound => {
+                builder.add_null_string(response_buffer);
+            }
+            ZSetGetScoreResult::Score(score) => {
+                builder.bulk_string(response_buffer, format!("{:.2}", score).as_bytes());
             }
         }
         Ok(())
@@ -3759,6 +3792,15 @@ mod test {
         ("ZUNIONSTORE out 2 zset1 zset2 WEIGHTS 2 3", ":3\r\n"),
         ("ZRANGE out 0 -1 WITHSCORES", "*6\r\n$3\r\none\r\n$4\r\n5.00\r\n$5\r\nthree\r\n$4\r\n9.00\r\n$3\r\ntwo\r\n$5\r\n10.00\r\n"),
     ]; "test_zunionstore")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zscore mystr member", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("zscore mystr", "-ERR wrong number of arguments for 'zscore' command\r\n"),
+        ("ZADD myzset 1 one", ":1\r\n"),
+        ("zscore myzset one", "$4\r\n1.00\r\n"),
+        ("zscore myzset two", "$-1\r\n"),
+        ("zscore myzset_non_existing one", "$-1\r\n"),
+    ]; "test_zscore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
