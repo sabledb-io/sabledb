@@ -106,22 +106,8 @@ enum ActionType {
     Remove,
 }
 
-/// Callback for handling the output of the Zrange* family of commands
-/// - The client state
-/// - The command
-/// - The result set (can be empty)
-/// - Does the output should include the score?
-/// - The response buffer
-type OutputHandler = fn(
-    Rc<ClientState>,
-    Rc<RedisCommand>,
-    Vec<(BytesMut, f64)>,
-    bool,
-    &mut BytesMut,
-) -> Result<(), SableError>;
-
 /// Default output handler: write the set to the `response_buffer`
-fn output_writer_handler(
+async fn output_writer_handler(
     _client_state: Rc<ClientState>,
     _command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
@@ -146,7 +132,7 @@ fn output_writer_handler(
 }
 
 /// Default output handler: store the output in a new destination
-fn output_store_handler(
+async fn output_store_handler(
     client_state: Rc<ClientState>,
     command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
@@ -174,13 +160,20 @@ fn output_store_handler(
     }
 
     zset_db.commit()?;
+
+    // Wakeup clients pending on this key
+    client_state
+        .server_inner_state()
+        .wakeup_clients(dst, count)
+        .await;
+
     let builder = RespBuilderV2::default();
     builder.number_usize(response_buffer, result_set.len());
     Ok(())
 }
 
 /// Default remove handler: delete all items from `result_set`. Return the number of items deleted
-fn output_remove_handler(
+async fn output_remove_handler(
     client_state: Rc<ClientState>,
     command: Rc<RedisCommand>,
     result_set: Vec<(BytesMut, f64)>,
@@ -211,6 +204,49 @@ fn output_remove_handler(
     zset_db.commit()?;
     builder.number_usize(response_buffer, count);
     Ok(())
+}
+
+/// Based on the requested action type, invoke the proper handler
+async fn output_handler_dispatcher(
+    action_type: ActionType,
+    client_state: Rc<ClientState>,
+    command: Rc<RedisCommand>,
+    result_set: Vec<(BytesMut, f64)>,
+    with_scores: bool,
+    response_buffer: &mut BytesMut,
+) -> Result<(), SableError> {
+    match action_type {
+        ActionType::Print => {
+            output_writer_handler(
+                client_state,
+                command,
+                result_set,
+                with_scores,
+                response_buffer,
+            )
+            .await
+        }
+        ActionType::Remove => {
+            output_remove_handler(
+                client_state,
+                command,
+                result_set,
+                with_scores,
+                response_buffer,
+            )
+            .await
+        }
+        ActionType::Store => {
+            output_store_handler(
+                client_state,
+                command,
+                result_set,
+                with_scores,
+                response_buffer,
+            )
+            .await
+        }
+    }
 }
 
 pub struct ZSetCommands {}
@@ -294,23 +330,11 @@ impl ZSetCommands {
             }
             RedisCommandName::Zrange => {
                 // write directly to the client
-                Self::zrange(
-                    client_state,
-                    command,
-                    &mut response_buffer,
-                    output_writer_handler,
-                )
-                .await?;
+                Self::zrange(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangestore => {
                 // store the output into a new destination
-                Self::zrangestore(
-                    client_state,
-                    command,
-                    &mut response_buffer,
-                    output_store_handler,
-                )
-                .await?;
+                Self::zrangestore(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Zrangebyscore => {
                 expect_args_count!(
@@ -325,7 +349,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Print,
                     false,
-                    output_writer_handler,
                 )
                 .await?;
             }
@@ -343,7 +366,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Print,
                     true,
-                    output_writer_handler,
                 )
                 .await?;
             }
@@ -363,7 +385,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Print,
                     true,
-                    output_writer_handler,
                 )
                 .await?;
             }
@@ -380,7 +401,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Print,
                     false,
-                    output_writer_handler,
                 )
                 .await?;
             }
@@ -401,7 +421,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Print,
                     true,
-                    output_writer_handler,
                 )
                 .await?;
             }
@@ -424,7 +443,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Remove,
                     false,
-                    output_remove_handler,
                 )
                 .await?;
             }
@@ -441,7 +459,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Remove,
                     false,
-                    output_remove_handler,
                 )
                 .await?;
             }
@@ -458,7 +475,6 @@ impl ZSetCommands {
                     &mut response_buffer,
                     ActionType::Remove,
                     false,
-                    output_remove_handler,
                 )
                 .await?;
             }
@@ -1007,7 +1023,17 @@ impl ZSetCommands {
             zset_db.add(destination, key, *score, &ZWriteFlags::None, false)?;
         }
         zset_db.commit()?;
-        builder.number_usize(response_buffer, result_set.borrow().len());
+
+        // Wakeup clients pending on this key
+        let count = result_set.borrow().len();
+
+        client_state
+            .server_inner_state()
+            .wakeup_clients(destination, count)
+            .await;
+
+        // write the output
+        builder.number_usize(response_buffer, count);
         Ok(())
     }
 
@@ -1219,7 +1245,14 @@ impl ZSetCommands {
             zset_db.add(destination, key, *score, &ZWriteFlags::None, false)?;
         }
         zset_db.commit()?;
-        builder.number_usize(response_buffer, result.borrow().len());
+        let count = result.borrow().len();
+
+        client_state
+            .server_inner_state()
+            .wakeup_clients(destination, count)
+            .await;
+
+        builder.number_usize(response_buffer, count);
         Ok(())
     }
 
@@ -1870,7 +1903,6 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
-        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 5, response_buffer);
 
@@ -1882,7 +1914,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Store,
                 reverse,
-                output_handler,
             )
             .await
         } else if Self::has_optional_arg(command.clone(), "bylex", 5) {
@@ -1892,7 +1923,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Store,
                 reverse,
-                output_handler,
             )
             .await
         } else {
@@ -1902,7 +1932,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Store,
                 reverse,
-                output_handler,
             )
             .await
         }
@@ -1914,7 +1943,6 @@ impl ZSetCommands {
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
         response_buffer: &mut BytesMut,
-        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
 
@@ -1926,7 +1954,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Print,
                 reverse,
-                output_handler,
             )
             .await
         } else if Self::has_optional_arg(command.clone(), "bylex", 4) {
@@ -1936,7 +1963,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Print,
                 reverse,
-                output_handler,
             )
             .await
         } else {
@@ -1946,7 +1972,6 @@ impl ZSetCommands {
                 response_buffer,
                 ActionType::Print,
                 reverse,
-                output_handler,
             )
             .await
         }
@@ -1961,7 +1986,6 @@ impl ZSetCommands {
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
-        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         let (first_key_pos, dest) = match action_type {
             ActionType::Print | ActionType::Remove => (1, None),
@@ -2086,7 +2110,16 @@ impl ZSetCommands {
         // shrink the result set to fit the "LIMIT OFFSET COUNT" restriction
         result_set.truncate(count);
 
-        output_handler(client_state, command, result_set, false, response_buffer)?;
+        // Call the handler
+        output_handler_dispatcher(
+            action_type,
+            client_state,
+            command,
+            result_set,
+            false,
+            response_buffer,
+        )
+        .await?;
         Ok(())
     }
 
@@ -2100,10 +2133,10 @@ impl ZSetCommands {
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
-        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         let (first_key_pos, dest) = match action_type {
-            ActionType::Print | ActionType::Remove => (1, None),
+            ActionType::Print => (1, None),
+            ActionType::Remove => (1, None),
             ActionType::Store => (2, Some(command_arg_at!(command, 1))),
         };
 
@@ -2227,13 +2260,15 @@ impl ZSetCommands {
         result_set.truncate(count);
 
         // Call the handler
-        output_handler(
+        output_handler_dispatcher(
+            action_type,
             client_state,
             command,
             result_set,
             with_scores,
             response_buffer,
-        )?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -2248,7 +2283,6 @@ impl ZSetCommands {
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
-        output_handler: OutputHandler,
     ) -> Result<(), SableError> {
         let (first_key_pos, dest) = match action_type {
             ActionType::Print | ActionType::Remove => (1, None),
@@ -2384,13 +2418,15 @@ impl ZSetCommands {
         }
 
         // Call the handler
-        output_handler(
+        output_handler_dispatcher(
+            action_type,
             client_state,
             command,
             result_set,
             with_scores,
             response_buffer,
-        )?;
+        )
+        .await?;
         Ok(())
     }
 
