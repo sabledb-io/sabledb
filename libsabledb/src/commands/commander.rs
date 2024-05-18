@@ -144,6 +144,8 @@ pub enum RedisCommandName {
     Zremrangebyscore,
     Zrevrange,
     Zrevrank,
+    Zunion,
+    Zunionstore,
     NotSupported(String),
 }
 
@@ -1111,6 +1113,21 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zrevrank)
                         .read_only()
                         .with_arity(-3),
+                ),
+                (
+                    "zunion",
+                    CommandMetadata::new(RedisCommandName::Zunion)
+                        .read_only()
+                        .with_arity(-3)
+                        .with_first_key(0)
+                        .with_last_key(0)
+                        .with_step(0),
+                ),
+                (
+                    "zunionstore",
+                    CommandMetadata::new(RedisCommandName::Zunionstore)
+                        .write()
+                        .with_arity(-4),
                 ),
             ]),
         }

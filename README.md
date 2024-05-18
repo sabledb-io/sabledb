@@ -203,6 +203,8 @@ and visit this page again in couple of days
 | zremrangebyscore | ✓ |✓ | |
 | zrevrange | ✓ |✓ | |
 | zrevrank | ✓ |✓ | |
+| zunion | ✓ |✓ | |
+| zunionstore | ✓ |✓ | |
 
 
 ### Generic commands

@@ -481,6 +481,24 @@ impl ZSetCommands {
                 )
                 .await?;
             }
+            RedisCommandName::Zunion => {
+                Self::zunion(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Print,
+                )
+                .await?;
+            }
+            RedisCommandName::Zunionstore => {
+                Self::zunion(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ActionType::Store,
+                )
+                .await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non ZSet command {}",
@@ -2566,6 +2584,147 @@ impl ZSetCommands {
         Ok(())
     }
 
+    /// `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight...] [AGGREGATE <SUM | MIN | MAX>]`
+    /// `ZUNION numkeys key [key ...] [WEIGHTS weight...] [AGGREGATE <SUM | MIN | MAX>]`
+    /// Computes the union of numkeys sorted sets given by the specified keys
+    async fn zunion(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+        action_type: ActionType,
+    ) -> Result<(), SableError> {
+        let mut keys_to_lock = Vec::<&BytesMut>::new();
+        let numkeys_offset = match action_type {
+            ActionType::Store => {
+                check_args_count!(command, 4, response_buffer);
+                keys_to_lock.push(command_arg_at!(command, 1));
+                2usize
+            }
+            _ => {
+                check_args_count!(command, 3, response_buffer);
+                1usize
+            }
+        };
+
+        let builder = RespBuilderV2::default();
+        let numkeys = command_arg_at!(command, numkeys_offset);
+        let Some(numkeys) = BytesMutUtils::parse::<usize>(numkeys) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        if numkeys == 0 {
+            builder_return_at_least_1_key!(builder, response_buffer, command);
+        }
+
+        // Now that we have "numkeys" make sure we have enough items in the vector
+        let mut iter = command.args_vec().iter();
+
+        // fast forward to the first key
+        let mut ff = numkeys_offset.saturating_add(1);
+        while ff > 0 {
+            iter.next();
+            ff = ff.saturating_sub(1);
+        }
+
+        // read the keys
+        let mut input_keys = Vec::<(&BytesMut, usize)>::with_capacity(numkeys);
+        for key in iter {
+            let arg_lowercase = BytesMutUtils::to_string(key).to_lowercase();
+            match arg_lowercase.as_str() {
+                "withscores" if action_type == ActionType::Print => {
+                    break;
+                }
+                "aggregate" | "weights" => {
+                    break;
+                }
+                _ => {
+                    // by default, each key has weight of 1
+                    input_keys.push((key, 1));
+                    keys_to_lock.push(key);
+                }
+            }
+        }
+
+        if numkeys != input_keys.len() {
+            builder_return_wrong_args_count!(builder, response_buffer, command.main_command());
+        }
+
+        // Parse the remaining command args
+        let mut parsed_args = HashMap::<&'static str, KeyWord>::new();
+        parsed_args.insert("weights", KeyWord::new("weights", input_keys.len()));
+        parsed_args.insert("aggregate", KeyWord::new("aggregate", 1));
+        parsed_args.insert("withscores", KeyWord::new("withscores", 0));
+
+        if let Err(msg) = Self::parse_optional_args(
+            command.clone(),
+            numkeys.saturating_add(numkeys_offset).saturating_add(1),
+            &mut parsed_args,
+        ) {
+            tracing::debug!("failed to parse command: {:?}. {}", command.args_vec(), msg);
+            builder_return_syntax_error!(builder, response_buffer);
+        }
+
+        // Determine the score aggreation method
+        let agg_method = Self::aggregation_method(&parsed_args);
+
+        if !Self::assign_weight(&parsed_args, &mut input_keys)? {
+            tracing::debug!(
+                "failed to assign weights for command: {:?}",
+                command.args_vec()
+            );
+            builder_return_syntax_error!(builder, response_buffer);
+        }
+
+        let _unused =
+            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+
+        // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
+        let union_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
+
+        for (set_name, weight) in input_keys {
+            let union_set_clone = union_set.clone();
+            let iter_result = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                set_name,
+                move |member, score| {
+                    // Adjust this item score by its weight
+                    let score = weight as f64 * score;
+
+                    // Insert new item or update the score
+                    union_set_clone
+                        .borrow_mut()
+                        .entry(BytesMut::from(member))
+                        .and_modify(|sc| *sc = Self::agg_func(agg_method, *sc, score))
+                        .or_insert(score);
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            if iter_result == IterateResult::WrongType {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        }
+
+        // convert the result into vec
+        let result_vec: Vec<(BytesMut, f64)> = union_set
+            .borrow_mut()
+            .iter()
+            .map(|(name, score)| (name.clone(), *score))
+            .collect();
+
+        let with_scores = Self::withscores(command.clone());
+        output_handler_dispatcher(
+            action_type,
+            client_state,
+            command,
+            result_vec,
+            with_scores,
+            response_buffer,
+        )
+        .await?;
+        Ok(())
+    }
+
     // Internal functions
     fn parse_score(score: &BytesMut) -> Option<f64> {
         let value_as_number = String::from_utf8_lossy(&score[..]).to_lowercase();
@@ -3584,6 +3743,22 @@ mod test {
         ("ZREVRANK myzset three WITHSCORE", "*2\r\n:0\r\n$4\r\n3.00\r\n"),
         ("ZREVRANK myzset four WITHSCORE", "*-1\r\n"),
     ]; "test_zrevrank")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zunion 1 mystr", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD zset1 1 one 2 two", ":2\r\n"),
+        ("ZADD zset2 1 one 2 two 3 three", ":3\r\n"),
+        ("ZUNION 2 zset1 zset2", "*3\r\n$3\r\none\r\n$5\r\nthree\r\n$3\r\ntwo\r\n"),
+        ("ZUNION 2 zset1 zset2 WITHSCORES", "*6\r\n$3\r\none\r\n$4\r\n2.00\r\n$5\r\nthree\r\n$4\r\n3.00\r\n$3\r\ntwo\r\n$4\r\n4.00\r\n"),
+    ]; "test_zunion")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zunion 1 mystr", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD zset1 1 one 2 two", ":2\r\n"),
+        ("ZADD zset2 1 one 2 two 3 three", ":3\r\n"),
+        ("ZUNIONSTORE out 2 zset1 zset2 WEIGHTS 2 3", ":3\r\n"),
+        ("ZRANGE out 0 -1 WITHSCORES", "*6\r\n$3\r\none\r\n$4\r\n5.00\r\n$5\r\nthree\r\n$4\r\n9.00\r\n$3\r\ntwo\r\n$5\r\n10.00\r\n"),
+    ]; "test_zunionstore")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
