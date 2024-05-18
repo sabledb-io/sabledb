@@ -772,6 +772,7 @@ impl HashCommands {
         Ok(())
     }
 
+    /// `HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]`
     async fn hscan(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -799,7 +800,7 @@ impl HashCommands {
 
         let mut count = 10usize;
         let mut search_pattern: Option<&BytesMut> = None;
-
+        let mut with_values = true;
         while let Some(arg) = iter.next() {
             let arg = BytesMutUtils::to_string(arg).to_lowercase();
             match arg.as_str() {
@@ -831,6 +832,7 @@ impl HashCommands {
                     // TODO: scan number of items should be configurable
                     count = if n == 0 { 10usize } else { n };
                 }
+                "novalues" => with_values = false,
                 _ => {
                     resp_writer.error_string(Strings::SYNTAX_ERROR).await?;
                     resp_writer.flush().await?;
@@ -959,11 +961,17 @@ impl HashCommands {
         resp_writer.add_array_len(2).await?;
         resp_writer.add_number(cursor_id).await?;
         resp_writer
-            .add_array_len(results.len().saturating_mul(2))
+            .add_array_len(
+                results
+                    .len()
+                    .saturating_mul(if with_values { 2 } else { 1 }),
+            )
             .await?;
         for (k, v) in results.iter() {
             resp_writer.add_bulk_string(k).await?;
-            resp_writer.add_bulk_string(v).await?;
+            if with_values {
+                resp_writer.add_bulk_string(v).await?;
+            }
         }
         resp_writer.flush().await?;
 
@@ -1133,6 +1141,7 @@ mod test {
         (vec!["hscan", "myhash", "0"], "*2\r\n:0\r\n*20\r\n$6\r\nfield1\r\n$6\r\nvalue1\r\n$6\r\nfield2\r\n$6\r\nvalue2\r\n$6\r\nfield3\r\n$6\r\nvalue3\r\n$6\r\nfield4\r\n$6\r\nvalue4\r\n$6\r\nfield5\r\n$6\r\nvalue5\r\n$6\r\nfield6\r\n$6\r\nvalue6\r\n$6\r\nfield7\r\n$6\r\nvalue7\r\n$6\r\nfield8\r\n$6\r\nvalue8\r\n$7\r\nzield10\r\n$7\r\nvalue10\r\n$6\r\nzield9\r\n$6\r\nvalue9\r\n"),
         (vec!["hscan", "myhash", "0", "COUNT", "2", "MATCH", "*z*"], "*2\r\n:0\r\n*4\r\n$7\r\nzield10\r\n$7\r\nvalue10\r\n$6\r\nzield9\r\n$6\r\nvalue9\r\n"),
         (vec!["hscan", "myhash", "12121"], "-ERR: Invalid cursor id 12121\r\n"),
+        (vec!["hscan", "myhash", "0", "novalues"], "*2\r\n:0\r\n*10\r\n$6\r\nfield1\r\n$6\r\nfield2\r\n$6\r\nfield3\r\n$6\r\nfield4\r\n$6\r\nfield5\r\n$6\r\nfield6\r\n$6\r\nfield7\r\n$6\r\nfield8\r\n$7\r\nzield10\r\n$6\r\nzield9\r\n"),
     ], "test_hscan"; "test_hscan")]
     #[test_case(vec![
         (vec!["set", "str_key", "value"], "+OK\r\n"),
