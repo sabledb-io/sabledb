@@ -1,4 +1,3 @@
-use crate::types::DataType;
 use bytes::BytesMut;
 use std::sync::atomic;
 
@@ -12,17 +11,15 @@ lazy_static::lazy_static! {
 #[derive(Debug)]
 pub struct ScanCursor {
     cursor_id: u64,
-    data_type: DataType,
     /// If not `None`, seek the storage iterator to this prefix
     search_prefix: Option<BytesMut>,
 }
 
 impl ScanCursor {
     /// Create a new cursor for a given data type with a unique ID
-    pub fn new(data_type: DataType) -> Self {
+    pub fn new() -> Self {
         ScanCursor {
             cursor_id: COUNTER.fetch_add(1, atomic::Ordering::Relaxed),
-            data_type,
             search_prefix: None,
         }
     }
@@ -32,7 +29,6 @@ impl ScanCursor {
     pub fn progress(&self, search_prefix: BytesMut) -> Self {
         ScanCursor {
             cursor_id: self.cursor_id,
-            data_type: self.data_type,
             search_prefix: Some(search_prefix),
         }
     }

@@ -4,7 +4,7 @@ use crate::{
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
-        ZSetAddMemberResult, ZSetDb, ZSetDeleteMemberResult, ZSetGetMetadataResult,
+        ScanCursor, ZSetAddMemberResult, ZSetDb, ZSetDeleteMemberResult, ZSetGetMetadataResult,
         ZSetGetScoreResult, ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
     },
     utils,
@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
+use wildmatch::WildMatch;
 
 #[derive(PartialEq, Debug)]
 enum IterateResult {
@@ -501,6 +502,9 @@ impl ZSetCommands {
             }
             RedisCommandName::Zscore => {
                 Self::zscore(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Zscan => {
+                Self::zscan(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -3048,6 +3052,189 @@ impl ZSetCommands {
         Ok(IntersectError::Ok(result_set))
     }
 
+    /// `ZSCAN key cursor [MATCH pattern] [COUNT count]`
+    async fn zscan(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let zset_name = command_arg_at!(command, 1);
+        let cursor_id = command_arg_at!(command, 2);
+
+        let builder = RespBuilderV2::default();
+        let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
+            builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
+            return Ok(());
+        };
+
+        // parse the arguments
+        let mut iter = command.args_vec().iter();
+        iter.next(); // zscan
+        iter.next(); // key
+        iter.next(); // cursor
+
+        let mut count = 10usize;
+        let mut search_pattern: Option<&BytesMut> = None;
+
+        while let Some(arg) = iter.next() {
+            let arg = BytesMutUtils::to_string(arg).to_lowercase();
+            match arg.as_str() {
+                "match" => {
+                    let Some(pattern) = iter.next() else {
+                        builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
+                        return Ok(());
+                    };
+
+                    // TODO: parse the pattern and make sure it is valid
+                    search_pattern = Some(pattern);
+                }
+                "count" => {
+                    let Some(n) = iter.next() else {
+                        builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
+                        return Ok(());
+                    };
+                    // parse `n`
+                    let Some(n) = BytesMutUtils::parse::<usize>(n) else {
+                        builder.error_string(
+                            response_buffer,
+                            Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE,
+                        );
+                        return Ok(());
+                    };
+
+                    count = if n == 0 { 10usize } else { n };
+                }
+                _ => {
+                    builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
+                    return Ok(());
+                }
+            }
+        }
+
+        let _unused = LockManager::lock_user_key_exclusive(zset_name, client_state.clone()).await?;
+        let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = match zset_db.get_metadata(zset_name)? {
+            ZSetGetMetadataResult::WrongType => {
+                builder.error_string(response_buffer, Strings::WRONGTYPE);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::NotFound => {
+                builder.add_array_len(response_buffer, 2);
+                builder.add_number::<usize>(response_buffer, 0, false);
+                builder.add_empty_array(response_buffer);
+                return Ok(());
+            }
+            ZSetGetMetadataResult::Some(md) => md,
+        };
+
+        // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
+        // otherwise, return respond with an error
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::new())) else {
+            builder.error_string(
+                response_buffer,
+                format!("ERR: Invalid cursor id {}", cursor_id).as_str(),
+            );
+            return Ok(());
+        };
+
+        // Build the prefix matcher
+        let matcher = search_pattern.map(|search_pattern| {
+            WildMatch::new(
+                BytesMutUtils::to_string(search_pattern)
+                    .to_string()
+                    .as_str(),
+            )
+        });
+
+        // Build the prefix
+        let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
+            BytesMut::from(saved_prefix)
+        } else {
+            md.prefix_by_score(None)
+        };
+
+        // All items in this set must start with `set_prefix`
+        let set_prefix = md.prefix_by_score(None);
+
+        let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
+        let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
+        while db_iter.valid() && count > 0 {
+            // get the key & value
+            let Some((key, _)) = db_iter.key_value() else {
+                break;
+            };
+
+            // Go over this set items only
+            if !key.starts_with(&set_prefix) {
+                break;
+            }
+
+            // extract the key from the row data
+            let item = ZSetScoreItem::from_bytes(key)?;
+
+            // If we got a matcher, use it
+            if let Some(matcher) = &matcher {
+                let key_str = BytesMutUtils::to_string(item.member());
+                if matcher.matches(key_str.as_str()) {
+                    results.push((
+                        BytesMut::from(item.member()),
+                        BytesMut::from(format!("{:.?}", item.score()).as_str()),
+                    ));
+                    count = count.saturating_sub(1);
+                }
+            } else {
+                results.push((
+                    BytesMut::from(item.member()),
+                    BytesMut::from(format!("{:.?}", item.score()).as_str()),
+                ));
+                count = count.saturating_sub(1);
+            }
+            db_iter.next();
+        }
+
+        let cursor_id = if db_iter.valid() && count == 0 {
+            // read the next key to be used as the next starting point for next iteration
+            let Some((key, _)) = db_iter.key_value() else {
+                // this is an error
+                builder.error_string(
+                    response_buffer,
+                    "ERR internal error: failed to read key from the database",
+                );
+                return Ok(());
+            };
+
+            if key.starts_with(&set_prefix) {
+                // store the next cursor
+                let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
+                // and store the cursor state
+                client_state.set_cursor(cursor.clone());
+                cursor.id()
+            } else {
+                // there are more items, but they don't belong to this hash
+                client_state.remove_cursor(cursor.id());
+                0u64
+            }
+        } else {
+            // reached the end
+            // delete the cursor
+            client_state.remove_cursor(cursor.id());
+            0u64
+        };
+
+        // write the response
+        builder.add_array_len(response_buffer, 2);
+        builder.add_number::<u64>(response_buffer, cursor_id, false);
+        builder.add_array_len(response_buffer, results.len().saturating_mul(2));
+        for (k, v) in results.iter() {
+            builder.add_bulk_string(response_buffer, k);
+            builder.add_bulk_string(response_buffer, v);
+        }
+        Ok(())
+    }
+
     // Perform aggregation on `score1` and `score2` based on the requested method
     fn agg_func(method: AggregationMethod, score1: f64, score2: f64) -> f64 {
         match method {
@@ -3801,6 +3988,12 @@ mod test {
         ("zscore myzset two", "$-1\r\n"),
         ("zscore myzset_non_existing one", "$-1\r\n"),
     ]; "test_zscore")]
+    #[test_case(vec![
+        ("set mystr value", "+OK\r\n"),
+        ("zscan mystr 0", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("ZADD zset 1 one 2 two 3 three", ":3\r\n"),
+        ("zscan zset 0 COUNT 3", "*2\r\n:0\r\n*6\r\n$3\r\none\r\n$3\r\n1.0\r\n$3\r\ntwo\r\n$3\r\n2.0\r\n$5\r\nthree\r\n$3\r\n3.0\r\n"),
+    ]; "test_zscan")]
     fn test_zset_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

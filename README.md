@@ -206,6 +206,7 @@ and visit this page again in couple of days
 | zunion | ✓ |✓ | |
 | zunionstore | ✓ |✓ | |
 | zscore | ✓ |✓ | |
+| zscan | ✓ |✓ | |
 
 
 ### Generic commands

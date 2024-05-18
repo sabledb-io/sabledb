@@ -305,7 +305,7 @@ impl ClientState {
         tracing::debug!("CLNT {}: {}", client_id, msg);
     }
 
-    /// Return a cursor by ID or create a new cursor, add it and return it
+    /// Return a cursor by ID or create a new cursor (if `cursor_id` is `0`) add it and return it
     pub fn cursor_or<F>(&self, cursor_id: u64, f: F) -> Option<Rc<ScanCursor>>
     where
         F: FnOnce() -> Rc<ScanCursor>,

@@ -59,11 +59,3 @@ macro_rules! iter_next_or_prev {
 
 #[allow(unused_imports)]
 pub use list::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult};
-
-#[derive(Clone, Eq, PartialEq, Debug, Copy)]
-/// Supported data types
-pub enum DataType {
-    String,
-    Hash,
-    List,
-}

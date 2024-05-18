@@ -9,7 +9,7 @@ use crate::{
         GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
         HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
-    types::{DataType, List},
+    types::List,
     utils::RespBuilderV2,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
@@ -861,10 +861,7 @@ impl HashCommands {
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
         // otherwise, return respond with an error
-        let Some(cursor) = client_state.cursor_or(cursor_id, || {
-            let c = ScanCursor::new(DataType::Hash);
-            Rc::new(c)
-        }) else {
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::new())) else {
             resp_writer
                 .error_string(format!("ERR: Invalid cursor id {}", cursor_id).as_str())
                 .await?;

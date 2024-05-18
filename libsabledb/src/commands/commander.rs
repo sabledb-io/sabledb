@@ -147,6 +147,7 @@ pub enum RedisCommandName {
     Zunion,
     Zunionstore,
     Zscore,
+    Zscan,
     NotSupported(String),
 }
 
@@ -1135,6 +1136,12 @@ impl Default for CommandsManager {
                     CommandMetadata::new(RedisCommandName::Zscore)
                         .read_only()
                         .with_arity(3),
+                ),
+                (
+                    "zscan",
+                    CommandMetadata::new(RedisCommandName::Zscan)
+                        .read_only()
+                        .with_arity(-3),
                 ),
             ]),
         }
