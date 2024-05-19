@@ -1,5 +1,6 @@
 use crate::{
     commands::BaseCommands,
+    io::RespWriter,
     server::ClientState,
     storage::{StringGetResult, StringsDb},
 };
@@ -38,7 +39,7 @@ impl StringCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
@@ -82,7 +83,8 @@ impl StringCommands {
                 Self::lcs(client_state, command, &mut response_buffer).await?;
             }
             RedisCommandName::Mget => {
-                Self::mget(client_state, command, &mut response_buffer).await?;
+                Self::mget(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
             }
             RedisCommandName::Mset => {
                 Self::mset(client_state, command, &mut response_buffer).await?;
@@ -782,15 +784,10 @@ impl StringCommands {
     async fn mget(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        response_buffer: &mut BytesMut,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
-        check_args_count!(command, 2, response_buffer);
-        let builder = RespBuilderV2::default();
+        check_args_count_tx!(command, 2, tx);
         let count = command.arg_count().saturating_sub(1);
-
-        // prepare the response
-        response_buffer.clear();
-        builder.add_array_len(response_buffer, count);
 
         let mut iter = command.args_vec().iter();
         let _ = iter.next(); // skip the first param which is the command name
@@ -804,14 +801,19 @@ impl StringCommands {
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
+        // prepare the response
+        let mut writer = RespWriter::new(tx, 256, client_state.clone());
+        writer.add_array_len(count).await?;
+
         for key in user_keys.iter() {
             if let StringGetResult::Some((value, _)) = strings_db.get(key)? {
-                builder.add_bulk_string(response_buffer, &value);
+                writer.add_bulk_string(&value).await?;
             } else {
                 // key is not found or of wrong type
-                builder.add_null_string(response_buffer);
+                writer.add_null_string().await?;
             }
         }
+        writer.flush().await?;
         Ok(())
     }
 
