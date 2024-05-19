@@ -2,6 +2,7 @@ use crate::commands::{CommandMetadata, CommandsManager};
 use crate::{BytesMutUtils, SableError};
 use bytes::BytesMut;
 use std::str::FromStr;
+use std::sync::Arc;
 
 lazy_static::lazy_static! {
     static ref COMMANDS_MGR: CommandsManager = CommandsManager::default();
@@ -22,7 +23,7 @@ pub struct RedisCommand {
     command_name: String,
 
     /// The command type
-    command_metadata: CommandMetadata,
+    command_metadata: Arc<CommandMetadata>,
 }
 
 impl RedisCommand {
