@@ -51,8 +51,7 @@ impl GenericCommands {
     }
 
     /// O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string,
-    /// the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted
-    /// set or hash. Removing a single key that holds a string value is O(1).
+    /// the individual complexity remains O(1) and the deletion of the element keys is done in a background thread
     async fn del(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,

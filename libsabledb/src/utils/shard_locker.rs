@@ -1,4 +1,4 @@
-use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, SableError};
+use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, RedisCommand, SableError};
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -44,8 +44,8 @@ impl ShardLocker {
     pub fn default() -> Self {
         let mut locks = Vec::<RwLock<u16>>::with_capacity(Self::SLOT_SIZE.into());
         for _ in 0..Self::SLOT_SIZE {
-            let lock = RwLock::new(0u16);
-            locks.push(lock);
+            let lk = RwLock::new(0u16);
+            locks.push(lk);
         }
         ShardLocker { locks }
     }
@@ -54,6 +54,41 @@ impl ShardLocker {
 pub struct LockManager {}
 
 impl LockManager {
+    /// Obtain lock based on the command. If the command is marked as "read-only"
+    /// we obtain a read lock, otherwise, an exclusive lock
+    pub async fn lock<'a>(
+        user_key: &BytesMut,
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let db_id = client_state.database_id();
+        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
+        if command.metadata().is_write_command() {
+            Self::lock_internal_key_exclusive(&internal_key, client_state).await
+        } else {
+            Self::lock_internal_key_shared(&internal_key, client_state).await
+        }
+    }
+
+    /// Obtain a multi lock based on the command. If the command is marked as "read-only"
+    /// we obtain a read lock, otherwise, an exclusive lock
+    pub async fn lock_multi<'a>(
+        user_keys: &[&BytesMut],
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let db_id = client_state.database_id();
+        let keys: Vec<Rc<BytesMut>> = user_keys
+            .iter()
+            .map(|user_key| Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id)))
+            .collect();
+        if command.metadata().is_write_command() {
+            Self::lock_multi_internal_keys_exclusive(&keys, client_state).await
+        } else {
+            Self::lock_multi_internal_keys_shared(&keys, client_state).await
+        }
+    }
+
     // obtain exclusive lock on a user key
     pub async fn lock_user_key_exclusive<'a>(
         user_key: &BytesMut,
@@ -145,12 +180,12 @@ impl LockManager {
         slots.dedup();
 
         for idx in &slots {
-            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            let lock = lock.write().await;
-            write_locks.push(lock);
+            let lk = lk.write().await;
+            write_locks.push(lk);
         }
 
         Ok(ShardLockGuard {
@@ -176,12 +211,12 @@ impl LockManager {
         slots.dedup();
 
         for idx in &slots {
-            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            let lock = lock.read().await;
-            read_locks.push(lock);
+            let lk = lk.read().await;
+            read_locks.push(lk);
         }
 
         Ok(ShardLockGuard {
@@ -219,12 +254,12 @@ impl LockManager {
         }
 
         for idx in &slots {
-            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            let lock = lock.write().await;
-            write_locks.push(lock);
+            let lk = lk.write().await;
+            write_locks.push(lk);
         }
 
         Ok(ShardLockGuard {
@@ -258,12 +293,12 @@ impl LockManager {
         }
 
         for idx in &slots {
-            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            let lock = lock.read().await;
-            read_locks.push(lock);
+            let lk = lk.read().await;
+            read_locks.push(lk);
         }
 
         Ok(ShardLockGuard {
@@ -293,12 +328,12 @@ impl LockManager {
         }
 
         for idx in &slots {
-            let Some(lock) = MULTI_LOCK.locks.get(*idx as usize) else {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
             };
 
-            let lock = lock.write().await;
-            write_locks.push(lock);
+            let lk = lk.write().await;
+            write_locks.push(lk);
         }
 
         Ok(ShardLockGuard {

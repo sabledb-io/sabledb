@@ -300,6 +300,11 @@ impl CommandMetadata {
         self.has_flag(RedisCommandFlags::Write)
     }
 
+    /// Is this command a "Write" command?
+    pub fn is_read_only_command(&self) -> bool {
+        self.has_flag(RedisCommandFlags::Read)
+    }
+
     pub fn is_blocking(&self) -> bool {
         self.has_flag(RedisCommandFlags::Blocking)
     }
