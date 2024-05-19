@@ -564,7 +564,7 @@ impl ZSetCommands {
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
         let key = command_arg_at!(command, 1);
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let builder = RespBuilderV2::default();
@@ -705,7 +705,7 @@ impl ZSetCommands {
             return Ok(());
         }
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut items_added = 0usize;
@@ -752,7 +752,7 @@ impl ZSetCommands {
             return Ok(());
         };
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
         let flags = ZWriteFlags::Incr;
 
@@ -801,7 +801,7 @@ impl ZSetCommands {
             builder_return_min_max_not_float!(builder, response_buffer);
         };
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = zset_md_or_0_builder!(zset_db, key, builder, response_buffer);
@@ -919,7 +919,7 @@ impl ZSetCommands {
         }
 
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         let mut iter = user_keys.iter();
         let Some(main_key) = iter.next() else {
@@ -1029,7 +1029,7 @@ impl ZSetCommands {
         user_keys.push(destination);
 
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         let mut iter = user_keys.iter();
         let Some(main_key) = iter.next() else {
@@ -1145,7 +1145,7 @@ impl ZSetCommands {
 
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         let result_set = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
@@ -1212,7 +1212,7 @@ impl ZSetCommands {
         };
         let user_keys: Vec<&BytesMut> = user_keys.iter().collect();
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         let result = match Self::intersect(client_state.clone(), command.clone(), 2, numkeys)? {
             IntersectError::SyntaxError => {
@@ -1288,7 +1288,7 @@ impl ZSetCommands {
 
         // Lock the database. The lock must be done here (it has to do with how txn are working)
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         let result = match Self::intersect(client_state.clone(), command.clone(), 3, numkeys)? {
             IntersectError::SyntaxError => {
@@ -1341,7 +1341,7 @@ impl ZSetCommands {
         let min = Self::parse_lex_index(min.as_ref());
         let max = Self::parse_lex_index(max.as_ref());
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = match zset_db.get_metadata(key)? {
@@ -1460,7 +1460,7 @@ impl ZSetCommands {
 
         let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         for key in &user_keys {
             match Self::try_pop(client_state.clone(), key, count, min_members)? {
@@ -1553,7 +1553,7 @@ impl ZSetCommands {
 
         let user_keys: Vec<&BytesMut> = keys_to_lock.iter().collect();
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
 
         for key in &user_keys {
             match Self::try_pop(client_state.clone(), key, count, min_members)? {
@@ -1608,7 +1608,7 @@ impl ZSetCommands {
             members.push(member);
         }
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let builder = RespBuilderV2::default();
@@ -1641,7 +1641,7 @@ impl ZSetCommands {
 
         let key = command_arg_at!(command, 1);
         let member = command_arg_at!(command, 2);
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let builder = RespBuilderV2::default();
@@ -1689,7 +1689,7 @@ impl ZSetCommands {
             }
         };
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
         match Self::try_pop(client_state.clone(), key, count, pop_min)? {
             TryPopResult::WrongType => {
@@ -1743,7 +1743,7 @@ impl ZSetCommands {
 
         let keys_to_lock: Vec<&BytesMut> = keys.iter().collect();
         let _unused =
-            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+            LockManager::lock_multi(&keys_to_lock, client_state.clone(), command.clone()).await?;
 
         for key in keys {
             match Self::try_pop(client_state.clone(), key, 1, pop_min)? {
@@ -1907,7 +1907,7 @@ impl ZSetCommands {
         };
 
         // multiple db calls, requires exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         // determine the array length
@@ -2107,7 +2107,7 @@ impl ZSetCommands {
             vec![key]
         };
         let _unused =
-            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+            LockManager::lock_multi(&keys_to_lock, client_state.clone(), command.clone()).await?;
 
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -2259,7 +2259,7 @@ impl ZSetCommands {
             vec![key]
         };
         let _unused =
-            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+            LockManager::lock_multi(&keys_to_lock, client_state.clone(), command.clone()).await?;
 
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -2406,7 +2406,7 @@ impl ZSetCommands {
             vec![key]
         };
         let _unused =
-            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+            LockManager::lock_multi(&keys_to_lock, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = zset_md_or_nil_builder!(zset_db, key, builder, response_buffer);
@@ -2566,7 +2566,7 @@ impl ZSetCommands {
             false
         };
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = if with_scores {
@@ -2640,7 +2640,7 @@ impl ZSetCommands {
         check_args_count!(command, 3, response_buffer);
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
         let builder = RespBuilderV2::default();
 
@@ -2764,7 +2764,7 @@ impl ZSetCommands {
         }
 
         let _unused =
-            LockManager::lock_user_keys_exclusive(&keys_to_lock, client_state.clone()).await?;
+            LockManager::lock_multi(&keys_to_lock, client_state.clone(), command.clone()).await?;
 
         // load the keys of the main set into the memory (Use `BTreeSet` to keep the items sorted)
         let union_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
@@ -3167,7 +3167,7 @@ impl ZSetCommands {
             }
         }
 
-        let _unused = LockManager::lock_user_key_exclusive(zset_name, client_state.clone()).await?;
+        let _unused = LockManager::lock(zset_name, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         let md = match zset_db.get_metadata(zset_name)? {

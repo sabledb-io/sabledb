@@ -162,7 +162,7 @@ impl HashCommands {
 
         let key = command_arg_at!(command, 1);
         // Hash write updating 2 entries + doing read, so we need to exclusive lock it
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items_put = match hash_db.put_multi(key, &field_values)? {
@@ -193,7 +193,7 @@ impl HashCommands {
         let value = command_arg_at!(command, 3);
 
         // Doing get+set -> requires exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(hash_name, client_state.clone()).await?;
+        let _unused = LockManager::lock(hash_name, client_state.clone(), command.clone()).await?;
         let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         // Sanity
@@ -235,7 +235,7 @@ impl HashCommands {
         let field = command_arg_at!(command, 2);
 
         // Multiple db calls: exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         match hash_db.get(key, field)? {
@@ -270,7 +270,7 @@ impl HashCommands {
         let field = command_arg_at!(command, 2);
 
         // Multiple db calls: exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         match hash_db.get(key, field)? {
@@ -321,7 +321,7 @@ impl HashCommands {
         }
 
         // Multiple db calls: exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let items_put = match hash_db.delete(key, &fields)? {
@@ -347,7 +347,7 @@ impl HashCommands {
         let key = command_arg_at!(command, 1);
 
         // Lock and delete
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let count = match hash_db.len(key)? {
@@ -373,7 +373,7 @@ impl HashCommands {
         let field = command_arg_at!(command, 2);
 
         // Lock and delete
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         match hash_db.field_exists(key, field)? {
@@ -399,7 +399,7 @@ impl HashCommands {
         let key = command_arg_at!(command, 1);
 
         // multiple db access -> use exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
         let hash_md = match hash_db.hash_metadata(key)? {
             GetHashMetadataResult::WrongType => {
@@ -491,7 +491,7 @@ impl HashCommands {
         };
 
         // Lock and delete
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let prev_value = match hash_db.get(key, field)? {
@@ -539,7 +539,7 @@ impl HashCommands {
         };
 
         // Lock and delete
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let prev_value = match hash_db.get(key, field)? {
@@ -582,7 +582,7 @@ impl HashCommands {
         iter.next(); // skip the hash key
 
         // multi db access requires an exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut writer = RespWriter::new(tx, 1024, client_state.clone());
@@ -664,7 +664,7 @@ impl HashCommands {
         };
 
         // multiple db calls, requires exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         // determine the array length
@@ -842,7 +842,7 @@ impl HashCommands {
         }
 
         // multiple db calls, requires exclusive lock
-        let _unused = LockManager::lock_user_key_exclusive(hash_name, client_state.clone()).await?;
+        let _unused = LockManager::lock(hash_name, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         let hash_md = match hash_db.hash_metadata(hash_name)? {

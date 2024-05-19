@@ -159,7 +159,9 @@ impl StringCommands {
             }
         }
 
-        let result = Self::set_internal_with_locks(client_state, key, value, expiry, flags).await?;
+        let result =
+            Self::set_internal_with_locks(client_state, command.clone(), key, value, expiry, flags)
+                .await?;
         Self::handle_set_internal_result(result, response_buffer).await;
         Ok(())
     }
@@ -181,7 +183,7 @@ impl StringCommands {
         let str_to_append = command_arg_at!(command, 2);
 
         // entering
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
@@ -216,7 +218,7 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         // fetch the value
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -248,7 +250,7 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
 
         // start atomic operation here
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
@@ -282,7 +284,7 @@ impl StringCommands {
         let new_value = command_arg_at!(command, 2);
 
         // start atomic operation here
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
@@ -317,7 +319,7 @@ impl StringCommands {
         // fetch the value
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         match strings_db.get(key)? {
@@ -389,7 +391,7 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
         let builder = RespBuilderV2::default();
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         let result = strings_db.get(key)?;
@@ -435,7 +437,7 @@ impl StringCommands {
         check_args_count!(command, 2, response_buffer);
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -483,7 +485,7 @@ impl StringCommands {
         check_args_count!(command, 2, response_buffer);
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -532,7 +534,7 @@ impl StringCommands {
         let interval = command_arg_at!(command, 2);
 
         let decrement = to_number!(interval, i64, response_buffer, Ok(()));
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -581,7 +583,7 @@ impl StringCommands {
         let key = command_arg_at!(command, 1);
         let interval = command_arg_at!(command, 2);
         let increment = to_number!(interval, i64, response_buffer, Ok(()));
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         let result = match strings_db.get(key)? {
@@ -636,7 +638,7 @@ impl StringCommands {
             Strings::VALUE_NOT_VALID_FLOAT
         );
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         let result = match strings_db.get(key)? {
@@ -685,7 +687,8 @@ impl StringCommands {
         let key2 = command_arg_at!(command, 2);
 
         let user_keys = vec![key1, key2];
-        let _unused = LockManager::lock_user_keys_shared(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -796,7 +799,8 @@ impl StringCommands {
         let user_keys: Vec<&BytesMut> = iter.collect();
 
         // obtain a shared lock on the keys
-        let _unused = LockManager::lock_user_keys_shared(&user_keys, client_state.clone()).await?;
+        let _unused =
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -845,7 +849,7 @@ impl StringCommands {
         }
 
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         strings_db.multi_put(&keys_and_values, PutFlags::Override)?;
@@ -890,7 +894,7 @@ impl StringCommands {
 
         // if any error occured, return `0`
         let _unused =
-            LockManager::lock_user_keys_exclusive(&user_keys, client_state.clone()).await?;
+            LockManager::lock_multi(&user_keys, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -919,6 +923,7 @@ impl StringCommands {
 
         let result = Self::set_internal_with_locks(
             client_state,
+            command.clone(),
             key,
             value,
             (Some("ex".to_string()), Some(timeout.to_string())),
@@ -946,6 +951,7 @@ impl StringCommands {
 
         let result = Self::set_internal_with_locks(
             client_state,
+            command.clone(),
             key,
             value,
             (Some("px".to_string()), Some(timeout.to_string())),
@@ -970,6 +976,7 @@ impl StringCommands {
 
         let result = Self::set_internal_with_locks(
             client_state,
+            command.clone(),
             key,
             value,
             (None, None),
@@ -995,7 +1002,7 @@ impl StringCommands {
         let offset = command_arg_at!(command, 2);
         let value = command_arg_at!(command, 3);
 
-        let _unused = LockManager::lock_user_key_exclusive(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -1034,7 +1041,7 @@ impl StringCommands {
         let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
 
-        let _unused = LockManager::lock_user_key_shared(key, client_state.clone()).await?;
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -1074,6 +1081,7 @@ impl StringCommands {
     /// `flags` possible bitwise combination of `SetFlags` bits
     pub async fn set_internal_with_locks(
         client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
         user_key: &BytesMut,
         value: &BytesMut,
         expiry: (Option<String>, Option<String>),
@@ -1088,16 +1096,7 @@ impl StringCommands {
         }
 
         // choose the correct lock
-        let _unused = if flags
-            .intersects(SetFlags::SetIfNotExists | SetFlags::SetIfExists | SetFlags::ReturnOldValue)
-        {
-            // requires exclusive lock
-            LockManager::lock_user_key_exclusive(user_key, client_state.clone()).await?
-        } else {
-            // shared lock is enough here
-            LockManager::lock_user_key_shared(user_key, client_state.clone()).await?
-        };
-
+        let _unused = LockManager::lock(user_key, client_state.clone(), command).await?;
         let mut strings_db =
             StringsDb::with_storage(client_state.database(), client_state.database_id());
         if flags.intersects(

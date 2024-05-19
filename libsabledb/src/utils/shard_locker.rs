@@ -89,28 +89,6 @@ impl LockManager {
         }
     }
 
-    // obtain exclusive lock on a user key
-    pub async fn lock_user_key_exclusive<'a>(
-        user_key: &BytesMut,
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_exclusive(&internal_key, client_state).await
-    }
-
-    /// Obtain exclusive lock on a user key, without conditions.
-    /// other methods in this class will check for various variables
-    /// like whether or not we have an open transaction and in which state.
-    /// This function skip these checks
-    pub async fn lock_user_key_exclusive_unconditionally<'a>(
-        user_key: &BytesMut,
-        db_id: u16,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_exclusive_unconditionally(&internal_key).await
-    }
-
     /// Obtain exclusive lock on a user key, without conditions.
     /// other methods in this class will check for various variables
     /// like whether or not we have an open transaction and in which state.
@@ -121,79 +99,6 @@ impl LockManager {
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         Self::lock_internal_key_shared_unconditionally(&internal_key).await
-    }
-
-    // obtain a shared lock on a user key
-    pub async fn lock_user_key_shared<'a>(
-        user_key: &BytesMut,
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_shared(&internal_key, client_state).await
-    }
-
-    // obtain a shared lock on a user key
-    pub async fn lock_user_keys_shared<'a>(
-        user_keys: &[&BytesMut],
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
-        let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
-        for user_key in user_keys.iter() {
-            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id));
-            primary_keys.push(internal_key.clone());
-            primary_keys_refs.push(internal_key);
-        }
-        Self::lock_multi_internal_keys_shared(&primary_keys_refs, client_state).await
-    }
-
-    // obtain a shared lock on a user key
-    pub async fn lock_user_keys_exclusive<'a>(
-        user_keys: &[&BytesMut],
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let mut primary_keys = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
-        let mut primary_keys_refs = Vec::<Rc<BytesMut>>::with_capacity(user_keys.len());
-        for user_key in user_keys.iter() {
-            let internal_key = Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id));
-            primary_keys.push(internal_key.clone());
-            primary_keys_refs.push(internal_key);
-        }
-        Self::lock_multi_internal_keys_exclusive(&primary_keys_refs, client_state).await
-    }
-
-    /// Lock the entire storage
-    pub async fn lock_all_keys_exclusive<'a>() -> Result<ShardLockGuard<'a>, SableError> {
-        let mut write_locks =
-            Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(crate::utils::SLOT_SIZE.into());
-
-        let mut slots = Vec::<u16>::with_capacity(crate::utils::SLOT_SIZE.into());
-        for slot in 0..crate::utils::SLOT_SIZE {
-            slots.push(slot);
-        }
-
-        // the sorting is required to avoid deadlocks
-        slots.sort();
-        slots.dedup();
-
-        for idx in &slots {
-            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
-                unreachable!("No lock in index {}", idx);
-            };
-
-            let lk = lk.write().await;
-            write_locks.push(lk);
-        }
-
-        Ok(ShardLockGuard {
-            read_locks: None,
-            read_count: 0,
-            write_locks: Some(write_locks),
-            write_count: slots.len(),
-        })
     }
 
     /// Lock the entire storage
@@ -418,28 +323,6 @@ impl LockManager {
         })
     }
 
-    async fn lock_internal_key_exclusive_unconditionally<'a>(
-        user_key: &BytesMut,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(1);
-        let slot = calculate_slot(user_key);
-        write_locks.push(
-            MULTI_LOCK
-                .locks
-                .get(slot as usize)
-                .expect("lock")
-                .write()
-                .await,
-        );
-
-        Ok(ShardLockGuard {
-            write_locks: Some(write_locks),
-            write_count: 1,
-            read_locks: None,
-            read_count: 0,
-        })
-    }
-
     async fn lock_internal_key_shared_unconditionally<'a>(
         user_key: &BytesMut,
     ) -> Result<ShardLockGuard<'a>, SableError> {
@@ -615,8 +498,11 @@ mod tests {
                 keys.push(&k4);
                 keys.push(&k2);
 
+                // Create a "write" command to force `lock_multi` to use exclusive lock
+                let args = "set a b".split(' ').collect();
+                let cmd = Rc::new(RedisCommand::for_test(args));
                 for _ in 0..100 {
-                    let locker = LockManager::lock_user_keys_exclusive(&keys, client.inner())
+                    let locker = LockManager::lock_multi(&keys, client.inner(), cmd.clone())
                         .await
                         .unwrap();
                     let curvalue_before = COUNTER.load(std::sync::atomic::Ordering::Relaxed);
@@ -653,8 +539,12 @@ mod tests {
                 keys.push(&k4);
                 keys.push(&k2);
 
+                // Create a "write" command to force `lock_multi` to use exclusive lock
+                let args = "set a b".split(' ').collect();
+                let cmd = Rc::new(RedisCommand::for_test(args));
+
                 for _ in 0..100 {
-                    let locker = LockManager::lock_user_keys_exclusive(&keys, client.inner())
+                    let locker = LockManager::lock_multi(&keys, client.inner(), cmd.clone())
                         .await
                         .unwrap();
                     let curvalue_before = COUNTER.load(std::sync::atomic::Ordering::Relaxed);

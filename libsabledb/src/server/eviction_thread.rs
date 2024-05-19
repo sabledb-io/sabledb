@@ -244,7 +244,7 @@ impl Evictor {
                             for key_type in sub_items {
                                 // purge sub-items
                                 let count = Self::purge_subitems(store, &record, key_type)?;
-                                tracing::info!(
+                                tracing::debug!(
                                     "Deleted {} zombie items of type {:?} belonged to: {:?}",
                                     count,
                                     key_type,
@@ -317,7 +317,7 @@ impl Evictor {
             Some(md) => Ok(if md.value_type().eq(expected_value_type) {
                 RecordExistsResult::Found
             } else {
-                tracing::info!(
+                tracing::debug!(
                     "'{:?}' found but with wrong type. Expected {:?}, Found: {:?}",
                     user_key,
                     expected_value_type,
