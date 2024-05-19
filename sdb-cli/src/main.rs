@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::debug!("Loading file: {input_file}");
         // read the file's content. Each line in the file is considered as a command
         let file_content = fs::read_to_string(input_file)?;
-        let commands: Vec<&str> = file_content.split("\n").collect();
+        let commands: Vec<&str> = file_content.split('\n').collect();
         let commands: Vec<String> = commands
             .iter()
             .filter(|s| !s.trim().is_empty())
