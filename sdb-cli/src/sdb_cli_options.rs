@@ -13,4 +13,11 @@ pub struct Options {
     /// use TLS
     #[arg(long, default_value = "false")]
     pub tls: bool,
+
+    /// Read commands from file
+    #[arg(long, short)]
+    pub file: Option<String>,
+
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub parameters: Vec<String>,
 }

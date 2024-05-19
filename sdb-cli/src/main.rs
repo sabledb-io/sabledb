@@ -3,6 +3,7 @@ mod sdb_cli_options;
 use bytes::BytesMut;
 use clap::Parser;
 use sdb_cli_options::Options;
+use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -22,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Options::parse();
+
     let (connection_string, prompt) = if args.tls {
         (
             format!("rediss://{}:{}/#insecure", args.host, args.port),
@@ -34,9 +36,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
-    println!("Connecting to {}..", connection_string);
+    tracing::debug!("Connecting to {}..", connection_string);
     let client = redis::Client::open(connection_string.as_str())?;
     let mut conn = client.get_connection()?;
+
+    if let Some(input_file) = args.file {
+        tracing::debug!("Loading file: {input_file}");
+        // read the file's content. Each line in the file is considered as a command
+        let file_content = fs::read_to_string(input_file)?;
+        let commands: Vec<&str> = file_content.split("\n").collect();
+        let commands: Vec<String> = commands
+            .iter()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().into())
+            .collect();
+        tracing::debug!("Running commands: {:#?}", commands);
+        batch_execute(&mut conn, commands)?;
+    } else if !args.parameters.is_empty() {
+        // construct a command from the parameters and execute it
+        let command = vec![args.parameters.join(" ")];
+        batch_execute(&mut conn, command)?;
+    } else {
+        interactive_loop(prompt, conn)?;
+    }
+    Ok(())
+}
+
+/// Run `sdb` in an interactive mode
+fn interactive_loop(
+    prompt: String,
+    mut conn: redis::Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::builder().auto_add_history(true).build();
     let history =
         rustyline::sqlite_history::SQLiteHistory::open(config, ".sdb-cli-history.sqlite3")?;
@@ -45,7 +75,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Ok(line) = rl.readline(prompt.as_str()) else {
             break;
         };
-        let mut line = BytesMut::from(line.as_str());
+        batch_execute(&mut conn, vec![line])?;
+    }
+    Ok(())
+}
+
+/// Execute list of redis commands
+fn batch_execute(
+    conn: &mut redis::Connection,
+    commands: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for command in &commands {
+        let command = command.trim();
+        let mut line = BytesMut::from(command);
         line.extend_from_slice(b"\r\n");
         conn.send_packed_command(line.as_ref())?;
         match conn.recv_response() {

@@ -144,7 +144,7 @@ impl Evictor {
                     match msg {
                         Some(EvictorMessage::Evict) => {
                             // Do evict now
-                            tracing::info!("Evicting records from the database");
+                            tracing::debug!("Evicting records from the database");
                             Self::evict(&self.store, &self.server_options).await?;
                         }
                         Some(EvictorMessage::Shutdown) => {
