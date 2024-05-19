@@ -162,6 +162,10 @@ impl ServerOptions {
                     "manual_wal_flush" => {
                         options.open_params.rocksdb.manual_wal_flush = ini_bool!(value)
                     }
+                    "manual_wal_flush_interval_ms" => {
+                        options.open_params.rocksdb.manual_wal_flush_interval_ms =
+                            parse_number!(value, usize)
+                    }
                     "max_open_files" => {
                         options.open_params.rocksdb.max_open_files = parse_number!(value, isize)
                     }

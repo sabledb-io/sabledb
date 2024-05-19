@@ -1,7 +1,9 @@
 use crate::{Client, SableError, ServerState, StorageAdapter, Telemetry, TimeUtils, WorkerHandle};
+use num_format::{Locale, ToFormattedString};
 use rand::Rng;
 use std::net::TcpStream;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 #[allow(unused_imports)]
 use tracing::log::{log_enabled, Level};
@@ -13,6 +15,11 @@ pub enum WorkerMessage {
     NewConnection(TcpStream),
     Shutdown,
     BroadcastMessage(BroadcastMessageType),
+}
+
+lazy_static::lazy_static! {
+    static ref LAST_WAL_FLUSH: AtomicU64
+        = AtomicU64::new(TimeUtils::epoch_ms().expect("failed to get timestamp"));
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +148,9 @@ impl Worker {
         let secs = rng.gen_range(1..3);
         let nanos = rng.gen_range(0..u32::MAX);
 
+        // Tick task should be triggered in a random time for every worker
+        let tick_interval_micros = rng.gen_range(100000..150000);
+
         // create the TLS acceptor for this thread
         let acceptor = if self.server_state.options().use_tls() {
             let cert = &self
@@ -173,8 +183,13 @@ impl Worker {
         };
 
         info!(
-            "This worker will update its statistics every: {}.{} seconds",
-            secs, nanos
+            "Worker statistics will be updated every: {}.{} seconds",
+            secs, nanos,
+        );
+
+        info!(
+            "Worker process idle events every: {} microseconds",
+            tick_interval_micros.to_formatted_string(&Locale::en)
         );
 
         self.stats_merge_interval = tokio::time::Duration::new(secs, nanos)
@@ -182,8 +197,7 @@ impl Worker {
             .try_into()
             .unwrap_or(u64::MAX);
 
-        let mut last_flush = TimeUtils::epoch_ms().expect("failed to get timestamp!");
-        let mut last_merge = last_flush;
+        let mut last_merge = TimeUtils::epoch_ms().expect("failed to get timestamp!");
 
         loop {
             tokio::select! {
@@ -213,21 +227,21 @@ impl Worker {
                         None => {}
                     }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                    self.tick(&mut last_flush, &mut last_merge);
+                _ = tokio::time::sleep(tokio::time::Duration::from_micros(tick_interval_micros)) => {
+                    self.tick(&mut last_merge);
                 }
             }
         }
     }
 
     /// Handle idle event
-    fn tick(&self, last_flush: &mut u64, last_merge: &mut u64) {
+    fn tick(&self, last_merge: &mut u64) {
         let Ok(cur_ts) = TimeUtils::epoch_ms() else {
             crate::error_with_throttling!(300, "unable to get timestamp from system");
             return;
         };
 
-        let flush_interval = self
+        let wal_flush_interval = self
             .server_state
             .options()
             .open_params
@@ -236,16 +250,21 @@ impl Worker {
 
         // update this worker telemetry
         if cur_ts - *last_merge > self.stats_merge_interval {
-            *last_merge = cur_ts;
             self.server_state
                 .shared_telemetry()
                 .lock()
                 .expect("mutex")
                 .merge_worker_telemetry(Telemetry::clone());
             Telemetry::clear();
+            *last_merge = cur_ts;
         }
 
-        if cur_ts - *last_flush > flush_interval {
+        // This method ("tick") is called per worker thread, so in order to avoid
+        // too many flush calls, we use static atomic variable to store the last
+        // flush timestamp
+        if (cur_ts - LAST_WAL_FLUSH.load(Ordering::Relaxed)) > wal_flush_interval {
+            // update the last flush timestamp
+            LAST_WAL_FLUSH.store(cur_ts, Ordering::Relaxed);
             if let Err(e) = self.store.flush_wal() {
                 crate::error_with_throttling!(300, "Failed to flush WAL. {:?}", e);
             }
