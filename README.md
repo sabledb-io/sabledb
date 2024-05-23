@@ -228,6 +228,8 @@ and visit this page again in couple of days
 | slaveof | ✓ |✓ |   |
 | command | ✓ |✓ |   |
 | command docs | ✓ | x |   |
+| flushall | ✓ | ✓ |   |
+| flushdb | ✓ | ✓ |   |
 
 ### Transaction
 

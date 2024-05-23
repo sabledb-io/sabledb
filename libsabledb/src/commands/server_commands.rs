@@ -3,12 +3,12 @@ use crate::{
     check_args_count, check_value_type, command_arg_at,
     commands::Strings,
     commands::{HandleCommandResult, StringCommands},
-    metadata::CommonValueMetadata,
+    metadata::{CommonValueMetadata, KeyType},
     parse_string_to_number,
     server::ClientState,
     storage::StringsDb,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder,
 };
 
 use bytes::BytesMut;
@@ -153,8 +153,34 @@ impl ServerCommands {
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
-        let _db_id = client_state.database_id();
+        let db_id = client_state.database_id();
 
+        // In order to delete all the items owned by a given database, we only need to build the prefix:
+        // [ 1 | db_id ]
+        //   ^    ^
+        //   |    |__ The database ID
+        //   |
+        //   |____ Primary key type: always "1"
+        // Complex items will be deleted by the evictor thread
+        let mut start_key =
+            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut start_key);
+        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_u16(db_id);
+
+        // Now build the end key
+        let mut end_key =
+            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut end_key);
+        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_u16(db_id.saturating_add(1));
+
+        // Delete the database records
+        client_state
+            .database()
+            .delete_range(Some(&start_key), Some(&end_key))?;
+        let builder = RespBuilderV2::default();
+        builder.ok(response_buffer);
         Ok(())
     }
 }
@@ -169,7 +195,8 @@ impl ServerCommands {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{Client, ServerState};
+    use crate::{commands::ClientNextAction, Client, ServerState};
+    use test_case::test_case;
 
     use std::rc::Rc;
     use std::sync::Arc;
@@ -232,5 +259,62 @@ mod test {
                 assert!(raw_response.contains(&cmd_bulk_string));
             }
         });
+    }
+
+    #[test_case(vec![
+        ("select 0", "+OK\r\n"),
+        ("hset myhash_0 a 1 b 2 c 3", ":3\r\n"),
+        ("hset heroes_0 orisa tank rein tank tracer dps", ":3\r\n"),
+        ("select 1", "+OK\r\n"),
+        ("hset myhash_1 a 1 b 2 c 3", ":3\r\n"),
+        ("hset heroes_1 orisa tank rein tank tracer dps", ":3\r\n"),
+        ("flushall async", "+OK\r\n"),
+        ("select 0", "+OK\r\n"),
+        ("hgetall myhash_0", "*0\r\n"),
+        ("hgetall heroes_0", "*0\r\n"),
+        ("select 1", "+OK\r\n"),
+        ("hgetall myhash_1", "*0\r\n"),
+        ("hgetall heroes_1", "*0\r\n"),
+    ]; "test_flushall")]
+    #[test_case(vec![
+        ("select 0", "+OK\r\n"),
+        ("hset myhash_0 a 1 b 2 c 3", ":3\r\n"),
+        ("hset heroes_0 orisa tank rein tank tracer dps", ":3\r\n"),
+        ("select 1", "+OK\r\n"),
+        ("hset myhash_1 a 1 b 2 c 3", ":3\r\n"),
+        ("hset heroes_1 rein tank orisa tank tracer dps", ":3\r\n"),
+        ("select 0", "+OK\r\n"),
+        ("flushdb async", "+OK\r\n"),
+        ("hgetall myhash_0", "*0\r\n"),
+        ("hgetall heroes_0", "*0\r\n"),
+        ("select 1", "+OK\r\n"),
+        ("hgetall myhash_1", "*6\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n"),
+        ("hgetall heroes_1", "*6\r\n$5\r\norisa\r\n$4\r\ntank\r\n$4\r\nrein\r\n$4\r\ntank\r\n$6\r\ntracer\r\n$3\r\ndps\r\n"),
+    ]; "test_flushdb")]
+    fn test_server_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let client = Client::new(Arc::<ServerState>::default(), store, None);
+
+            for (args, expected_value) in args {
+                let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+                let args = args.split(' ').collect();
+                let cmd = Rc::new(RedisCommand::for_test(args));
+                match Client::handle_command(client.inner(), cmd, &mut sink.fp)
+                    .await
+                    .unwrap()
+                {
+                    ClientNextAction::NoAction => {
+                        assert_eq!(
+                            sink.read_all_as_string().await.unwrap().as_str(),
+                            expected_value
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
     }
 }

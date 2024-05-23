@@ -4,7 +4,6 @@ use crate::{
     LockManager, SableError, ServerOptions, StorageAdapter, WorkerHandle,
 };
 use bytes::BytesMut;
-use std::collections::HashSet;
 
 pub type EvictorReceiver = tokio::sync::mpsc::Receiver<EvictorMessage>;
 pub type EvictorSender = tokio::sync::mpsc::Sender<EvictorMessage>;
@@ -144,7 +143,7 @@ impl Evictor {
                     match msg {
                         Some(EvictorMessage::Evict) => {
                             // Do evict now
-                            tracing::debug!("Evicting records from the database");
+                            tracing::info!("Evicting records from the database");
                             Self::evict(&self.store, &self.server_options).await?;
                         }
                         Some(EvictorMessage::Shutdown) => {
@@ -216,7 +215,7 @@ impl Evictor {
         ];
 
         let mut items_evicted = 0usize;
-        let mut records_to_delete = HashSet::<BytesMut>::new();
+        let mut write_cache = DbWriteCache::with_storage(store);
         for (primary_type, sub_items) in &prefix_arr {
             let prefix = Bookkeeping::prefix(primary_type);
             let mut db_iter = store.create_iterator(&prefix)?;
@@ -243,8 +242,13 @@ impl Evictor {
                         RecordExistsResult::WrongType | RecordExistsResult::NotFound => {
                             for key_type in sub_items {
                                 // purge sub-items
-                                let count = Self::purge_subitems(store, &record, key_type)?;
-                                tracing::debug!(
+                                let count = Self::purge_subitems(
+                                    store,
+                                    &mut write_cache,
+                                    &record,
+                                    key_type,
+                                )?;
+                                tracing::info!(
                                     "Deleted {} zombie items of type {:?} belonged to: {:?}",
                                     count,
                                     key_type,
@@ -252,7 +256,13 @@ impl Evictor {
                                 );
                                 items_evicted = items_evicted.saturating_add(count);
                             }
-                            records_to_delete.insert(record.to_bytes());
+                            write_cache.delete(&record.to_bytes())?;
+
+                            // Avoid building too many records in memory
+                            // TODO: move this to the configuration
+                            if write_cache.len() > 1000 {
+                                write_cache.flush()?;
+                            }
                         }
                         RecordExistsResult::Found => {}
                     }
@@ -261,12 +271,8 @@ impl Evictor {
             }
         }
 
-        // Delete the defunct bookkeeping records
-        if !records_to_delete.is_empty() {
-            let mut write_cache = DbWriteCache::with_storage(store);
-            for rec in &records_to_delete {
-                write_cache.delete(rec)?;
-            }
+        // Apply any remaining deletions
+        if !write_cache.is_empty() {
             write_cache.flush()?;
         }
         Ok(items_evicted)
@@ -276,16 +282,19 @@ impl Evictor {
     /// key (hash that was overwritten, but its sub items are still there)
     fn purge_subitems(
         store: &StorageAdapter,
+        write_cache: &mut DbWriteCache,
         record: &Bookkeeping,
         key_type: &KeyType,
     ) -> Result<usize, SableError> {
-        let mut write_cache = DbWriteCache::with_storage(store);
         let mut prefix = BytesMut::new();
+
+        // Sub-items are always encoded with: the type (u8) followed by the instance UID (u64)
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
         builder.write_u8(*key_type as u8);
         builder.write_u64(record.uid());
 
         let mut db_iter = store.create_iterator(&prefix)?;
+        let mut count = 0usize;
         while db_iter.valid() {
             let Some((key, _)) = db_iter.key_value() else {
                 break;
@@ -296,11 +305,9 @@ impl Evictor {
             }
 
             write_cache.delete(&BytesMut::from(key))?;
+            count = count.saturating_add(1);
             db_iter.next();
         }
-
-        let count = write_cache.len();
-        write_cache.flush()?;
         Ok(count)
     }
 
@@ -317,7 +324,7 @@ impl Evictor {
             Some(md) => Ok(if md.value_type().eq(expected_value_type) {
                 RecordExistsResult::Found
             } else {
-                tracing::debug!(
+                tracing::info!(
                     "'{:?}' found but with wrong type. Expected {:?}, Found: {:?}",
                     user_key,
                     expected_value_type,
