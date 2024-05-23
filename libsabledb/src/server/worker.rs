@@ -262,7 +262,8 @@ impl Worker {
         // This method ("tick") is called per worker thread, so in order to avoid
         // too many flush calls, we use static atomic variable to store the last
         // flush timestamp
-        if (cur_ts - LAST_WAL_FLUSH.load(Ordering::Relaxed)) > wal_flush_interval {
+        let last_wal_flush = LAST_WAL_FLUSH.load(Ordering::Relaxed);
+        if cur_ts.saturating_sub(last_wal_flush) > wal_flush_interval {
             // update the last flush timestamp
             LAST_WAL_FLUSH.store(cur_ts, Ordering::Relaxed);
             if let Err(e) = self.store.flush_wal() {
