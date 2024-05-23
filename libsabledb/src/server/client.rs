@@ -570,7 +570,7 @@ impl Client {
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                 }
             }
-            // Client commands
+            // Server commands
             RedisCommandName::Client | RedisCommandName::Select => {
                 match ClientCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
@@ -581,7 +581,12 @@ impl Client {
                 }
                 ClientNextAction::NoAction
             }
-            RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf | RedisCommandName::Command => {
+            // Server commands
+            RedisCommandName::ReplicaOf
+            | RedisCommandName::SlaveOf
+            | RedisCommandName::Command
+            | RedisCommandName::FlushDb
+            | RedisCommandName::FlushAll => {
                 match ServerCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;

@@ -40,23 +40,14 @@ Add the ssh to git repo: `https://github.com/settings/keys`
 ## build sabledb
 
 ```bash
-git clone git@github.com:eranif/sabledb.git
+git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
 cargo build --release
 ```
 
-## Run sabledb (default setup: WAL enabled, 64MB of cache)
+## Run sabledb
 
 ```bash
-rm -fr sabledb.db/ && target/release/sabledb
-```
-
-# Build Redis (client machine)
-
-```bash
-cd ~
-git clone https://github.com/redis/redis.git
-cd redis
-make -j$(nproc)
-cd src/
+cp server.ini conf.ini
+rm -fr sabledb.db/ && target/release/sabledb conf.ini
 ```

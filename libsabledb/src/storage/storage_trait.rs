@@ -105,4 +105,17 @@ pub trait StorageTrait {
         &self,
         upper_bound: &BytesMut,
     ) -> Result<IteratorAdapter, SableError>;
+
+    /// Delete keys ranging from `[start, end)` (including `start` excluding `end`) from the database.
+    /// If `start` is `None`, we start deleting from the first record
+    /// If `end` is `None`, we delete until the last record
+    ///
+    /// This implies that calling `delete_range(None, None)` will delete all records from the database
+    ///
+    /// This operation is atomic
+    fn delete_range(
+        &self,
+        start: Option<&BytesMut>,
+        end: Option<&BytesMut>,
+    ) -> Result<(), SableError>;
 }

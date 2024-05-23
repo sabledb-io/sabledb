@@ -32,6 +32,12 @@ impl ServerCommands {
                 Self::command(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
+            RedisCommandName::FlushDb => {
+                Self::flushdb(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::FlushAll => {
+                Self::flushall(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non server command {}",
@@ -123,6 +129,32 @@ impl ServerCommands {
         }
 
         builder.ok(response_buffer);
+        Ok(())
+    }
+
+    /// `FLUSHALL [ASYNC | SYNC]`
+    /// Delete all the keys of all the existing databases, not just the currently selected one. This command never fails
+    /// `SableDb` always uses the `SYNC` method
+    async fn flushall(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        client_state.database().delete_range(None, None)?;
+        let builder = RespBuilderV2::default();
+        builder.ok(response_buffer);
+        Ok(())
+    }
+
+    async fn flushdb(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        let _db_id = client_state.database_id();
+
         Ok(())
     }
 }

@@ -85,6 +85,8 @@ pub enum RedisCommandName {
     SlaveOf,
     Info,
     Command,
+    FlushAll,
+    FlushDb,
     // Generic commands
     Ttl,
     Del,
@@ -1146,6 +1148,20 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Zscan)
                     .read_only()
                     .with_arity(-3),
+            ),
+            (
+                "flushall",
+                CommandMetadata::new(RedisCommandName::FlushAll)
+                    .write()
+                    .with_arity(-1)
+                    .no_transaction(),
+            ),
+            (
+                "flushdb",
+                CommandMetadata::new(RedisCommandName::FlushDb)
+                    .write()
+                    .with_arity(-1)
+                    .no_transaction(),
             ),
         ]);
 

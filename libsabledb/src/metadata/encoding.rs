@@ -12,6 +12,8 @@ pub enum ValueType {
     List = 1,
     Hash = 2,
     Zset = 3,
+    // Update this when adding new types
+    Last = 4,
 }
 
 impl Default for ValueType {

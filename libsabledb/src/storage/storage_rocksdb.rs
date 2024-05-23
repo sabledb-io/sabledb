@@ -340,6 +340,53 @@ impl StorageTrait for StorageRocksDb {
             iterator: StorageIterator::RocksDbReverse(iterator),
         })
     }
+
+    /// Delete range of `[start, end)` (including `start` excluding `end`)
+    fn delete_range(
+        &self,
+        start: Option<&BytesMut>,
+        end: Option<&BytesMut>,
+    ) -> Result<(), SableError> {
+        let snapshot = self.store.snapshot();
+
+        // Determine the start key
+        let start = if let Some(start) = start {
+            start.clone()
+        } else {
+            let mut iter = snapshot.raw_iterator();
+            iter.seek_to_first();
+            if !iter.valid() {
+                return Ok(());
+            }
+            let Some(start) = iter.key() else {
+                return Ok(());
+            };
+            BytesMut::from(start)
+        };
+
+        let end = if let Some(end) = end {
+            end.clone()
+        } else {
+            let mut iter = snapshot.raw_iterator();
+            iter.seek_to_last();
+            if !iter.valid() {
+                return Ok(());
+            }
+            let Some(end) = iter.key() else {
+                return Ok(());
+            };
+            let mut end = BytesMut::from(end);
+            // add random trailing character to be last key (this way we ensure that
+            // the last key is included in the deleted range)
+            end.extend_from_slice(b"1");
+            end
+        };
+
+        let mut updates = rocksdb::WriteBatch::default();
+        updates.delete_range(&start, &end);
+        self.store.write(updates)?;
+        Ok(())
+    }
 }
 
 #[allow(unsafe_code)]
@@ -360,6 +407,18 @@ mod tests {
     const KEY_EXISTED_BEFORE_TXN: &str = "key_exists";
     const KEY_DOES_NOT_EXIST: &str = "no_such_key";
     const DB_PATH: &str = "rocks_db_test.db";
+
+    /// Generate a fixed length key
+    fn generate_key(counter: &mut usize) -> BytesMut {
+        let key_len = 10usize;
+        let right_string = BytesMutUtils::from::<usize>(counter);
+        let mut left_string =
+            BytesMutUtils::from(&"0".repeat(key_len.saturating_sub(right_string.len())));
+        left_string.extend_from_slice(&right_string);
+        *counter = counter.saturating_add(1);
+        left_string
+    }
+
     #[test]
     #[serial_test::serial]
     fn test_should_fail_if_key_updated_while_in_txn() -> Result<(), SableError> {
@@ -538,5 +597,155 @@ mod tests {
             }
             println!("All records restored successfully");
         });
+    }
+
+    #[cfg(feature = "rocks_db")]
+    #[test]
+    fn test_delete_all_keys() {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_delete_all_keys.db");
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let db = crate::StorageRocksDb::open(open_params.clone()).expect("rockdb open");
+
+        // fill the database
+        println!("Populating db...");
+        for i in 0..10_000 {
+            let value = format!("value_string_{}", i);
+            let key = format!("key_{}", i);
+            db.put(
+                &BytesMut::from(&key[..]),
+                &BytesMut::from(&value[..]),
+                PutFlags::Override,
+            )
+            .unwrap();
+        }
+
+        println!("Deleting range...");
+        db.delete_range(None, None).unwrap();
+        println!("Deleting range...success");
+
+        println!("Checking db...");
+        for i in 0..10_000 {
+            let key = format!("key_{}", i);
+            assert_eq!(
+                db.contains(&BytesMut::from(&key[..])).unwrap(),
+                false,
+                "{}",
+                format!("{key} was found!"),
+            );
+        }
+        println!("Checking db...done");
+    }
+
+    #[cfg(feature = "rocks_db")]
+    #[test]
+    fn test_keys_by_range_with_end() {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_keys_by_range_with_end.db");
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let db = crate::StorageRocksDb::open(open_params.clone()).expect("rockdb open");
+
+        // fill the database
+        println!("Populating db...");
+        let mut counter = 0usize;
+        let value = format!("value");
+        for _ in 0..10_000 {
+            let key = generate_key(&mut counter);
+            db.put(&key, &BytesMut::from(&value[..]), PutFlags::Override)
+                .unwrap();
+        }
+
+        println!("Deleting range [None..5,000)");
+        counter = 5000usize;
+        let end_key = generate_key(&mut counter);
+        db.delete_range(None, Some(&end_key)).unwrap();
+        println!("Deleting range [None..5,000)...success");
+
+        println!("Checking db...");
+        counter = 0;
+        for _ in 0..5_000 {
+            let key = generate_key(&mut counter);
+            assert_eq!(
+                db.contains(&key).unwrap(),
+                false,
+                "{}",
+                format!("{:?} was found!", key),
+            );
+        }
+        println!("OK: Keys 0-4999 do not exist");
+        counter = 5000;
+        for _ in 5_000..10_000 {
+            let key = generate_key(&mut counter);
+            assert_eq!(
+                db.contains(&key).unwrap(),
+                true,
+                "{}",
+                format!("{:?} was not found!", key),
+            );
+        }
+        println!("OK: Keys 5000-9999 are present");
+        println!("Checking db...done");
+    }
+
+    #[cfg(feature = "rocks_db")]
+    #[test]
+    fn test_keys_by_range_with_start() {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_keys_by_range_with_start.db");
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let db = crate::StorageRocksDb::open(open_params.clone()).expect("rockdb open");
+
+        // fill the database
+        println!("Populating db...");
+        let mut counter = 0usize;
+        let value = format!("value");
+        for _ in 0..10_000 {
+            let key = generate_key(&mut counter);
+            db.put(&key, &BytesMut::from(&value[..]), PutFlags::Override)
+                .unwrap();
+        }
+
+        println!("Deleting range [None..5,000)");
+        counter = 5000usize;
+        let start_key = generate_key(&mut counter);
+        db.delete_range(Some(&start_key), None).unwrap();
+        println!("Deleting range [None..5,000)...success");
+
+        println!("Checking db...");
+        counter = 0;
+        for _ in 0..5_000 {
+            let key = generate_key(&mut counter);
+            assert_eq!(
+                db.contains(&key).unwrap(),
+                true,
+                "{}",
+                format!("{:?} was NOT found!", key),
+            );
+        }
+        println!("OK: Keys 0-4999 are present");
+        counter = 5000;
+        for _ in 5_000..10_000 {
+            let key = generate_key(&mut counter);
+            assert_eq!(
+                db.contains(&key).unwrap(),
+                false,
+                "{}",
+                format!("{:?} was found!", key),
+            );
+        }
+        println!("OK: Keys 5000-9999 do not exist");
+        println!("Checking db...done");
     }
 }
