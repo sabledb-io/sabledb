@@ -1,16 +1,18 @@
 use crate::{
     metadata::{Bookkeeping, KeyType, ValueType},
+    server::telemetry::Telemetry,
     storage::{DbWriteCache, GenericDb},
+    utils::ticker::{TickInterval, Ticker},
     LockManager, SableError, ServerOptions, StorageAdapter, WorkerHandle,
 };
 use bytes::BytesMut;
 
-pub type EvictorReceiver = tokio::sync::mpsc::Receiver<EvictorMessage>;
-pub type EvictorSender = tokio::sync::mpsc::Sender<EvictorMessage>;
+pub type CronReceiver = tokio::sync::mpsc::Receiver<CronMessage>;
+pub type CronSender = tokio::sync::mpsc::Sender<CronMessage>;
 
 #[derive(Default, Debug)]
 #[allow(dead_code)]
-pub enum EvictorMessage {
+pub enum CronMessage {
     /// Shutdown the replicator thread
     Shutdown,
     /// Perform eviction now
@@ -28,30 +30,30 @@ enum RecordExistsResult {
 }
 
 #[allow(dead_code)]
-pub struct Evictor {
+pub struct Cron {
     /// Shared server state
     server_options: ServerOptions,
     /// The store
     store: StorageAdapter,
     /// The channel on which this worker accepts commands
-    rx_channel: EvictorReceiver,
+    rx_channel: CronReceiver,
 }
 
 #[derive(Clone, Debug)]
 /// The `EvictorContext` allows other threads to communicate with the replicator
 /// thread using a dedicated channel
-pub struct EvictorContext {
+pub struct CronContext {
     runtime_handle: WorkerHandle,
-    worker_send_channel: EvictorSender,
+    worker_send_channel: CronSender,
 }
 
 #[allow(unsafe_code)]
-unsafe impl Send for EvictorContext {}
+unsafe impl Send for CronContext {}
 
 #[allow(dead_code)]
-impl EvictorContext {
+impl CronContext {
     /// Send message to the worker
-    pub async fn send(&self, message: EvictorMessage) -> Result<(), SableError> {
+    pub async fn send(&self, message: CronMessage) -> Result<(), SableError> {
         // before using the message, enter the worker's context
         let _guard = self.runtime_handle.enter();
         let _ = self.worker_send_channel.send(message).await;
@@ -59,7 +61,7 @@ impl EvictorContext {
     }
 
     /// Send message to the worker (non async)
-    pub fn send_sync(&self, message: EvictorMessage) -> Result<(), SableError> {
+    pub fn send_sync(&self, message: CronMessage) -> Result<(), SableError> {
         if let Err(e) = self.worker_send_channel.try_send(message) {
             return Err(SableError::OtherError(format!("{:?}", e)));
         }
@@ -67,14 +69,14 @@ impl EvictorContext {
     }
 }
 
-impl Evictor {
+impl Cron {
     /// Private method: create new eviction thread
     pub async fn new(
-        rx_channel: EvictorReceiver,
+        rx_channel: CronReceiver,
         server_options: ServerOptions,
         store: StorageAdapter,
     ) -> Self {
-        Evictor {
+        Cron {
             server_options,
             store,
             rx_channel,
@@ -86,15 +88,15 @@ impl Evictor {
     pub fn run(
         server_options: ServerOptions,
         store: StorageAdapter,
-    ) -> Result<EvictorContext, SableError> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<EvictorMessage>(100);
+    ) -> Result<CronContext, SableError> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<CronMessage>(100);
         let (handle_sender, handle_receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new()
-            .name("Evictor".to_string())
+            .name("Cron".to_string())
             .spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
-                    .thread_name("Evictor")
+                    .thread_name("Cron")
                     .build()
                     .unwrap_or_else(|e| {
                         panic!("failed to create tokio runtime. {:?}", e);
@@ -111,9 +113,9 @@ impl Evictor {
 
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, async move {
-                    let mut evictor = Evictor::new(rx, server_options.clone(), store.clone()).await;
-                    if let Err(e) = evictor.main_loop().await {
-                        tracing::error!("Evictor error. {:?}", e);
+                    let mut cron = Cron::new(rx, server_options.clone(), store.clone()).await;
+                    if let Err(e) = cron.main_loop().await {
+                        tracing::error!("Cron error. {:?}", e);
                     }
                 });
             });
@@ -125,7 +127,7 @@ impl Evictor {
             );
         });
 
-        Ok(EvictorContext {
+        Ok(CronContext {
             runtime_handle: thread_runtime_handle.clone(),
             worker_send_channel: tx,
         })
@@ -135,27 +137,39 @@ impl Evictor {
     async fn main_loop(&mut self) -> Result<(), SableError> {
         tracing::info!("Started");
 
-        let sleep_internal = self.server_options.maintenance.purge_zombie_records_secs as u64;
+        let mut evict_ticker = Ticker::new(TickInterval::Seconds(
+            self.server_options.cron.evict_orphan_records_secs as u64,
+        ));
+
+        let mut scan_ticker = Ticker::new(TickInterval::Seconds(
+            self.server_options.cron.scan_keys_secs as u64,
+        ));
+
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
                     // Check the message type
                     match msg {
-                        Some(EvictorMessage::Evict) => {
+                        Some(CronMessage::Evict) => {
                             // Do evict now
                             tracing::info!("Evicting records from the database");
                             Self::evict(&self.store, &self.server_options).await?;
                         }
-                        Some(EvictorMessage::Shutdown) => {
+                        Some(CronMessage::Shutdown) => {
                             tracing::info!("Exiting");
                             break;
                         }
                         None => {}
                     }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(sleep_internal)) => {
-                    // Evict
-                    Self::evict(&self.store, &self.server_options).await?;
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                    if evict_ticker.try_tick()? {
+                        Self::evict(&self.store, &self.server_options).await?;
+                    }
+
+                    if scan_ticker.try_tick()? {
+                        Self::scan(&self.store, &self.server_options).await?;
+                    }
                 }
             }
         }
@@ -335,6 +349,20 @@ impl Evictor {
             None => Ok(RecordExistsResult::NotFound),
         }
     }
+
+    /// Scan the database count keys / databases
+    async fn scan(
+        store: &StorageAdapter,
+        _server_options: &ServerOptions,
+    ) -> Result<(), SableError> {
+        let mut prefix = BytesMut::new();
+        let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
+        builder.write_u8(KeyType::PrimaryKey as u8);
+        let store_metadata = store.scan_for_metadata()?;
+        Telemetry::set_database_info(&store_metadata);
+        tracing::debug!("Scan output: {:?}", store_metadata);
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -419,7 +447,7 @@ mod tests {
             );
 
             let server_options = ServerOptions::default();
-            let items_evicted = Evictor::evict(&db, &server_options).await.unwrap();
+            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
             assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
         });
     }

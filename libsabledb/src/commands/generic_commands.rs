@@ -84,14 +84,14 @@ impl GenericCommands {
             if !client_state
                 .server_inner_state()
                 .options()
-                .maintenance
+                .cron
                 .instant_delete
             {
                 // trigger eviction
                 // TODO: do we want to trigger eviction for a single key only?
                 client_state
                     .server_inner_state()
-                    .send_evictor(crate::EvictorMessage::Evict)
+                    .send_evictor(crate::CronMessage::Evict)
                     .await?;
             }
         }

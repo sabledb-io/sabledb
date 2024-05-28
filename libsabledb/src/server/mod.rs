@@ -1,7 +1,7 @@
 mod client;
 mod client_state;
+mod cron_thread;
 mod error_codes;
-mod eviction_thread;
 #[allow(clippy::module_inception)]
 mod server;
 mod server_options;
@@ -14,8 +14,8 @@ pub type WorkerHandle = tokio::runtime::Handle;
 
 pub use client::*;
 pub use client_state::*;
+pub use cron_thread::*;
 pub use error_codes::*;
-pub use eviction_thread::*;
 pub use server::*;
 pub use server_options::*;
 pub use telemetry::*;

@@ -3,6 +3,7 @@ use crate::{
     SableError,
 };
 use bytes::BytesMut;
+use std::collections::HashSet;
 use std::path::Path;
 
 //pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
@@ -44,6 +45,30 @@ impl<'a> IteratorAdapter<'a> {
                 }
             }
         }
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct StorageMetadata {
+    keys: usize,
+    db_hash_set: HashSet<u16>,
+}
+
+impl StorageMetadata {
+    pub fn incr_keys(&mut self) {
+        self.keys = self.keys.saturating_add(1);
+    }
+
+    pub fn add_db(&mut self, db_id: u16) {
+        self.db_hash_set.insert(db_id);
+    }
+
+    pub fn keys_count(&self) -> usize {
+        self.keys
+    }
+
+    pub fn db_count(&self) -> usize {
+        self.db_hash_set.len()
     }
 }
 
@@ -118,4 +143,6 @@ pub trait StorageTrait {
         start: Option<&BytesMut>,
         end: Option<&BytesMut>,
     ) -> Result<(), SableError>;
+
+    fn scan_for_metadata(&self, metadata: &mut StorageMetadata) -> Result<(), SableError>;
 }

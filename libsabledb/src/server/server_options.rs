@@ -83,19 +83,22 @@ impl Default for ClientLimits {
 }
 
 #[derive(Clone, Debug)]
-pub struct Maintenance {
-    /// Purge zombie records every N seconds
-    pub purge_zombie_records_secs: usize,
+pub struct CronSettings {
+    /// Purge orphan records every N seconds
+    pub evict_orphan_records_secs: usize,
     /// Delete of a single item is always `O(1)` regardless of its type. If the type has children
     /// they are purged by the evictor background thread
     pub instant_delete: bool,
+    /// Scan the database and collect statistics every `scan_keys_secs` seconds
+    pub scan_keys_secs: usize,
 }
 
-impl Default for Maintenance {
+impl Default for CronSettings {
     fn default() -> Self {
-        Maintenance {
-            purge_zombie_records_secs: 60, // 1 minute
+        CronSettings {
+            evict_orphan_records_secs: 60, // 1 minute
             instant_delete: true,
+            scan_keys_secs: 30,
         }
     }
 }
@@ -106,7 +109,7 @@ pub struct ServerOptions {
     pub open_params: StorageOpenParams,
     pub replication_limits: ReplicationLimits,
     pub client_limits: ClientLimits,
-    pub maintenance: Maintenance,
+    pub cron: CronSettings,
 }
 
 impl ServerOptions {
@@ -235,14 +238,17 @@ impl ServerOptions {
             }
         }
 
-        if let Some(properties) = ini_file.section(Some("maintenance")) {
+        if let Some(properties) = ini_file.section(Some("cron")) {
             for (key, value) in properties.iter() {
                 match key {
-                    "purge_zombie_records_secs" => {
-                        options.maintenance.purge_zombie_records_secs = parse_number!(value, usize);
+                    "evict_orphan_records_secs" => {
+                        options.cron.evict_orphan_records_secs = parse_number!(value, usize);
                     }
                     "instant_delete" => {
-                        options.maintenance.instant_delete = ini_bool!(value);
+                        options.cron.instant_delete = ini_bool!(value);
+                    }
+                    "scan_keys_secs" => {
+                        options.cron.scan_keys_secs = parse_number!(value, usize);
                     }
                     _ => {}
                 }

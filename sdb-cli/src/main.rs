@@ -3,16 +3,63 @@ mod sdb_cli_options;
 use bytes::BytesMut;
 use clap::Parser;
 use sdb_cli_options::Options;
+use std::borrow::Cow::{self, Borrowed, Owned};
 use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 #[allow(unused_imports)]
 use redis::Commands;
+use rustyline::completion::FilenameCompleter;
+use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
+use rustyline::validate::MatchingBracketValidator;
+use rustyline::{Completer, Helper, Hinter, Validator};
 use rustyline::{Config, Editor};
 
 lazy_static::lazy_static! {
     static ref INDENT_NEEDED: AtomicBool = AtomicBool::new(true);
+}
+
+const ESC: &str = "\x1b";
+const RESET: &str = "\x1b[0m";
+const GREY: &str = "[1;30m";
+
+#[derive(Helper, Completer, Hinter, Validator)]
+struct MyHelper {
+    #[rustyline(Completer)]
+    completer: FilenameCompleter,
+    highlighter: MatchingBracketHighlighter,
+    #[rustyline(Validator)]
+    validator: MatchingBracketValidator,
+    #[rustyline(Hinter)]
+    hinter: (),
+    colored_prompt: String,
+}
+
+impl Highlighter for MyHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        default: bool,
+    ) -> Cow<'b, str> {
+        if default {
+            Borrowed(&self.colored_prompt)
+        } else {
+            Borrowed(prompt)
+        }
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Owned(ESC.to_owned() + GREY + hint + RESET)
+    }
+
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize) -> bool {
+        self.highlighter.highlight_char(line, pos)
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,15 +71,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Options::parse();
 
-    let (connection_string, prompt) = if args.tls {
+    let (connection_string, colored_prompt, base_prompt) = if args.tls {
+        let base_prompt = format!("🔒 {}:{} $ ", args.host, args.port);
         (
             format!("rediss://{}:{}/#insecure", args.host, args.port),
-            format!("{}:{} (TLS) $ ", args.host, args.port),
+            format!("{ESC}{GREY}{}{RESET}", &base_prompt),
+            base_prompt,
         )
     } else {
+        let base_prompt = format!("{}:{} $ ", args.host, args.port);
         (
             format!("redis://{}:{}", args.host, args.port),
-            format!("{}:{} $ ", args.host, args.port),
+            format!("{ESC}{GREY}{}{RESET}", &base_prompt),
+            base_prompt,
         )
     };
 
@@ -57,22 +108,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let command = vec![args.parameters.join(" ")];
         batch_execute(&mut conn, command)?;
     } else {
-        interactive_loop(prompt, conn)?;
+        interactive_loop(colored_prompt, base_prompt, conn)?;
     }
     Ok(())
 }
 
 /// Run `sdb` in an interactive mode
 fn interactive_loop(
-    prompt: String,
+    colored_prompt: String,
+    base_prompt: String,
     mut conn: redis::Connection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::builder().auto_add_history(true).build();
     let history =
         rustyline::sqlite_history::SQLiteHistory::open(config, ".sdb-cli-history.sqlite3")?;
-    let mut rl: Editor<(), _> = Editor::with_history(config, history)?;
+    let mut rl: Editor<MyHelper, _> = Editor::with_history(config, history)?;
+
+    let helper = MyHelper {
+        completer: FilenameCompleter::new(),
+        highlighter: MatchingBracketHighlighter::new(),
+        hinter: (),
+        colored_prompt: "".to_owned(),
+        validator: MatchingBracketValidator::new(),
+    };
+
+    rl.set_helper(Some(helper));
     loop {
-        let Ok(line) = rl.readline(prompt.as_str()) else {
+        rl.helper_mut().expect("No helper").colored_prompt = colored_prompt.clone();
+        let Ok(line) = rl.readline(&base_prompt) else {
             break;
         };
         batch_execute(&mut conn, vec![line])?;
@@ -114,7 +177,7 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
         Value::Data(ref val) => {
             let s = String::from_utf8_lossy(val);
             print_sequence(seq);
-            println_value(format!(r#""{}""#, s));
+            println_value(format!(r#"{}"#, s));
         }
         Value::Bulk(ref values) => {
             if values.is_empty() {

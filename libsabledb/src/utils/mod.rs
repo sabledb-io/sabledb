@@ -3,10 +3,10 @@ pub mod resp_builder_v2;
 pub mod resp_response_parser_v2;
 pub mod shard_locker;
 pub mod stopwatch;
-pub use resp_builder_v2::RespBuilderV2;
-
+pub mod ticker;
 pub use crate::server::{ParserError, SableError};
 pub use request_parser::*;
+pub use resp_builder_v2::RespBuilderV2;
 pub use resp_response_parser_v2::RedisObject;
 pub use shard_locker::*;
 pub use stopwatch::*;
@@ -175,7 +175,7 @@ impl TimeUtils {
         Ok(timestamp_ms.as_millis().try_into().unwrap_or(u64::MAX))
     }
 
-    /// Return milliseconds elapsed since EPOCH
+    /// Return microseconds elapsed since EPOCH
     pub fn epoch_micros() -> Result<u64, SableError> {
         let Ok(timestamp_ms) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else {
@@ -184,6 +184,17 @@ impl TimeUtils {
             ));
         };
         Ok(timestamp_ms.as_micros().try_into().unwrap_or(u64::MAX))
+    }
+
+    /// Return seconds elapsed since EPOCH
+    pub fn epoch_seconds() -> Result<u64, SableError> {
+        let Ok(timestamp_ms) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        else {
+            return Err(SableError::OtherError(
+                "failed to retrieve std::time::UNIX_EPOCH".to_string(),
+            ));
+        };
+        Ok(timestamp_ms.as_secs())
     }
 }
 

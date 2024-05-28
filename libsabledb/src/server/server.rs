@@ -6,7 +6,7 @@ use crate::{
     replication::{
         ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
     },
-    Evictor, EvictorContext, EvictorMessage, StorageAdapter,
+    Cron, CronContext, CronMessage, StorageAdapter,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -96,7 +96,7 @@ pub struct ServerState {
     opts: ServerOptions,
     role_primary: AtomicBool,
     replicator_context: Option<Arc<ReplicatorContext>>,
-    evictor_context: Option<Arc<EvictorContext>>,
+    evictor_context: Option<Arc<CronContext>>,
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
 }
 
@@ -153,7 +153,7 @@ impl ServerState {
         self
     }
 
-    pub fn set_evictor_context(mut self, evictor_context: EvictorContext) -> Self {
+    pub fn set_evictor_context(mut self, evictor_context: CronContext) -> Self {
         self.evictor_context = Some(Arc::new(evictor_context));
         self
     }
@@ -355,12 +355,12 @@ impl ServerState {
         }
         if let Some(evictor_context) = &self.evictor_context {
             tracing::info!("Sending shutdown command to evictor");
-            let _ = evictor_context.send_sync(EvictorMessage::Shutdown);
+            let _ = evictor_context.send_sync(CronMessage::Shutdown);
         }
     }
 
     // Sending command to the evictor thread usign async API
-    pub async fn send_evictor(&self, message: EvictorMessage) -> Result<(), SableError> {
+    pub async fn send_evictor(&self, message: CronMessage) -> Result<(), SableError> {
         if let Some(evictor_context) = &self.evictor_context {
             tracing::debug!("Sending {:?} command (async) to evictor", message);
             evictor_context.send(message).await?;
@@ -369,7 +369,7 @@ impl ServerState {
     }
 
     // Sending command to the evictor thread usign non async API
-    pub fn send_evictor_sync(&self, message: EvictorMessage) -> Result<(), SableError> {
+    pub fn send_evictor_sync(&self, message: CronMessage) -> Result<(), SableError> {
         if let Some(evictor_context) = &self.evictor_context {
             tracing::debug!("Sending {:?} command (sync) to evictor", message);
             evictor_context.send_sync(message)?;
@@ -385,7 +385,7 @@ impl Server {
         workers_count: usize,
     ) -> Result<Self, SableError> {
         let replicator_context = Replicator::run(opts.clone(), store.clone())?;
-        let evictor_content = Evictor::run(opts.clone(), store.clone())?;
+        let evictor_content = Cron::run(opts.clone(), store.clone())?;
         let state = Arc::new(
             ServerState::new()
                 .set_server_options(opts)

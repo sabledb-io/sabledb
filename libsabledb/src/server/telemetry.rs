@@ -1,6 +1,8 @@
-use crate::replication::ServerRole;
+use crate::{replication::ServerRole, storage::StorageMetadata};
+
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 thread_local! {
@@ -10,6 +12,10 @@ thread_local! {
 lazy_static::lazy_static! {
     /// Replication info goes into a separate data structure
     static ref REPLICATION_INFO: Mutex<ReplicationTelemetry> = Mutex::new(ReplicationTelemetry::default());
+    /// Number of keys in the storage. This parameter is updated by a background thread every N seconds
+    static ref KEYSPACE: AtomicU64 = AtomicU64::new(0);
+    /// Number of databases. This parameter is updated by a background thread every N seconds
+    static ref DB_COUNT: AtomicU64 = AtomicU64::new(0);
 }
 
 #[derive(Clone, Default, Debug)]
@@ -225,6 +231,17 @@ impl Telemetry {
         });
     }
 
+    pub fn set_database_info(db_info: &StorageMetadata) {
+        DB_COUNT.store(
+            db_info.db_count().try_into().unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        KEYSPACE.store(
+            db_info.keys_count().try_into().unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
     /// Clear the telemetry object
     pub fn clear() {
         WORKER_TELEMETRY.with(|telemetry| {
@@ -305,6 +322,11 @@ impl std::fmt::Display for Telemetry {
         lines.push("\n# Statistics".to_string());
         lines.push(format!("db_miss: {}", self.db_miss));
         lines.push(format!("db_hit: {}", self.db_hit));
+        lines.push("\n".to_string());
+
+        lines.push("\n# Keyspace".to_string());
+        lines.push(format!("keys: {}", KEYSPACE.load(Ordering::Relaxed)));
+        lines.push(format!("databases: {}", DB_COUNT.load(Ordering::Relaxed)));
         lines.push("\n".to_string());
 
         let as_str = lines.join("\n");

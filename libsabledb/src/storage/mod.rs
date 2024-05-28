@@ -19,7 +19,7 @@ pub use hash_db::{
 };
 pub use scan_cursor::ScanCursor;
 pub use storage_rocksdb::StorageRocksDb;
-pub use storage_trait::{StorageIterator, StorageTrait};
+pub use storage_trait::{StorageIterator, StorageMetadata, StorageTrait};
 pub use string_db::*;
 pub use write_cache::{DbCacheEntry, DbWriteCache};
 pub use zset_db::*;

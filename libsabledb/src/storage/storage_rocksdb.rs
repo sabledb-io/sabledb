@@ -2,7 +2,7 @@
 use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
     storage::{
-        storage_trait::{IteratorAdapter, StorageIterator},
+        storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
         PutFlags, StorageTrait,
     },
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
@@ -385,6 +385,38 @@ impl StorageTrait for StorageRocksDb {
         let mut updates = rocksdb::WriteBatch::default();
         updates.delete_range(&start, &end);
         self.store.write(updates)?;
+        Ok(())
+    }
+
+    /// Scan the database for metadata. This operation is lengthy, so make sure to execute it from a
+    /// separate thread
+    fn scan_for_metadata(&self, storage_metadata: &mut StorageMetadata) -> Result<(), SableError> {
+        let snapshot = self.store.snapshot();
+        let mut read_opts = rocksdb::ReadOptions::default();
+        read_opts.fill_cache(false);
+        let mut iter = snapshot.raw_iterator_opt(read_opts);
+
+        let mut prefix = BytesMut::new();
+        let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
+        builder.write_u8(crate::metadata::KeyType::PrimaryKey as u8);
+        iter.seek(&prefix);
+        while iter.valid() {
+            let Some(key) = iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            let mut reader = crate::U8ArrayReader::with_buffer(key);
+            let _ = reader.read_u8().ok_or(SableError::SerialisationError)?;
+            let db_id = reader.read_u16().ok_or(SableError::SerialisationError)?;
+
+            storage_metadata.incr_keys();
+            storage_metadata.add_db(db_id);
+            iter.next();
+        }
         Ok(())
     }
 }
