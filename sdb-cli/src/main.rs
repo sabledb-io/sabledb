@@ -22,7 +22,7 @@ lazy_static::lazy_static! {
 
 const ESC: &str = "\x1b";
 const RESET: &str = "\x1b[0m";
-const GREY: &str = "[1;30m";
+const GREY: &str = "[38;5;70m";
 
 #[derive(Helper, Completer, Hinter, Validator)]
 struct MyHelper {
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Options::parse();
 
     let (connection_string, colored_prompt, base_prompt) = if args.tls {
-        let base_prompt = format!("🔒 {}:{} $ ", args.host, args.port);
+        let base_prompt = format!("\u{1F5DD} {}:{} $ ", args.host, args.port);
         (
             format!("rediss://{}:{}/#insecure", args.host, args.port),
             format!("{ESC}{GREY}{}{RESET}", &base_prompt),
