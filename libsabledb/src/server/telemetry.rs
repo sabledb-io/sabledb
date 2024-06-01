@@ -100,8 +100,6 @@ impl std::fmt::Display for ReplicationTelemetry {
             }
             ServerRole::Replica => {}
         }
-
-        lines.push("\n".to_string());
         let as_str = lines.join("\n");
         write!(f, "{}", as_str)
     }
@@ -322,13 +320,10 @@ impl std::fmt::Display for Telemetry {
         lines.push("\n# Statistics".to_string());
         lines.push(format!("db_miss: {}", self.db_miss));
         lines.push(format!("db_hit: {}", self.db_hit));
-        lines.push("\n".to_string());
 
         lines.push("\n# Keyspace".to_string());
         lines.push(format!("keys: {}", KEYSPACE.load(Ordering::Relaxed)));
         lines.push(format!("databases: {}", DB_COUNT.load(Ordering::Relaxed)));
-        lines.push("\n".to_string());
-
         let as_str = lines.join("\n");
 
         write!(
