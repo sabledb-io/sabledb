@@ -300,7 +300,9 @@ impl Client {
                         }
                     },
                     Err(e) => {
-                        client_state.warn(&format!(
+                        // the command might contain info regarding the request, so log it in
+                        // a debug verbosity
+                        client_state.debug(&format!(
                             "failed to process command: {:?} error: {:?}",
                             command, e
                         ));

@@ -27,9 +27,20 @@ impl WorkerManager {
         store: StorageAdapter,
         server_state: Arc<ServerState>,
     ) -> Result<Self, SableError> {
+        let core_ids = core_affinity::get_core_ids();
+        let count = match &core_ids {
+            Some(core_ids) => std::cmp::min(core_ids.len(), count),
+            None => count,
+        };
+
         let mut workers = Vec::<WorkerContext>::with_capacity(count);
-        for _ in 0..count {
-            let worker_context = Worker::run(server_state.clone(), store.clone())?;
+        for index in 0..count {
+            let core_id = if let Some(core_ids) = &core_ids {
+                core_ids.get(index).cloned()
+            } else {
+                None
+            };
+            let worker_context = Worker::run(server_state.clone(), store.clone(), core_id)?;
             workers.push(worker_context);
         }
 

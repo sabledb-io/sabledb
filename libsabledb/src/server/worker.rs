@@ -81,6 +81,7 @@ impl Worker {
     pub fn run(
         server_state: Arc<ServerState>,
         store: StorageAdapter,
+        core_id: Option<core_affinity::CoreId>,
     ) -> Result<WorkerContext, SableError> {
         let (tx, rx) = tokio::sync::mpsc::channel::<WorkerMessage>(1000); // channel with back-pressure of 1000
         let (handle_sender, handle_receiver) = std::sync::mpsc::channel();
@@ -96,8 +97,22 @@ impl Worker {
                         panic!("failed to create tokio runtime. {:?}", e);
                     });
 
-                // Register this worker thread with the server
                 let thread_id = std::thread::current().id();
+
+                // Pin this thread to the given core
+                if let Some(core_id) = core_id {
+                    if !core_affinity::set_for_current(core_id) {
+                        tracing::warn!(
+                            "Failed to pin thread {:?} to core {:?}",
+                            thread_id,
+                            core_id
+                        );
+                    } else {
+                        tracing::info!("Thread {:?} is pinned to core {:?}", thread_id, core_id);
+                    }
+                }
+
+                // Register this worker thread with the server
                 server_state.add_worker_tx_channel(thread_id, tx_clone);
 
                 // send the current runtime handle to the calling thread
