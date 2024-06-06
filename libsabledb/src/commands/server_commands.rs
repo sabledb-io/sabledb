@@ -38,6 +38,9 @@ impl ServerCommands {
             RedisCommandName::FlushAll => {
                 Self::flushall(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::DbSize => {
+                Self::dbsize(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non server command {}",
@@ -144,6 +147,21 @@ impl ServerCommands {
         client_state.database().delete_range(None, None)?;
         let builder = RespBuilderV2::default();
         builder.ok(response_buffer);
+        Ok(())
+    }
+
+    /// `DBSIZE`
+    /// Return the number of keys in the currently-selected database
+    async fn dbsize(
+        client_state: Rc<ClientState>,
+        _command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        let builder = RespBuilderV2::default();
+        builder.number_usize(
+            response_buffer,
+            Telemetry::db_key_count(client_state.database_id()),
+        );
         Ok(())
     }
 

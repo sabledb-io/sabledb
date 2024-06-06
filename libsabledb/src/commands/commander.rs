@@ -87,6 +87,7 @@ pub enum RedisCommandName {
     Command,
     FlushAll,
     FlushDb,
+    DbSize,
     // Generic commands
     Ttl,
     Del,
@@ -1162,6 +1163,12 @@ impl Default for CommandsManager {
                     .write()
                     .with_arity(-1)
                     .no_transaction(),
+            ),
+            (
+                "dbsize",
+                CommandMetadata::new(RedisCommandName::DbSize)
+                    .read_only()
+                    .with_arity(1),
             ),
         ]);
 

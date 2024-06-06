@@ -413,8 +413,7 @@ impl StorageTrait for StorageRocksDb {
             let _ = reader.read_u8().ok_or(SableError::SerialisationError)?;
             let db_id = reader.read_u16().ok_or(SableError::SerialisationError)?;
 
-            storage_metadata.incr_keys();
-            storage_metadata.add_db(db_id);
+            storage_metadata.incr_keys(db_id);
             iter.next();
         }
         Ok(())

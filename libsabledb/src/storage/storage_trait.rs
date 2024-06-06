@@ -3,7 +3,7 @@ use crate::{
     SableError,
 };
 use bytes::BytesMut;
-use std::collections::HashSet;
+use nohash_hasher::IntMap;
 use std::path::Path;
 
 //pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
@@ -50,25 +50,33 @@ impl<'a> IteratorAdapter<'a> {
 
 #[derive(Default, Clone, Debug)]
 pub struct StorageMetadata {
-    keys: usize,
-    db_hash_set: HashSet<u16>,
+    db_hash_map: IntMap<u16, usize>,
 }
 
 impl StorageMetadata {
-    pub fn incr_keys(&mut self) {
-        self.keys = self.keys.saturating_add(1);
+    /// Incremenet the number of keys for database `db_id`
+    pub fn incr_keys(&mut self, db_id: u16) {
+        self.db_hash_map
+            .entry(db_id)
+            .and_modify(|val| {
+                *val = val.saturating_add(1);
+            })
+            .or_insert(1);
     }
 
-    pub fn add_db(&mut self, db_id: u16) {
-        self.db_hash_set.insert(db_id);
-    }
-
-    pub fn keys_count(&self) -> usize {
-        self.keys
+    pub fn total_key_count(&self) -> usize {
+        self.db_hash_map.values().sum()
     }
 
     pub fn db_count(&self) -> usize {
-        self.db_hash_set.len()
+        self.db_hash_map.len()
+    }
+
+    pub fn db_keys(&self, db_id: u16) -> usize {
+        match self.db_hash_map.get(&db_id) {
+            Some(v) => *v,
+            None => 0,
+        }
     }
 }
 

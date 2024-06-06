@@ -586,7 +586,8 @@ impl Client {
             | RedisCommandName::SlaveOf
             | RedisCommandName::Command
             | RedisCommandName::FlushDb
-            | RedisCommandName::FlushAll => {
+            | RedisCommandName::FlushAll
+            | RedisCommandName::DbSize => {
                 match ServerCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;

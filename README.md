@@ -230,6 +230,7 @@ and visit this page again in couple of days
 | command docs | ✓ | x |   |
 | flushall | ✓ | ✓ |   |
 | flushdb | ✓ | ✓ |   |
+| dbsize | ✓ | ✓ | Data is accurate for the last scan performed on the storage |
 
 ### Transaction
 
