@@ -10,5 +10,6 @@ libsabledb = { path = "../libsabledb" }
 clap = { version = "4", features = ["derive"] }
 tracing = { version = "0", features = ["log"] }
 tracing-subscriber = "0"
+tracing-appender = "0"
 ctrlc = "3.4.0"
 rclite = "0.2.4"

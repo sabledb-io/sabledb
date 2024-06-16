@@ -27,6 +27,9 @@ pub struct GeneralSettings {
     pub key: Option<PathBuf>,
     /// Configuration files directory. Default: current process working directory
     pub config_dir: Option<PathBuf>,
+    /// Log directory. If set to `None`, logs are written into `stdout`
+    /// SableDb uses an hourly rotating logs
+    pub logdir: Option<PathBuf>,
 }
 
 impl Default for GeneralSettings {
@@ -40,6 +43,7 @@ impl Default for GeneralSettings {
             key: None,
             config_dir: None,
             replication_listen_ip: "127.0.0.1".to_string(),
+            logdir: None,
         }
     }
 }
@@ -203,6 +207,7 @@ impl ServerOptions {
                             }
                         }
                     }
+                    "logdir" => options.general_settings.logdir = Some(PathBuf::from(value)),
                     "cert" => options.general_settings.cert = Some(PathBuf::from(value)),
                     "key" => options.general_settings.key = Some(PathBuf::from(value)),
                     _ => {}

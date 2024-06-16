@@ -11,11 +11,18 @@ fn main() -> Result<(), SableError> {
         ServerOptions::default()
     };
 
-    tracing_subscriber::fmt::fmt()
+    let fmtr = tracing_subscriber::fmt::fmt()
         .with_thread_names(true)
         .with_thread_ids(true)
-        .with_max_level(options.general_settings.log_level)
-        .init();
+        .with_max_level(options.general_settings.log_level);
+
+    if let Some(logdir) = &options.general_settings.logdir {
+        fmtr.with_writer(tracing_appender::rolling::hourly(logdir, "sabledb.log"))
+            .with_ansi(false) // No need for colours when using file
+            .init();
+    } else {
+        fmtr.init();
+    }
 
     // install our custom panic! handler
     std::panic::set_hook(Box::new(|e| {
