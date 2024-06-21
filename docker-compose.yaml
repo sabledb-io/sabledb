@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  sabledb:
+    image: sabledb:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "6379:6379"
+    volumes:
+      - sabledb_data:/var/lib/sabledb/data
+      - ./server.ini:/etc/sabledb/conf/server.ini
+    entrypoint: ["sabledb", "/etc/sabledb/conf/server.ini"]
+    restart: unless-stopped
+
+volumes:
+  sabledb_data: {}
