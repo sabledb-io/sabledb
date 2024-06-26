@@ -11,7 +11,7 @@ use crate::{
     types::List,
     utils::RespBuilderV2,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder,
 };
 
 use bytes::BytesMut;
@@ -39,6 +39,9 @@ impl GenericCommands {
             }
             RedisCommandName::Expire => {
                 Self::expire(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Keys => {
+                Self::keys(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -249,6 +252,71 @@ impl GenericCommands {
         }
         Ok(())
     }
+
+    /// Returns all keys for the current database that matches a given pattern
+    async fn keys(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        // NOTE: this function iterate through all keys in the database and
+        // applies glob search pattern on each item. In order to implement this
+        // in a single pass, we build the output in the memory. We might consider
+        // changing this in the future (configurable?) to do this in 2 passes:
+        // the first pass will count the number of matches and the second pass
+        // will stream the results
+        check_args_count!(command, 2, response_buffer);
+
+        let pattern = command_arg_at!(command, 1);
+
+        // Build the prefix matcher
+        let matcher =
+            wildmatch::WildMatch::new(BytesMutUtils::to_string(pattern).to_string().as_str());
+
+        // create iterator
+        let mut prefix = BytesMut::new();
+        let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
+        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_u16(client_state.database_id());
+        let mut dbiter = client_state.database().create_iterator(&prefix)?;
+        let mut matching_keys = Vec::<BytesMut>::new();
+        while dbiter.valid() {
+            let Some(key) = dbiter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            // Since this operation can be lengthy, yield back to the tokio
+            // runtime after every 1000 keys added to the result set
+            if matching_keys.len().rem_euclid(1000) == 0 {
+                tokio::task::yield_now().await;
+            }
+
+            if key.len() < PrimaryKeyMetadata::SIZE {
+                return Err(SableError::OtherError(format!(
+                    "Invalid key size read. Key size is expected to be at least {} bytes",
+                    PrimaryKeyMetadata::SIZE
+                )));
+            }
+
+            // get the user key from the primary key
+            let user_key = &key[PrimaryKeyMetadata::SIZE..];
+            if matcher.matches(BytesMutUtils::to_string(user_key).as_str()) {
+                matching_keys.push(BytesMut::from(user_key));
+            }
+            dbiter.next();
+        }
+
+        let builder = RespBuilderV2::default();
+        builder.add_array_len(response_buffer, matching_keys.len());
+        for key in &matching_keys {
+            builder.add_bulk_string(response_buffer, key);
+        }
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -267,61 +335,77 @@ mod test {
     use test_case::test_case;
 
     #[test_case(vec![
-        (vec!["set", "mystr", "myvalue"], "+OK\r\n"),
-        (vec!["set", "mystr2", "myvalue2"], "+OK\r\n"),
-        (vec!["lpush", "mylist_1", "a", "b", "c"], ":3\r\n"),
-        (vec!["lpush", "mylist_2", "a", "b", "c"], ":3\r\n"),
-        (vec!["del", "mystr", "mystr2", "mylist_1", "mylist_2"], ":4\r\n"),
-        (vec!["get", "mystr"], "$-1\r\n"),
-        (vec!["get", "mystr2"], "$-1\r\n"),
-        (vec!["llen", "mylist_1"], ":0\r\n"),
-        (vec!["llen", "mylist_2"], ":0\r\n"),
-        (vec!["del", "mylist_2"], ":0\r\n"),
-    ], "test_del"; "test_del")]
+        ("set mystr myvalue", "+OK\r\n"),
+        ("set mystr2 myvalue2", "+OK\r\n"),
+        ("lpush mylist_1 a b c", ":3\r\n"),
+        ("lpush mylist_2 a b c", ":3\r\n"),
+        ("del mystr mystr2 mylist_1 mylist_2", ":4\r\n"),
+        ("get mystr", "$-1\r\n"),
+        ("get mystr2", "$-1\r\n"),
+        ("llen mylist_1", ":0\r\n"),
+        ("llen mylist_2", ":0\r\n"),
+        ("del mylist_2", ":0\r\n"),
+    ]; "test_del")]
     #[test_case(vec![
-        (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
-        (vec!["set", "mykey2", "myvalue1"], "+OK\r\n"),
-        (vec!["exists", "mykey1", "mykey2"], ":2\r\n"),
-        (vec!["exists", "mykey1", "mykey2", "mykey1"], ":3\r\n"),
-        (vec!["exists", "no_such_key", "mykey2", "mykey1"], ":2\r\n"),
-    ], "test_exists"; "test_exists")]
+        ("set mykey1 myvalue", "+OK\r\n"),
+        ("set mykey2 myvalue1", "+OK\r\n"),
+        ("exists mykey1 mykey2", ":2\r\n"),
+        ("exists mykey1 mykey2 mykey1", ":3\r\n"),
+        ("exists no_such_key mykey2 mykey1", ":2\r\n"),
+    ]; "test_exists")]
     #[test_case(vec![
-        (vec!["set", "mykey1", "myvalue"], "+OK\r\n"),
-        (vec!["expire", "mykey1", "100"], ":1\r\n"),
-        (vec!["get", "mykey1"], "$7\r\nmyvalue\r\n"),
-        (vec!["set", "mykey2", "myvalue", "EX", "100"], "+OK\r\n"),
-        (vec!["expire", "mykey2", "90", "GT"], ":0\r\n"),
-        (vec!["expire", "mykey2", "120", "GT"], ":1\r\n"),
-        (vec!["get", "mykey2"], "$7\r\nmyvalue\r\n"),
-        (vec!["set", "mykey3", "myvalue", "EX", "100"], "+OK\r\n"),
-        (vec!["expire", "mykey3", "123", "LT"], ":0\r\n"),
-        (vec!["expire", "mykey3", "90", "LT"], ":1\r\n"),
-        (vec!["get", "mykey3"], "$7\r\nmyvalue\r\n"),
-        (vec!["set", "mykey4", "myvalue", "EX", "100"], "+OK\r\n"),
-        (vec!["expire", "mykey4", "120", "NX"], ":0\r\n"),
-        (vec!["expire", "mykey4", "120", "XX"], ":1\r\n"),
-        (vec!["set", "mykey5", "myvalue"], "+OK\r\n"),
-        (vec!["expire", "mykey5", "120", "XX"], ":0\r\n"),
-        (vec!["expire", "mykey5", "120", "NX"], ":1\r\n"),
-    ], "test_expire"; "test_expire")]
-    fn test_generic_commands(
-        args_vec: Vec<(Vec<&'static str>, &'static str)>,
-        test_name: &str,
-    ) -> Result<(), SableError> {
+        ("set mykey1 myvalue", "+OK\r\n"),
+        ("expire mykey1 100", ":1\r\n"),
+        ("get mykey1", "$7\r\nmyvalue\r\n"),
+        ("set mykey2 myvalue EX 100", "+OK\r\n"),
+        ("expire mykey2 90 GT", ":0\r\n"),
+        ("expire mykey2 120 GT", ":1\r\n"),
+        ("get mykey2", "$7\r\nmyvalue\r\n"),
+        ("set mykey3 myvalue EX 100", "+OK\r\n"),
+        ("expire mykey3 123 LT", ":0\r\n"),
+        ("expire mykey3 90 LT", ":1\r\n"),
+        ("get mykey3", "$7\r\nmyvalue\r\n"),
+        ("set mykey4 myvalue EX 100", "+OK\r\n"),
+        ("expire mykey4 120 NX", ":0\r\n"),
+        ("expire mykey4 120 XX", ":1\r\n"),
+        ("set mykey5 myvalue", "+OK\r\n"),
+        ("expire mykey5 120 XX", ":0\r\n"),
+        ("expire mykey5 120 NX", ":1\r\n"),
+    ]; "test_expire")]
+    #[test_case(vec![
+        ("select 0", "+OK\r\n"),
+        ("set k1 b", "+OK\r\n"),
+        ("set k2 d", "+OK\r\n"),
+        ("set k3 f", "+OK\r\n"),
+        ("hset myhash 1 2 3 4 5 6", ":3\r\n"),
+        ("keys *", "*4\r\n$2\r\nk2\r\n$2\r\nk3\r\n$6\r\nmyhash\r\n$2\r\nk1\r\n"),
+        ("select 1", "+OK\r\n"),
+        ("keys *", "*0\r\n"),
+        ("keys", "-ERR wrong number of arguments for 'keys' command\r\n"),
+        ("select 0", "+OK\r\n"),
+        ("keys k*", "*3\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk1\r\n"),
+        ("keys ??", "*3\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk1\r\n"),
+        ("keys myhash", "*1\r\n$6\r\nmyhash\r\n"),
+    ]; "test_keys")]
+    fn test_generic_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            for (args, expected_value) in args_vec {
-                let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
+            for (args, expected_value) in args {
+                let mut sink = crate::io::FileResponseSink::new().await.unwrap();
+                let args = args.split(' ').collect();
                 let cmd = Rc::new(RedisCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
                 {
                     ClientNextAction::NoAction => {
-                        assert_eq!(sink.read_all().await.as_str(), expected_value);
+                        assert_eq!(
+                            sink.read_all_as_string().await.unwrap().as_str(),
+                            expected_value
+                        );
                     }
                     _ => {}
                 }

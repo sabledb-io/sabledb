@@ -93,6 +93,7 @@ pub enum RedisCommandName {
     Del,
     Exists,
     Expire,
+    Keys,
     // Hash commands
     Hset,
     Hget,
@@ -763,6 +764,15 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Expire)
                     .write()
                     .with_arity(-3),
+            ),
+            (
+                "keys",
+                CommandMetadata::new(RedisCommandName::Keys)
+                    .read_only()
+                    .with_arity(2)
+                    .with_last_key(0)
+                    .with_first_key(0)
+                    .with_step(0),
             ),
             // Hash commands
             (

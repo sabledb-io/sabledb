@@ -46,6 +46,14 @@ impl<'a> IteratorAdapter<'a> {
             }
         }
     }
+
+    /// Return the key only. Use this in case you just need the key
+    pub fn key(&self) -> Option<&[u8]> {
+        match &self.iterator {
+            StorageIterator::RocksDbReverse(rocksdb_iter)
+            | StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.key(),
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug)]

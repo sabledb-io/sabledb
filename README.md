@@ -217,6 +217,7 @@ and visit this page again in couple of days
 | ttl | ✓ |✓ |   |
 | exists | ✓ |✓ |   |
 | expire | ✓ |✓ |   |
+| keys | ✓ |x | Supported wildcard matches only ( `?` and `*` )  |
 
 ### Server management commands
 

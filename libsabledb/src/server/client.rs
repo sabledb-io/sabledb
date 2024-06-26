@@ -503,7 +503,8 @@ impl Client {
             RedisCommandName::Ttl
             | RedisCommandName::Del
             | RedisCommandName::Exists
-            | RedisCommandName::Expire => {
+            | RedisCommandName::Expire
+            | RedisCommandName::Keys => {
                 match GenericCommands::handle_command(client_state.clone(), command.clone(), tx)
                     .await?
                 {
