@@ -357,7 +357,7 @@ impl Cron {
     ) -> Result<(), SableError> {
         let mut prefix = BytesMut::new();
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_key_type(KeyType::PrimaryKey);
         let store_metadata = store.scan_for_metadata()?;
         tracing::debug!("Scan output: {:?}", store_metadata);
         Telemetry::set_database_info(store_metadata);

@@ -183,14 +183,14 @@ impl ServerCommands {
         let mut start_key =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut start_key);
-        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_key_type(KeyType::PrimaryKey);
         builder.write_u16(db_id);
 
         // Now build the end key
         let mut end_key =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u16>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut end_key);
-        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_key_type(KeyType::PrimaryKey);
         builder.write_u16(db_id.saturating_add(1));
 
         // Delete the database records

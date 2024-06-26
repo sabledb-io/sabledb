@@ -276,7 +276,7 @@ impl GenericCommands {
         // create iterator
         let mut prefix = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_u8(KeyType::PrimaryKey as u8);
+        builder.write_key_type(KeyType::PrimaryKey);
         builder.write_u16(client_state.database_id());
         let mut dbiter = client_state.database().create_iterator(&prefix)?;
         let mut matching_keys = Vec::<BytesMut>::new();

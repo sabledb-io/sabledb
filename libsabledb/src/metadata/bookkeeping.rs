@@ -61,7 +61,7 @@ impl Bookkeeping {
     pub fn to_bytes(&self) -> BytesMut {
         let mut buffer = BytesMut::with_capacity(Self::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        builder.write_u8(self.struct_type as u8);
+        builder.write_key_type(self.struct_type);
         builder.write_u8(self.value_type as u8);
         builder.write_u16(self.db_id);
         builder.write_u64(self.uid);

@@ -4,7 +4,10 @@ pub mod resp_response_parser_v2;
 pub mod shard_locker;
 pub mod stopwatch;
 pub mod ticker;
-pub use crate::server::{ParserError, SableError};
+pub use crate::{
+    metadata::KeyType,
+    server::{ParserError, SableError},
+};
 pub use request_parser::*;
 pub use resp_builder_v2::RespBuilderV2;
 pub use resp_response_parser_v2::RedisObject;
@@ -450,6 +453,10 @@ impl<'a> U8ArrayBuilder<'a> {
 
     pub fn write_u8(&mut self, val: u8) {
         self.buffer.extend_from_slice(&u8::to_be_bytes(val));
+    }
+
+    pub fn write_key_type(&mut self, val: KeyType) {
+        self.buffer.extend_from_slice(&u8::to_be_bytes(val as u8));
     }
 
     pub fn write_u16(&mut self, val: u16) {

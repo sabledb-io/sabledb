@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use crate::{
+    metadata::KeyType,
     replication::{StorageUpdates, StorageUpdatesIterItem},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
@@ -398,7 +399,7 @@ impl StorageTrait for StorageRocksDb {
 
         let mut prefix = BytesMut::new();
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_u8(crate::metadata::KeyType::PrimaryKey as u8);
+        builder.write_key_type(KeyType::PrimaryKey);
         iter.seek(&prefix);
         while iter.valid() {
             let Some(key) = iter.key() else {
