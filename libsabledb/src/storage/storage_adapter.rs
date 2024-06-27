@@ -1,9 +1,6 @@
 use crate::{
     replication::StorageUpdates,
-    storage::{
-        storage_trait::{IteratorAdapter, StorageMetadata},
-        StorageTrait,
-    },
+    storage::{storage_trait::IteratorAdapter, StorageTrait},
     utils, StorageRocksDb,
 };
 
@@ -610,21 +607,6 @@ impl StorageAdapter {
         };
 
         db.delete_range(start, end)
-    }
-
-    /// Scan the storage collecting metadata
-    pub fn scan_for_metadata(&self) -> Result<StorageMetadata, SableError> {
-        let Some(db) = &self.store else {
-            return Err(SableError::OtherError("Database is not opened".to_string()));
-        };
-        if self.txn.is_some() {
-            return Err(SableError::OtherError(
-                "`scan_for_metadata` can not be used within a txn".into(),
-            ));
-        };
-        let mut storage_metadata = StorageMetadata::default();
-        db.scan_for_metadata(&mut storage_metadata)?;
-        Ok(storage_metadata)
     }
 }
 

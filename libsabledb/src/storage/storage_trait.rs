@@ -159,6 +159,4 @@ pub trait StorageTrait {
         start: Option<&BytesMut>,
         end: Option<&BytesMut>,
     ) -> Result<(), SableError>;
-
-    fn scan_for_metadata(&self, metadata: &mut StorageMetadata) -> Result<(), SableError>;
 }

@@ -1,9 +1,10 @@
 use crate::{
     metadata::{Bookkeeping, KeyType, ValueType},
     server::telemetry::Telemetry,
-    storage::{DbWriteCache, GenericDb},
+    storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
-    LockManager, SableError, ServerOptions, StorageAdapter, WorkerHandle,
+    LockManager, SableError, ServerOptions, StorageAdapter, U8ArrayBuilder, U8ArrayReader,
+    WorkerHandle,
 };
 use bytes::BytesMut;
 
@@ -355,12 +356,36 @@ impl Cron {
         store: &StorageAdapter,
         _server_options: &ServerOptions,
     ) -> Result<(), SableError> {
+        // Scan of all keys, regardless of their database association
         let mut prefix = BytesMut::new();
-        let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
         builder.write_key_type(KeyType::PrimaryKey);
-        let store_metadata = store.scan_for_metadata()?;
-        tracing::debug!("Scan output: {:?}", store_metadata);
-        Telemetry::set_database_info(store_metadata);
+        let mut db_iter = store.create_iterator(&prefix)?;
+        let mut storage_metadata = StorageMetadata::default();
+        while db_iter.valid() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            // Extract the database ID from the key
+            let mut reader = U8ArrayReader::with_buffer(key);
+
+            // Skip the primary key encoding
+            reader.advance(std::mem::size_of::<KeyType>())?;
+
+            // Read the database ID
+            let db_id = reader.read_u16().ok_or(SableError::SerialisationError)?;
+
+            storage_metadata.incr_keys(db_id);
+            db_iter.next();
+        }
+
+        tracing::debug!("Scan output: {:?}", storage_metadata);
+        Telemetry::set_database_info(storage_metadata);
         Ok(())
     }
 }

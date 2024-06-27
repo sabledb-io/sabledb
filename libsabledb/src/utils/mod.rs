@@ -381,6 +381,21 @@ impl<'a> U8ArrayReader<'a> {
         Some(u8::from_be_bytes(arr))
     }
 
+    /// Advance the buffer pointer by `count` bytes
+    pub fn advance(&mut self, count: usize) -> Result<(), SableError> {
+        if self.buffer.len().saturating_sub(self.consumed) < count {
+            return Err(SableError::OtherError(format!(
+                "Can't advance buffer by {} bytes. Buffer length is: {}, current pos: {}",
+                count,
+                self.buffer.len(),
+                self.consumed,
+            )));
+        }
+
+        self.consumed = self.consumed.saturating_add(count);
+        Ok(())
+    }
+
     pub fn read_u16(&mut self) -> Option<u16> {
         if self.buffer.len().saturating_sub(self.consumed) < U8ArrayReader::U16_SIZE {
             return None;
