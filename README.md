@@ -53,7 +53,6 @@ $target/release/sabledb [sabledb.ini]
 ## Docker
 
 ```bash
-cd docker
 docker build -t sabledb:latest .
 docker run -p 6379:6379 sabledb:latest
 ```
@@ -61,7 +60,6 @@ docker run -p 6379:6379 sabledb:latest
 ### Docker compose
 
 ```bash
-cd docker
 docker compose up --build
 ```
 
