@@ -9,9 +9,8 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - sabledb_data:/var/lib/sabledb/data
-      - ./server.ini:/etc/sabledb/conf/server.ini
-    entrypoint: ["sabledb", "/etc/sabledb/conf/server.ini"]
+      - sabledb_data:/var/lib/sabledb/data/sabledb.db
+    entrypoint: ["sabledb", "/etc/sabledb/server.ini"]
     restart: unless-stopped
 
 volumes:

@@ -51,51 +51,22 @@ $target/release/sabledb [sabledb.ini]
 
 
 ## Docker
-```
+
+```bash
+cd docker
 docker build -t sabledb:latest .
 docker run -p 6379:6379 sabledb:latest
 ```
 
 ### Docker compose
-1. In your docker-compose.yaml: 
-```yaml
-version: '3.8'
 
-services:
-  sabledb:
-    image: sabledb:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "6379:6379"
-    volumes:
-      - sabledb_data:/var/lib/sabledb/data
-      - ./server.ini:/etc/sabledb/conf/server.ini
-    entrypoint: ["sabledb", "/etc/sabledb/conf/server.ini"]
-    restart: unless-stopped
-
-volumes:
-  sabledb_data: {}
+```bash
+cd docker
+docker compose up --build
 ```
-
-2. Update the configuration lines found in `server.ini` under section `[general]` with the following changes:
-```
-# The IP on which new connections are accepted
-listen_ip = 0.0.0.0
-
-# Log directory
-logdir = "/var/lib/sabledb/logs/"
-
-# Path to the storage directory
-db_path = "/var/lib/sabledb/data/sabledb.db"
-````
-
-3. Run the program with docker-compose:
-`docker compose up --build`
-
 
 4. Tail logs
+
 Specify the docker container name (i.e. *sabledb-sabledb-1*) which can be found with `docker ps`. In our example: 
 
 `docker exec -it sabledb-sabledb-1 sh -c 'tail -f /var/lib/sabledb/logs/sabledb.log.*'`
