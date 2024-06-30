@@ -63,12 +63,11 @@ docker run -p 6379:6379 sabledb:latest
 docker compose up --build
 ```
 
-4. Tail logs
+Specify the docker container name (i.e. `*sabledb-sabledb-1*`) which can be found with `docker ps`. In our example: 
 
-Specify the docker container name (i.e. *sabledb-sabledb-1*) which can be found with `docker ps`. In our example: 
-
-`docker exec -it sabledb-sabledb-1 sh -c 'tail -f /var/lib/sabledb/logs/sabledb.log.*'`
-
+```bash
+docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sabledb.log.*"
+```
 
 ## Supported features
 
