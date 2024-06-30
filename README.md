@@ -59,15 +59,21 @@ docker run -p 6379:6379 sabledb:latest
 
 ### Docker compose
 
+If you prefer to use `docker-compose`, you can use the following command:
+
 ```bash
 docker compose up --build
 ```
 
-Specify the docker container name (i.e. `*sabledb-sabledb-1*`) which can be found with `docker ps`. In our example: 
+### Tail logs
+
+To tail the logs, use the below command:
 
 ```bash
 docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sabledb.log.*"
 ```
+
+**Note**: the container name (in the above example: `sabledb-sabledb-1`) can be found using the command `docker ps`
 
 ## Supported features
 
