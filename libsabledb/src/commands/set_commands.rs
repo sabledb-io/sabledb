@@ -42,7 +42,8 @@ impl SetCommands {
         Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
-    /// Sets the specified fields to their respective values in the hash stored at key.
+    /// Add the specified members to the set stored at key. Specified members that are already a member of this set are
+    /// ignored. If key does not exist, a new set is created before adding the specified members.
     async fn sadd(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
