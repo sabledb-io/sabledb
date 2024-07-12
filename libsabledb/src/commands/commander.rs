@@ -155,6 +155,7 @@ pub enum RedisCommandName {
     Zscan,
     // Set commands
     Sadd,
+    Scard,
     NotSupported(String),
 }
 
@@ -238,6 +239,7 @@ impl CommandMetadata {
         self.arity = arity;
         self
     }
+
     /// The step, or increment, between the first key and the position of the next key.
     pub fn with_step(mut self, step: u16) -> Self {
         self.step = step;
@@ -1187,6 +1189,12 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Sadd)
                     .write()
                     .with_arity(-3),
+            ),
+            (
+                "scard",
+                CommandMetadata::new(RedisCommandName::Scard)
+                    .read_only()
+                    .with_arity(2),
             ),
         ]);
 

@@ -7,7 +7,7 @@ use crate::{
     server::ClientState,
     storage::{
         GetHashMetadataResult, HashDeleteResult, HashExistsResult, HashGetMultiResult,
-        HashGetResult, HashLenResult, ScanCursor, SetDb, SetPutResult,
+        HashGetResult, ScanCursor, SetDb, SetLenResult, SetPutResult,
     },
     types::List,
     utils::RespBuilderV2,
@@ -31,6 +31,9 @@ impl SetCommands {
         match command.metadata().name() {
             RedisCommandName::Sadd => {
                 Self::sadd(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Scard => {
+                Self::scard(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -81,6 +84,27 @@ impl SetCommands {
         builder.number_usize(response_buffer, items_added);
         Ok(())
     }
+
+    /// Returns the set cardinality (number of elements) of the set stored at key.
+    async fn scard(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+        let key = command_arg_at!(command, 1);
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        match set_db.len(key)? {
+            SetLenResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            SetLenResult::Some(len) => builder.number_usize(response_buffer, len),
+        }
+        Ok(())
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -106,6 +130,12 @@ mod test {
         ("sadd myset 1 2 3 4", ":0\r\n"),
         ("sadd myset 1 2 3 4 5", ":1\r\n"),
     ]; "test_sadd")]
+    #[test_case(vec![
+        ("sadd myset 1 2 3 4", ":4\r\n"),
+        ("scard", "-ERR wrong number of arguments for 'scard' command\r\n"),
+        ("scard nosuchset", ":0\r\n"),
+        ("scard myset", ":4\r\n"),
+    ]; "test_scard")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
