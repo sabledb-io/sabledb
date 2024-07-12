@@ -5,8 +5,8 @@ use crate::{
     utils::RequestParser,
     utils::RespBuilderV2,
     ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
-    RedisCommandName, SableError, ServerCommands, ServerState, StorageAdapter, StringCommands,
-    TransactionCommands, ZSetCommands,
+    RedisCommandName, SableError, ServerCommands, ServerState, SetCommands, StorageAdapter,
+    StringCommands, TransactionCommands, ZSetCommands,
 };
 
 use bytes::BytesMut;
@@ -599,6 +599,21 @@ impl Client {
                     HandleCommandResult::ResponseSent => {}
                 }
                 ClientNextAction::NoAction
+            }
+            // Set commands
+            RedisCommandName::Sadd => {
+                match SetCommands::handle_command(client_state.clone(), command, tx).await? {
+                    HandleCommandResult::Blocked(_) => {
+                        return Err(SableError::OtherError(
+                            "Inernal error: client is in invalid state".to_string(),
+                        ));
+                    }
+                    HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.id()).await?;
+                        ClientNextAction::NoAction
+                    }
+                }
             }
             // Hash commands
             RedisCommandName::Hset

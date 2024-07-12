@@ -235,6 +235,12 @@ and visit this page again in couple of days
 | zscan | ✓ |✓ | |
 
 
+### Set commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| sadd | ✓ |✓ | |
+
 ### Generic commands
 
 | Command  | Supported  | Fully supported?  | Comment  |

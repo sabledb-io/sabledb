@@ -153,6 +153,8 @@ pub enum RedisCommandName {
     Zunionstore,
     Zscore,
     Zscan,
+    // Set commands
+    Sadd,
     NotSupported(String),
 }
 
@@ -1179,6 +1181,12 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::DbSize)
                     .read_only()
                     .with_arity(1),
+            ),
+            (
+                "sadd",
+                CommandMetadata::new(RedisCommandName::Sadd)
+                    .write()
+                    .with_arity(-3),
             ),
         ]);
 

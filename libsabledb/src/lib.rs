@@ -10,7 +10,7 @@ pub mod utils;
 
 pub use commands::{
     ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
-    ServerCommands, StringCommands, TransactionCommands, ZSetCommands,
+    ServerCommands, SetCommands, StringCommands, TransactionCommands, ZSetCommands,
 };
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
 pub use net::Transport;

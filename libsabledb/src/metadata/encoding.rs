@@ -12,6 +12,7 @@ pub enum ValueType {
     List = 1,
     Hash = 2,
     Zset = 3,
+    Set = 4,
 }
 
 impl Default for ValueType {
@@ -28,6 +29,7 @@ impl FromRaw for ValueType {
             1 => Some(Self::List),
             2 => Some(Self::Hash),
             3 => Some(Self::Zset),
+            4 => Some(Self::Set),
             _ => None,
         }
     }
@@ -43,6 +45,7 @@ pub enum KeyType {
     HashItem = 3,
     ZsetMemberItem = 4,
     ZsetScoreItem = 5,
+    SetItem = 6,
 }
 
 impl Default for KeyType {
@@ -61,6 +64,7 @@ impl FromRaw for KeyType {
             3 => Some(Self::HashItem),
             4 => Some(Self::ZsetMemberItem),
             5 => Some(Self::ZsetScoreItem),
+            6 => Some(Self::SetItem),
             _ => None,
         }
     }
