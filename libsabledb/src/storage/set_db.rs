@@ -87,6 +87,17 @@ enum PutMemberResult {
     AlreadyExists,
 }
 
+/// Result for the `find_smallest`
+#[derive(PartialEq, Debug)]
+pub enum FindSmallestResult<'a> {
+    /// None of the provided keys exist in the database
+    NotFound,
+    /// One of the provided input keys is not a SET
+    WrongType,
+    /// Contains the smallest SET name
+    Some(&'a BytesMut),
+}
+
 /// Hash DB wrapper. This class is specialized in reading/writing hash
 /// (commands from the `HSET`, `HLEN` etc family)
 ///
@@ -223,16 +234,16 @@ impl<'a> SetDb<'a> {
 
     /// Return the size of the hash
     pub fn len(&self, user_key: &BytesMut) -> Result<SetLenResult, SableError> {
-        let hash = match self.set_metadata(user_key)? {
+        let md = match self.set_metadata(user_key)? {
             GetSetMetadataResult::WrongType => {
                 return Ok(SetLenResult::WrongType);
             }
             GetSetMetadataResult::NotFound => {
                 return Ok(SetLenResult::Some(0));
             }
-            GetSetMetadataResult::Some(hash) => hash,
+            GetSetMetadataResult::Some(md) => md,
         };
-        Ok(SetLenResult::Some(hash.len() as usize))
+        Ok(SetLenResult::Some(md.len() as usize))
     }
 
     /// Check whether `user_member` exists in the hash `user_key`
@@ -270,6 +281,34 @@ impl<'a> SetDb<'a> {
             None => Ok(GetSetMetadataResult::WrongType),
             Some(hash_md) => Ok(GetSetMetadataResult::Some(hash_md)),
         }
+    }
+
+    /// Given list of sets, return the one with the least items
+    pub fn find_smallest<'b>(
+        &self,
+        keys: &'b [&BytesMut],
+    ) -> Result<FindSmallestResult<'b>, SableError> {
+        if keys.is_empty() {
+            // fast path
+            return Ok(FindSmallestResult::NotFound);
+        }
+
+        let mut smallest_len = usize::MAX;
+        let mut smallest_set_index = 0usize;
+        let mut curidx = 0usize;
+        for key in keys {
+            match self.len(key)? {
+                SetLenResult::WrongType => return Ok(FindSmallestResult::WrongType),
+                SetLenResult::Some(curlen) => {
+                    if curlen < smallest_len {
+                        smallest_len = curlen;
+                        smallest_set_index = curidx;
+                    }
+                }
+            }
+            curidx = curidx.saturating_add(1);
+        }
+        Ok(FindSmallestResult::Some(keys[smallest_set_index]))
     }
 
     /// Apply cache changes to the disk
@@ -611,5 +650,33 @@ mod tests {
             assert_eq!(set_db.len(&hash_name_2).unwrap(), SetLenResult::Some(3));
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_find_smallest_set() {
+        let (_deleter, db) = crate::tests::open_store();
+
+        let mut set_db = SetDb::with_storage(&db, 0);
+        let val1 = BytesMut::from("value1");
+        let val2 = BytesMut::from("value2");
+        let val3 = BytesMut::from("value3");
+        let val4 = BytesMut::from("value4");
+
+        let set1 = BytesMut::from("set1");
+        let set2 = BytesMut::from("set2");
+        let set3 = BytesMut::from("set3");
+        let set4 = BytesMut::from("set4");
+
+        set_db.put_multi(&set1, &vec![&val1]).unwrap();
+        set_db.put_multi(&set2, &vec![&val1, &val2]).unwrap();
+        set_db.put_multi(&set3, &vec![&val1, &val2, &val3]).unwrap();
+        set_db
+            .put_multi(&set4, &vec![&val1, &val2, &val3, &val4])
+            .unwrap();
+        set_db.commit().unwrap();
+
+        let sets = vec![&set2, &set1, &set3, &set4];
+        let result = set_db.find_smallest(&sets).unwrap();
+        assert_eq!(result, FindSmallestResult::Some(&set1));
     }
 }

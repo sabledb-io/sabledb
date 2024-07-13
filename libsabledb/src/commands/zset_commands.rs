@@ -3040,7 +3040,7 @@ impl ZSetCommands {
             return Ok(IntersectError::EmptyArray);
         };
 
-        // Read the smalleset set items - and store them as the result set (we use BTreeMap to produce a sorted output)
+        // Read the smallest set items - and store them as the result set (we use BTreeMap to produce a sorted output)
         let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, f64>::new()));
         let result_set_clone = result_set.clone();
         let _ = Self::iterate_by_member_and_apply(
