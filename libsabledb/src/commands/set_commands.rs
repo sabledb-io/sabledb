@@ -59,6 +59,9 @@ impl SetCommands {
             RedisCommandName::Sdiff => {
                 Self::sdiff(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Sdiffstore => {
+                Self::sdiffstore(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "None SET command {}",
@@ -144,8 +147,11 @@ impl SetCommands {
         iter.next(); // Skips the command SDIFF
         iter.next(); // Skips the main set name
 
-        // Read-only lock
-        let _unused = LockManager::lock(main_set, client_state.clone(), command.clone()).await?;
+        // Read-only lock (on all keys)
+        let all_keys: Vec<&BytesMut> = command.args_vec()[1..].iter().collect();
+        let _unused =
+            LockManager::lock_multi(&all_keys, client_state.clone(), command.clone()).await?;
+
         let builder = RespBuilderV2::default();
         let other_sets: Vec<&BytesMut> = iter.collect();
         let diff_result = match Self::diff(client_state.clone(), main_set, &other_sets)? {
@@ -160,6 +166,48 @@ impl SetCommands {
         for member in diff_result.borrow().iter() {
             builder.add_bulk_string(response_buffer, member);
         }
+        Ok(())
+    }
+
+    /// This command is equal to SDIFF, but instead of returning the resulting set, it is stored in destination.
+    /// If destination already exists, it is overwritten
+    /// `SDIFFSTORE destination key [key ...]`
+    async fn sdiffstore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let destination = command_arg_at!(command, 1);
+        let main_set = command_arg_at!(command, 2);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // Skips the command SDIFF
+        iter.next(); // Skips the destination
+        iter.next(); // Skips the main set name
+
+        // Write lock (on all keys)
+        let all_keys: Vec<&BytesMut> = command.args_vec()[1..].iter().collect();
+        let _unused =
+            LockManager::lock_multi(&all_keys, client_state.clone(), command.clone()).await?;
+        let builder = RespBuilderV2::default();
+        let other_sets: Vec<&BytesMut> = iter.collect();
+        let diff_result = match Self::diff(client_state.clone(), main_set, &other_sets)? {
+            DiffResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            DiffResult::Some(res) => res,
+        };
+
+        // Store the result in destination
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let members: Vec<BytesMut> = diff_result.borrow().iter().cloned().collect();
+        let members: Vec<&BytesMut> = members.iter().collect();
+        let count = set_db.put_multi_overwrite(destination, &members)?;
+        set_db.commit()?;
+
+        // Return the number of items added
+        builder.number_usize(response_buffer, count);
         Ok(())
     }
 
@@ -300,6 +348,23 @@ mod test {
         ("sdiff strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
         ("sdiff set1 set2 set3 set4", "*0\r\n"),
     ]; "test_sdiff")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sdiffstore", "-ERR wrong number of arguments for 'sdiffstore' command\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("sadd set2 1 2", ":2\r\n"),
+        ("sadd set3 3", ":1\r\n"),
+        ("sadd set4 4", ":1\r\n"),
+        ("sdiffstore dst1 set1 set2 set3", ":1\r\n"),
+        ("scard dst1", ":1\r\n"),
+        ("sdiffstore dst1 set1 set2", ":2\r\n"),
+        ("scard dst1", ":2\r\n"),
+        ("sdiffstore dst1 set1 set2 set3 set4", ":0\r\n"),
+        ("scard dst1", ":0\r\n"),
+        // strkey - a string - is overwritten
+        ("sdiffstore strkey set1 set2", ":2\r\n"),
+        ("scard strkey", ":2\r\n"),
+    ]; "test_sdiffstore")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

@@ -46,11 +46,11 @@ pub enum SableError {
     AddressParseError(#[from] std::net::AddrParseError),
     #[error("Serialisation error")]
     SerialisationError,
-    #[error("No active transcation")]
+    #[error("No active transaction")]
     NoActiveTransaction,
     /// When the client state is in "Preparing Txn", we cancel the lock
     /// and return the requested slots instead
-    #[error("Lock cancelled. Client in preparing transcation state")]
+    #[error("Lock cancelled. Client in preparing transaction state")]
     LockCancelledTxnPrep(Vec<u16>),
     #[error("Client is in invalid state")]
     ClientInvalidState,

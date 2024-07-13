@@ -242,6 +242,7 @@ and visit this page again in couple of days
 | sadd | ✓ |✓ | |
 | scard | ✓ |✓ | |
 | sdiff | ✓ |✓ | |
+| sdiffstore | ✓ |✓ | |
 
 ### Generic commands
 

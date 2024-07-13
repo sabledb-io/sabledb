@@ -111,32 +111,30 @@ impl<'a> SetDb<'a> {
 
     /// Add `members` to the set identified by `user_key`
     /// If the set `user_key` does not exist, a new set is created
+    /// If `overwrite_key` is `true` and a key with `user_key` already exists in the database
+    /// it is overwritten
     pub fn put_multi(
         &mut self,
         user_key: &BytesMut,
         members: &[&BytesMut],
     ) -> Result<SetPutResult, SableError> {
-        // locate the hash
-        let mut set = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => return Ok(SetPutResult::WrongType),
-            GetSetMetadataResult::NotFound => {
-                // Create a entry
-                self.create_set_metadata(user_key)?
-            }
-            GetSetMetadataResult::Some(set) => set,
-        };
+        self.put_multi_internal(user_key, members, false)
+    }
 
-        let mut items_added = 0usize;
-        for member in members {
-            match self.put_set_member(set.id(), member)? {
-                PutMemberResult::AlreadyExists => {}
-                PutMemberResult::Inserted => items_added = items_added.saturating_add(1),
+    /// Add `members` to the set identified by `user_key`, if the set `user_key` does not exist, a new set is created.
+    /// If a key with `user_key` already exists in the database, it is overwritten
+    pub fn put_multi_overwrite(
+        &mut self,
+        user_key: &BytesMut,
+        members: &[&BytesMut],
+    ) -> Result<usize, SableError> {
+        match self.put_multi_internal(user_key, members, true)? {
+            SetPutResult::WrongType => {
+                tracing::error!("Set::put_multi_overwrite returned 'WrongType'");
+                Err(SableError::ClientInvalidState)
             }
+            SetPutResult::Some(count) => Ok(count),
         }
-
-        set.incr_len_by(items_added as u64);
-        self.put_set_metadata(user_key, &set)?;
-        Ok(SetPutResult::Some(items_added))
     }
 
     /// Return the values associated with the provided members.
@@ -283,6 +281,42 @@ impl<'a> SetDb<'a> {
     /// Internal API for this class
     ///=======================================================
 
+    /// Add `members` to the set identified by `user_key`
+    /// If the set `user_key` does not exist, a new set is created
+    /// If `overwrite_key` is `true`, delete any entry that holds `user_key` before we proceed
+    fn put_multi_internal(
+        &mut self,
+        user_key: &BytesMut,
+        members: &[&BytesMut],
+        overwrite_key: bool,
+    ) -> Result<SetPutResult, SableError> {
+        if overwrite_key {
+            let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+            self.cache.delete(&encoded_key)?;
+        }
+
+        // locate the set
+        let mut set = match self.set_metadata(user_key)? {
+            GetSetMetadataResult::WrongType => return Ok(SetPutResult::WrongType),
+            GetSetMetadataResult::NotFound => {
+                // Create a entry
+                self.create_set_metadata(user_key)?
+            }
+            GetSetMetadataResult::Some(set) => set,
+        };
+
+        let mut items_added = 0usize;
+        for member in members {
+            match self.put_set_member(set.id(), member)? {
+                PutMemberResult::AlreadyExists => {}
+                PutMemberResult::Inserted => items_added = items_added.saturating_add(1),
+            }
+        }
+
+        set.incr_len_by(items_added as u64);
+        self.put_set_metadata(user_key, &set)?;
+        Ok(SetPutResult::Some(items_added))
+    }
     /// Apply the changes to the store and clear the cache
     fn flush_cache(&mut self) -> Result<(), SableError> {
         self.cache.flush()
