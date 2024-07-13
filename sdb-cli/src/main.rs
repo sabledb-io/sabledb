@@ -134,7 +134,7 @@ fn interactive_loop(
 
     rl.set_helper(Some(helper));
     loop {
-        rl.helper_mut().expect("No helper").colored_prompt = colored_prompt.clone();
+        rl.helper_mut().expect("No helper").colored_prompt.clone_from(&colored_prompt);
         let Ok(line) = rl.readline(&base_prompt) else {
             break;
         };

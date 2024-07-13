@@ -13,9 +13,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Read some bytes from the `reader` and return them
-pub fn read_bytes<R: ?Sized>(reader: &mut R, count: usize) -> Result<Option<BytesMut>, SableError>
+pub fn read_bytes<R>(reader: &mut R, count: usize) -> Result<Option<BytesMut>, SableError>
 where
-    R: Read,
+    R: ?Sized + Read,
 {
     let buflen = if count > MAX_BUFFER_SIZE {
         MAX_BUFFER_SIZE
@@ -51,14 +51,14 @@ where
 }
 
 /// Read exactly `count` bytes from `reader` and write them into `writer`
-pub fn read_exact<R: ?Sized, W: ?Sized>(
+pub fn read_exact<R, W>(
     reader: &mut R,
     writer: &mut W,
     count: usize,
 ) -> Result<(), SableError>
 where
-    R: Read,
-    W: Write,
+    R: ?Sized + Read,
+    W: ?Sized + Write,
 {
     // split the buffer into chunks and read
     const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
@@ -87,9 +87,9 @@ where
 }
 
 /// Write `buff` into `writer`
-pub fn write_bytes<W: ?Sized>(writer: &mut W, buff: &mut BytesMut) -> Result<(), SableError>
+pub fn write_bytes<W>(writer: &mut W, buff: &mut BytesMut) -> Result<(), SableError>
 where
-    W: Write,
+    W: ?Sized + Write,
 {
     match writer.write_all(buff) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
