@@ -18,6 +18,14 @@ pub struct IteratorAdapter<'a> {
 }
 
 impl<'a> IteratorAdapter<'a> {
+    /// Seek the iterator to `prefix` or the first entry that lexicographically follows it
+    pub fn seek(&mut self, prefix: &BytesMut) {
+        match self.iterator {
+            StorageIterator::RocksDb(ref mut rocksdb_iter) => rocksdb_iter.seek(prefix),
+            StorageIterator::RocksDbReverse(ref mut rocksdb_iter) => rocksdb_iter.seek(prefix),
+        }
+    }
+
     pub fn valid(&self) -> bool {
         match &self.iterator {
             StorageIterator::RocksDb(rocksdb_iter) => rocksdb_iter.valid(),

@@ -78,7 +78,7 @@ impl SetValueMetadata {
         let mut buffer =
             BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        builder.write_u8(KeyType::SetItem as u8);
+        builder.write_key_type(KeyType::SetItem);
         builder.write_u64(self.id());
         buffer
     }

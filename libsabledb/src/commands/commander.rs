@@ -156,6 +156,7 @@ pub enum RedisCommandName {
     // Set commands
     Sadd,
     Scard,
+    Sdiff,
     NotSupported(String),
 }
 
@@ -1195,6 +1196,15 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Scard)
                     .read_only()
                     .with_arity(2),
+            ),
+            (
+                "sdiff",
+                CommandMetadata::new(RedisCommandName::Sdiff)
+                    .read_only()
+                    .with_arity(-2)
+                    .with_first_key(1)
+                    .with_last_key(-1)
+                    .with_step(1),
             ),
         ]);
 

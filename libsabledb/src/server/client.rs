@@ -601,7 +601,7 @@ impl Client {
                 ClientNextAction::NoAction
             }
             // Set commands
-            RedisCommandName::Sadd | RedisCommandName::Scard => {
+            RedisCommandName::Sadd | RedisCommandName::Scard | RedisCommandName::Sdiff => {
                 match SetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
