@@ -243,6 +243,7 @@ and visit this page again in couple of days
 | scard | ✓ |✓ | |
 | sdiff | ✓ |✓ | |
 | sdiffstore | ✓ |✓ | |
+| sinter | ✓ |✓ | |
 
 ### Generic commands
 

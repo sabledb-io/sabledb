@@ -6,7 +6,7 @@ use crate::{
     parse_string_to_number,
     server::ClientState,
     storage::{
-        GetSetMetadataResult, HashDeleteResult, HashExistsResult, HashGetMultiResult,
+        FindSmallestResult, GetSetMetadataResult, HashDeleteResult, HashExistsResult,
         HashGetResult, IteratorAdapter, ScanCursor, SetDb, SetLenResult, SetPutResult,
     },
     types::List,
@@ -17,7 +17,7 @@ use crate::{
 
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -37,6 +37,12 @@ enum IterateCallbackResult {
 #[derive(PartialEq, Debug)]
 enum DiffResult {
     Some(Rc<RefCell<BTreeSet<BytesMut>>>),
+    WrongType,
+}
+
+#[derive(PartialEq, Debug)]
+enum IntersectResult {
+    Some(Vec<BytesMut>),
     WrongType,
 }
 
@@ -61,6 +67,9 @@ impl SetCommands {
             }
             RedisCommandName::Sdiffstore => {
                 Self::sdiffstore(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Sinter => {
+                Self::sinter(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -211,6 +220,42 @@ impl SetCommands {
         Ok(())
     }
 
+    /// Returns the members of the set resulting from the intersection of all the given sets
+    /// `SINTER key [key ...]`
+    async fn sinter(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // Skips the command SINTER
+
+        // Read lock (on all keys)
+        let all_keys: Vec<&BytesMut> = command.args_vec()[1..].iter().collect();
+        let _unused =
+            LockManager::lock_multi(&all_keys, client_state.clone(), command.clone()).await?;
+
+        let builder = RespBuilderV2::default();
+        let result = match Self::intersect(client_state.clone(), &all_keys)? {
+            IntersectResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            IntersectResult::Some(res) => res,
+        };
+
+        // Store the result in destination
+        let members: Vec<&BytesMut> = result.iter().collect();
+
+        // Return the number of items added
+        builder.add_array_len(response_buffer, members.len());
+        for member in members {
+            builder.add_bulk_string(response_buffer, member);
+        }
+        Ok(())
+    }
+
     //  ==
     // Internal API
     //  ==
@@ -266,6 +311,85 @@ impl SetCommands {
         }
 
         Ok(DiffResult::Some(result_set))
+    }
+
+    fn intersect(
+        client_state: Rc<ClientState>,
+        all_sets: &[&BytesMut],
+    ) -> Result<IntersectResult, SableError> {
+        // Find the smallest set first
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let result_set = Rc::new(RefCell::new(BTreeMap::<BytesMut, usize>::new()));
+        let base_set = match set_db.find_smallest(all_sets)? {
+            FindSmallestResult::NotFound => {
+                return Ok(IntersectResult::Some(Vec::<BytesMut>::default()));
+            }
+            FindSmallestResult::WrongType => return Ok(IntersectResult::WrongType),
+            FindSmallestResult::Some(set_name) => set_name,
+        };
+
+        // create an iterator that points to no where
+        let mut db_iter = client_state
+            .database()
+            .create_iterator(&BytesMut::default())?;
+
+        // Read the base set first and collect all its members
+        let main_items_clone = result_set.clone();
+        let iter_result = Self::iterate_by_member_and_apply(
+            client_state.clone(),
+            &mut db_iter,
+            base_set,
+            move |member| {
+                main_items_clone
+                    .borrow_mut()
+                    .insert(BytesMut::from(member), 1);
+                Ok(IterateCallbackResult::Continue)
+            },
+        )?;
+
+        if iter_result == IterateResult::WrongType {
+            return Ok(IntersectResult::WrongType);
+        }
+
+        // Visit the remaining sets
+        for set_name in all_sets {
+            if base_set.eq(set_name) {
+                continue;
+            }
+
+            let main_items_clone = result_set.clone();
+            let iter_result = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                &mut db_iter,
+                set_name,
+                move |member| {
+                    // If there are no more items in the primary set, stop looping
+                    if main_items_clone.borrow().is_empty() {
+                        return Ok(IterateCallbackResult::Break);
+                    }
+
+                    if let Some(val) = main_items_clone.borrow_mut().get_mut(member) {
+                        // increase the reference count of this member
+                        *val = val.saturating_add(1);
+                    }
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            if iter_result == IterateResult::WrongType {
+                return Ok(IntersectResult::WrongType);
+            }
+        }
+
+        // collect all items that have a reference count that is equal to the number of sets
+        let count = all_sets.len();
+        let intersection: Vec<BytesMut> = result_set
+            .borrow()
+            .iter()
+            .filter(|(_, refcount)| **refcount == count)
+            .map(|(set_name, _)| set_name.clone())
+            .collect();
+        Ok(IntersectResult::Some(intersection))
     }
 
     /// Iterate over all items of `set_name` and apply callback on them
@@ -365,6 +489,20 @@ mod test {
         ("sdiffstore strkey set1 set2", ":2\r\n"),
         ("scard strkey", ":2\r\n"),
     ]; "test_sdiffstore")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sinter", "-ERR wrong number of arguments for 'sinter' command\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("sadd set2 1 2", ":2\r\n"),
+        ("sadd set3 3", ":1\r\n"),
+        ("sadd set4 4", ":1\r\n"),
+        ("sadd set5 5 6 7 8", ":4\r\n"),
+        ("sinter set1 set2", "*2\r\n$1\r\n1\r\n$1\r\n2\r\n"),
+        ("sinter set1 set3", "*1\r\n$1\r\n3\r\n"),
+        ("sinter set1 set5", "*0\r\n"),
+        ("sinter set1", "*4\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n"),
+        ("sinter set1 strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+    ]; "test_sinter")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
