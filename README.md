@@ -30,6 +30,18 @@ cargo test --release
 
 On Windows, we require `MSYS2` terminal for building `SableDb`.
 
+First, ensure that you have the required toolchain (beside Rust):
+
+```bash
+pacman -Sy git                                  \
+           mingw-w64-clang-x86_64-toolchain     \
+           mingw-w64-clang-x86_64-python3       \
+           mingw-w64-clang-x86_64-cmake         \
+           mingw-w64-clang-x86_64-libffi        \
+           unzip                                \
+           mingw-w64-clang-x86_64-gcc-compat
+```
+
 ```bash
 git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
@@ -244,6 +256,7 @@ and visit this page again in couple of days
 | sdiff | ✓ |✓ | |
 | sdiffstore | ✓ |✓ | |
 | sinter | ✓ |✓ | |
+| sintercard | ✓ |✓ | |
 
 ### Generic commands
 

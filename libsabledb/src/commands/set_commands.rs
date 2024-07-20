@@ -71,6 +71,9 @@ impl SetCommands {
             RedisCommandName::Sinter => {
                 Self::sinter(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Sintercard => {
+                Self::sintercard(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "None SET command {}",
@@ -256,6 +259,85 @@ impl SetCommands {
         Ok(())
     }
 
+    /// Returns the members of the set resulting from the intersection of all the given sets
+    /// `SINTERCARD numkeys key [key ...] [LIMIT limit]`
+    async fn sintercard(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let num_keys = command_arg_at!(command, 1);
+        let builder = RespBuilderV2::default();
+        let Some(mut num_keys) = BytesMutUtils::parse::<usize>(num_keys) else {
+            builder.error_string(response_buffer, "ERR numkeys should be greater than 0");
+            return Ok(());
+        };
+
+        if num_keys == 0 {
+            builder_return_at_least_1_key!(builder, response_buffer, command);
+        }
+
+        let mut iter = command.args_vec().iter();
+        iter.next(); // Skips the command SINTERCARD
+        iter.next(); // Skips the numkeys
+
+        // Collect numkeys from the command line
+        let mut keys = Vec::<&BytesMut>::new();
+        for key in iter.by_ref() {
+            keys.push(key);
+            num_keys = num_keys.saturating_sub(1);
+            if num_keys == 0 {
+                break;
+            }
+        }
+
+        if num_keys != 0 {
+            builder.error_string(response_buffer, Strings::ERR_NUMKEYS);
+            return Ok(());
+        }
+
+        // Read lock (on all keys)
+        let limit = match (iter.next(), iter.next()) {
+            (Some(limit_keyword), Some(limit)) if Self::check_limit(limit_keyword, limit) => {
+                // this should not fail, as it passed the call to check_limit
+                BytesMutUtils::parse::<usize>(limit).ok_or(SableError::OtherError(
+                    "failed to convert limit into number".into(),
+                ))?
+            }
+            (None, None) => usize::MAX,
+            (_, _) => {
+                // anything else is just a syntax error
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+        };
+
+        // Lock the keys
+        let _unused = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
+
+        let result = match Self::intersect(client_state.clone(), &keys)? {
+            IntersectResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            IntersectResult::Some(res) => res,
+        };
+
+        // Store the result in destination
+        let members: Vec<&BytesMut> = result.iter().collect();
+
+        // Return the number of items added or the limit
+        builder.number_usize(
+            response_buffer,
+            if members.len() > limit {
+                limit
+            } else {
+                members.len()
+            },
+        );
+        Ok(())
+    }
+
     //  ==
     // Internal API
     //  ==
@@ -429,6 +511,12 @@ impl SetCommands {
         }
         Ok(IterateResult::Ok)
     }
+
+    /// Parse `LIMIT value` and confirm its syntax is correct
+    fn check_limit(limit_keyword: &BytesMut, limit_value: &BytesMut) -> bool {
+        limit_keyword.eq_ignore_ascii_case(b"limit")
+            && BytesMutUtils::parse::<usize>(limit_value).is_some()
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -503,6 +591,27 @@ mod test {
         ("sinter set1", "*4\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n"),
         ("sinter set1 strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
     ]; "test_sinter")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sintercard", "-ERR wrong number of arguments for 'sintercard' command\r\n"),
+        ("sintercard a", "-ERR wrong number of arguments for 'sintercard' command\r\n"),
+        ("sintercard a s1", "-ERR numkeys should be greater than 0\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("sadd set2 1 2", ":2\r\n"),
+        ("sadd set3 3", ":1\r\n"),
+        ("sadd set4 4", ":1\r\n"),
+        ("sadd set5 5 6 7 8", ":4\r\n"),
+        ("sintercard 2 set1 set2", ":2\r\n"),
+        ("sintercard 2 set1 set3", ":1\r\n"),
+        ("sintercard 2 set1 set5", ":0\r\n"),
+        ("sintercard 1 set1", ":4\r\n"),
+        ("sintercard 2 set1", "-ERR Number of keys can't be greater than number of args\r\n"),
+        ("sintercard 2 set1 set2 LIMIT", "-ERR syntax error\r\n"),
+        ("sintercard 2 set1 set2 sdsds", "-ERR syntax error\r\n"),
+        ("sintercard 2 set1 set2 sdsds 1", "-ERR syntax error\r\n"),
+        ("sintercard 2 set1 set2 LIMIT 1", ":1\r\n"),
+        ("sintercard 2 set1 set2 LIMIT 5", ":2\r\n"),
+    ]; "test_sintercard")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
