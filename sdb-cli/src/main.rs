@@ -134,7 +134,10 @@ fn interactive_loop(
 
     rl.set_helper(Some(helper));
     loop {
-        rl.helper_mut().expect("No helper").colored_prompt.clone_from(&colored_prompt);
+        rl.helper_mut()
+            .expect("No helper")
+            .colored_prompt
+            .clone_from(&colored_prompt);
         let Ok(line) = rl.readline(&base_prompt) else {
             break;
         };
@@ -170,16 +173,23 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
             print_sequence(seq);
             println_value("(nil)");
         }
+        Value::Double(val) => {
+            print_sequence(seq);
+            println_value(format!("(double) {}", val));
+        }
         Value::Int(val) => {
             print_sequence(seq);
             println_value(format!("(integer) {}", val));
         }
-        Value::Data(ref val) => {
-            let s = String::from_utf8_lossy(val);
+        Value::Boolean(val) => {
             print_sequence(seq);
-            println_value(format!(r#"{}"#, s));
+            println_value(format!("(boolean) {}", val));
         }
-        Value::Bulk(ref values) => {
+        Value::BigNumber(val) => {
+            print_sequence(seq);
+            println_value(format!("(big number) {}", val));
+        }
+        Value::Array(ref values) | Value::Set(ref values) => {
             if values.is_empty() {
                 print_indent(indent);
                 print_sequence(seq);
@@ -198,9 +208,50 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
             print_sequence(seq);
             println_value("OK");
         }
-        Value::Status(ref s) => {
+        Value::SimpleString(ref s) => {
             print_sequence(seq);
             println_value(format!(r#""{}""#, s));
+        }
+        Value::BulkString(ref s) => {
+            print_sequence(seq);
+            println_value(format!(r#""{}""#, String::from_utf8_lossy(s)));
+        }
+        Value::Map(ref m) => {
+            print_sequence(seq);
+            let mut new_seq = 1usize;
+            for (k, v) in m {
+                print_response_pretty(k, indent + 4, Some(new_seq));
+                new_seq += 1;
+                print_response_pretty(v, indent + 4, Some(new_seq));
+                new_seq += 1;
+            }
+        }
+        Value::Push { kind, data } => {
+            print_sequence(seq);
+            println_value(kind);
+            let mut new_seq = 1usize;
+            for v in data {
+                print_response_pretty(v, indent + 4, Some(new_seq));
+                new_seq += 1;
+            }
+        }
+        Value::Attribute { data, attributes } => {
+            print_sequence(seq);
+            print_response_pretty(&data, indent, None);
+            let mut new_seq = 1usize;
+            for (k, v) in attributes {
+                print_response_pretty(k, indent + 4, Some(new_seq));
+                new_seq += 1;
+                print_response_pretty(v, indent + 4, Some(new_seq));
+                new_seq += 1;
+            }
+        }
+        Value::VerbatimString { format: _, text } => {
+            print_sequence(seq);
+            println_value(format!(r#""{}""#, text));
+        }
+        Value::ServerError(e) => {
+            println_value(format!(r#""{:?}""#, e));
         }
     }
 }
