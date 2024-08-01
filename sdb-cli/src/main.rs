@@ -237,7 +237,7 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
         }
         Value::Attribute { data, attributes } => {
             print_sequence(seq);
-            print_response_pretty(&data, indent, None);
+            print_response_pretty(data, indent, None);
             let mut new_seq = 1usize;
             for (k, v) in attributes {
                 print_response_pretty(k, indent + 4, Some(new_seq));
