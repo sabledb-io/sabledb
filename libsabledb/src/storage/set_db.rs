@@ -134,6 +134,7 @@ impl<'a> SetDb<'a> {
 
     /// Add `members` to the set identified by `user_key`, if the set `user_key` does not exist, a new set is created.
     /// If a key with `user_key` already exists in the database, it is overwritten
+    /// Returns the number of items added to the set
     pub fn put_multi_overwrite(
         &mut self,
         user_key: &BytesMut,

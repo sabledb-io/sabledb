@@ -606,11 +606,12 @@ impl Client {
             | RedisCommandName::Sdiff
             | RedisCommandName::Sdiffstore
             | RedisCommandName::Sinter
-            | RedisCommandName::Sintercard => {
+            | RedisCommandName::Sintercard
+            | RedisCommandName::Sinterstore => {
                 match SetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
+                            "Internal error: client is in invalid state".to_string(),
                         ));
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,

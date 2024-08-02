@@ -257,6 +257,7 @@ and visit this page again in couple of days
 | sdiffstore | ✓ |✓ | |
 | sinter | ✓ |✓ | |
 | sintercard | ✓ |✓ | |
+| sinterstore | ✓ |✓ | |
 
 ### Generic commands
 

@@ -160,6 +160,7 @@ pub enum RedisCommandName {
     Sdiffstore,
     Sinter,
     Sintercard,
+    Sinterstore,
     NotSupported(String),
 }
 
@@ -1232,6 +1233,15 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Sintercard)
                     .read_only()
                     .with_arity(-2)
+                    .with_first_key(1)
+                    .with_last_key(-1)
+                    .with_step(1),
+            ),
+            (
+                "sinterstore",
+                CommandMetadata::new(RedisCommandName::Sinterstore)
+                    .write()
+                    .with_arity(-3)
                     .with_first_key(1)
                     .with_last_key(-1)
                     .with_step(1),

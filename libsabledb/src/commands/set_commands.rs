@@ -74,6 +74,9 @@ impl SetCommands {
             RedisCommandName::Sintercard => {
                 Self::sintercard(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Sinterstore => {
+                Self::sinterstore(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "None SET command {}",
@@ -335,6 +338,45 @@ impl SetCommands {
                 members.len()
             },
         );
+        Ok(())
+    }
+
+    /// This command is equal to SINTER, but instead of returning the resulting set, it is stored in destination.
+    /// If destination already exists, it is overwritten.
+    /// `SINTERSTORE destination key [key ...]`
+    async fn sinterstore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let destination = command_arg_at!(command, 1);
+        let mut iter = command.args_vec().iter();
+        iter.next(); // Skips the command SINTERSTORE
+        iter.next(); // Skips the destination
+
+        // Read lock (on all keys, including the destination)
+        let all_lock_keys: Vec<&BytesMut> = command.args_vec()[1..].iter().collect();
+        let _unused =
+            LockManager::lock_multi(&all_lock_keys, client_state.clone(), command.clone()).await?;
+
+        let all_keys: Vec<&BytesMut> = command.args_vec()[2..].iter().collect();
+        let builder = RespBuilderV2::default();
+        let result = match Self::intersect(client_state.clone(), &all_keys)? {
+            IntersectResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            IntersectResult::Some(res) => res,
+        };
+
+        // Store the result in destination
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let members: Vec<&BytesMut> = result.iter().collect();
+        let count = set_db.put_multi_overwrite(destination, &members)?;
+        set_db.commit()?;
+
+        // Return the number of items added
+        builder.number_usize(response_buffer, count);
         Ok(())
     }
 
@@ -612,6 +654,21 @@ mod test {
         ("sintercard 2 set1 set2 LIMIT 1", ":1\r\n"),
         ("sintercard 2 set1 set2 LIMIT 5", ":2\r\n"),
     ]; "test_sintercard")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sinterstore", "-ERR wrong number of arguments for 'sinterstore' command\r\n"),
+        ("sinterstore dst", "-ERR wrong number of arguments for 'sinterstore' command\r\n"),
+        ("sinterstore dst strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("sadd set2 1 2", ":2\r\n"),
+        ("sadd set3 3", ":1\r\n"),
+        ("sadd set4 4", ":1\r\n"),
+        ("sadd set5 5 6 7 8", ":4\r\n"),
+        ("sinterstore dst set1 set2", ":2\r\n"),
+        ("scard dst", ":2\r\n"),
+        ("sinterstore dst set1", ":4\r\n"),
+        ("scard dst", ":4\r\n"),
+    ]; "test_sinterstore")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
