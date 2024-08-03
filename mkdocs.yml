@@ -7,7 +7,8 @@ edit_uri: edit/main/docs/site
 nav:
     - High Level Design: design/overview.md
     - Replication: design/replication.md
-    - Data encdoing: design/data-encoding.md
+    - Data encoding: design/data-encoding.md
+    - Data eviction: design/eviction.md
 
 theme:
   name: material

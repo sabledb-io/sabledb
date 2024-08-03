@@ -215,7 +215,7 @@ Set metadata:
 
    A    B       C        D                E        F        G         H    
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Set name  | => | 4u8 | Expirtaion | Hash UID|  size |  
+| 1u8 | DB# |  Slot# | Set name  | => | 4u8 | Expirtaion | Set UID |  size |  
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Set item:
@@ -234,6 +234,29 @@ Set item:
 - `S` null (not used)
 
 
+## Bookkeeping records
+
+Every composite item (`Hash`, `Sorted Set`, `List` or `Set`) created by `SableDb`, also creates a record in the `bookkeeping` "table".
+A bookkeeping records keeps track of the composite item unique ID + its type (which is needed by the [data eviction job][2])
+
+The `bookkeeping` record is encoded as follows:
+
+```
+
+Bookkeeping:
+
+   A    B       C        D                E
++-----+----+--------+-----------+    +----------+
+| 0u8 | UID|  DB#   | UID type  | => | user key |  
++-----+----+--------+-----------+    +----------+
+```
+
+- `A` a bookkeeping records starts with `0`
+- `B` a `u64` field containing the composite item UID (e.g. `Hash UID`)
+- `C` the database ID for which the UID belongs to
+- `D` the UID type when it was created (e.g. "hash" or "set")
+- `E` the user key associated with the UID (e.g. the hash name)
+
  [1]: https://redis.io/docs/latest/commands/zcount/
- 
+ [2]: /design/eviction/#composite-item-has-been-overwritten
  
