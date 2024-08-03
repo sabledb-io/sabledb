@@ -327,6 +327,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-hash-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Hash data type
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-sorted-set-data-type" class="md-nav__link">
     <span class="md-ellipsis">
       The Sorted Set data type
@@ -356,6 +365,15 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-set-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Set data type
+    </span>
+  </a>
   
 </li>
       
@@ -412,6 +430,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-hash-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Hash data type
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-sorted-set-data-type" class="md-nav__link">
     <span class="md-ellipsis">
       The Sorted Set data type
@@ -441,6 +468,15 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-set-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Set data type
+    </span>
+  </a>
   
 </li>
       
@@ -559,6 +595,29 @@ using the following encoding:</p>
 <p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to 
 the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
 the requested list items are visited)</p>
+<h2 id="the-hash-data-type">The <code>Hash</code> data type</h2>
+<p>Hash items are encoded using the following:</p>
+<div class="highlight"><pre><span></span><code>Hash metadata:
+
+   A    B       C        D                E        F        G         H    
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+| 1u8 | DB# |  Slot# | Hash name | =&gt; | 2u8 | Expirtaion | Set UID |  size |  
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+
+Hash item:
+
+   P        Q           R           S
++-----+--------------+-------+    +-------+
+| 3u8 | Hash ID(u64) | field | =&gt; | value |
++-----+--------------+-------+    +-------+
+</code></pre></div>
+<ul>
+<li>Encoded items <code>A</code> -&gt; <code>H</code> are basically identical to the hash <code>A</code> -&gt; <code>H</code> fields</li>
+<li><code>P</code> always set to <code>3</code> ("hash member")</li>
+<li><code>Q</code> the hash ID for which this member belongs to</li>
+<li><code>R</code> the hash field</li>
+<li><code>S</code> the field's value</li>
+</ul>
 <h2 id="the-sorted-set-data-type">The <code>Sorted Set</code> data type</h2>
 <p>The sorted set ( <code>Z*</code> commands) is encoded using the following:</p>
 <div class="highlight"><pre><span></span><code>Sorted set metadata:
@@ -615,6 +674,29 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 <li><code>SableDb</code> first loads the metadata using the zset key in order to obtain its unique ID</li>
 <li>Creates an iterator using the prefix <code>[5 | ZSET UID | MIN_SCORE]</code> (Index: "Find by score")</li>
 <li>Start iterating until it either finds the first entry that does not belong to the zset, or it finds the <code>MAX_SCORE</code> value</li>
+</ul>
+<h2 id="the-set-data-type">The <code>Set</code> data type</h2>
+<p>Set items are encoded using the following:</p>
+<div class="highlight"><pre><span></span><code>Set metadata:
+
+   A    B       C        D                E        F        G         H    
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+| 1u8 | DB# |  Slot# | Set name  | =&gt; | 4u8 | Expirtaion | Hash UID|  size |  
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+
+Set item:
+
+   P        Q           R           S
++-----+--------------+-------+    +------+
+| 6u8 | Set ID(u64)  | field | =&gt; | null |
++-----+--------------+-------+    +------+
+</code></pre></div>
+<ul>
+<li>Encoded items <code>A</code> -&gt; <code>H</code> are basically identical to the sorted set <code>A</code> -&gt; <code>H</code> fields</li>
+<li><code>P</code> always set to <code>6</code> ("set member")</li>
+<li><code>Q</code> the set ID for which this member belongs to</li>
+<li><code>R</code> the set field</li>
+<li><code>S</code> null (not used)</li>
 </ul>
 
 
