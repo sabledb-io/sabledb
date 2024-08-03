@@ -112,6 +112,33 @@ The above encoding allows `SableDb` to iterate over all list items by creating a
 the prefix `[ 2 | <list-id>]` (`2` indicates that only list items should be scanned, and `list-id` makes sure that only
 the requested list items are visited)
 
+## The `Hash` data type
+
+Hash items are encoded using the following:
+
+```
+Hash metadata:
+
+   A    B       C        D                E        F        G         H    
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+| 1u8 | DB# |  Slot# | Hash name | => | 2u8 | Expirtaion | Set UID |  size |  
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+
+Hash item:
+
+   P        Q           R           S
++-----+--------------+-------+    +-------+
+| 3u8 | Hash ID(u64) | field | => | value |
++-----+--------------+-------+    +-------+
+
+```
+
+- Encoded items `A` -> `H` are basically identical to the hash `A` -> `H` fields
+- `P` always set to `3` ("hash member")
+- `Q` the hash ID for which this member belongs to
+- `R` the hash field
+- `S` the field's value
+
 ## The `Sorted Set` data type
 
 The sorted set ( `Z*` commands) is encoded using the following:
@@ -178,6 +205,34 @@ For example, in order to implement the command [`ZCOUNT`][1] (Returns the number
 - `SableDb` first loads the metadata using the zset key in order to obtain its unique ID
 - Creates an iterator using the prefix `[5 | ZSET UID | MIN_SCORE]` (Index: "Find by score")
 - Start iterating until it either finds the first entry that does not belong to the zset, or it finds the `MAX_SCORE` value
+
+## The `Set` data type
+
+Set items are encoded using the following:
+
+```
+Set metadata:
+
+   A    B       C        D                E        F        G         H    
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+| 1u8 | DB# |  Slot# | Set name  | => | 4u8 | Expirtaion | Hash UID|  size |  
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+
+Set item:
+
+   P        Q           R           S
++-----+--------------+-------+    +------+
+| 6u8 | Set ID(u64)  | field | => | null |
++-----+--------------+-------+    +------+
+
+```
+
+- Encoded items `A` -> `H` are basically identical to the sorted set `A` -> `H` fields
+- `P` always set to `6` ("set member")
+- `Q` the set ID for which this member belongs to
+- `R` the set field
+- `S` null (not used)
+
 
  [1]: https://redis.io/docs/latest/commands/zcount/
  
