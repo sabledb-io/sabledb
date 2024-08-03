@@ -326,6 +326,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#the-sorted-set-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Sorted Set data type
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Sorted Set data type">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-find-by-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      Index: "Find by member"
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#index-find-by-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      Index: "Find by score"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -378,6 +411,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#the-sorted-set-data-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Sorted Set data type
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Sorted Set data type">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#index-find-by-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      Index: "Find by member"
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#index-find-by-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      Index: "Find by score"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -406,6 +472,11 @@ data encoding is required.</p>
 <p class="admonition-title">Note</p>
 <p>Numbers are encoded using Big Endians to preserve lexicographic ordering</p>
 </div>
+<p><code>SableDb</code> takes advantage of the following <code>RocksDb</code> traits:</p>
+<ul>
+<li><code>RocksDb</code> keys are stored lexicographically (this is why <code>SableDb</code> uses big-endiands)</li>
+<li><code>RocksDb</code> provides prefix iterators which allows <code>SableDb</code> to place iterator on the first item that matches a prefix</li>
+</ul>
 <h2 id="the-string-data-type">The <code>String</code> data type</h2>
 <p>The most basic data type in <code>SableDb</code> is the <code>String</code> data type. <code>String</code>s in <code>SableDb</code> are always binary safe
 Each <code>String</code> record in the <code>SableDb</code> consists of a single entry in <code>RocksDb</code>:</p>
@@ -475,7 +546,7 @@ List item:
 <li><code>I</code> the UID of the list tail item (<code>u64</code>)</li>
 <li><code>J</code> the list length</li>
 </ul>
-<p>In addition to the list metadata (<code>SableDb</code> keepts a single metadata item per list) we add a list item per new list item
+<p>In addition to the list metadata (<code>SableDb</code> keeps a single metadata item per list) we add a list item per new list item
 using the following encoding:</p>
 <ul>
 <li><code>K</code> the first bit which is always set to <code>2</code> ("List Item")</li>
@@ -488,6 +559,63 @@ using the following encoding:</p>
 <p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to 
 the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
 the requested list items are visited)</p>
+<h2 id="the-sorted-set-data-type">The <code>Sorted Set</code> data type</h2>
+<p>The sorted set ( <code>Z*</code> commands) is encoded using the following:</p>
+<div class="highlight"><pre><span></span><code>Sorted set metadata:
+
+   A    B       C        D                E        F        G         H    
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+| 1u8 | DB# |  Slot# | ZSet name | =&gt; | 3u8 | Expirtaion | ZSet UID|  size |  
++-----+---- +--------+-----------+    +-----+------------+---------+-------+
+
+ZSet item 1 (Index: &quot;Find by member&quot;):
+
+   K        L              M           O      
++-----+--------------+---------+    +-------+
+| 4u8 | ZSet ID(u64) |  member | =&gt; | score |
++-----+--------------+---------+    +-------+
+
+ZSet item 2 (Index: &quot;Find by score&quot;):
+
+   P        Q           R       S            T
++-----+--------------+-------+-------+    +------+
+| 5u8 | ZSet ID(u64) | score |member | =&gt; | null |
++-----+--------------+-------+-------+    +------+
+</code></pre></div>
+<p>Sorted set requires double index (score &amp; member), this is why each zset item member is kept using 2 records.</p>
+<p>The zset metadata contains:</p>
+<ul>
+<li>Encoded items <code>A</code> -&gt; <code>D</code> are the same as <code>String</code></li>
+<li><code>E</code> will always contains <code>3</code> for <code>sorted set</code></li>
+<li><code>F</code> the expiration info</li>
+<li><code>G</code> the unique zset ID</li>
+<li><code>H</code> the set size (number of members)</li>
+</ul>
+<p>Each zset item are kept using 2 records:</p>
+<h3 id="index-find-by-member">Index: "Find by member"</h3>
+<p>The first record allows <code>SableDb</code> to find a member score (the key is the member value)</p>
+<ul>
+<li><code>K</code> the first bit which is always set to <code>4</code> ("ZSet member Item")</li>
+<li><code>L</code> the zset ID for which this item belongs to</li>
+<li><code>M</code> the zset member</li>
+<li><code>O</code> this member score value</li>
+</ul>
+<h3 id="index-find-by-score">Index: "Find by score"</h3>
+<p>The second record, allows <code>SableDb</code> to find member by score (we use the score as the key)</p>
+<ul>
+<li><code>P</code> the first bit is always set to <code>5</code> ("Zset score item")</li>
+<li><code>Q</code> the zset ID for which this item belongs to</li>
+<li><code>R</code> the record's score value</li>
+<li><code>S</code> the member</li>
+<li><code>T</code> not used</li>
+</ul>
+<p>The above encoding records provides all the indexing required by <code>SableDb</code> to implement the sorted set commands.</p>
+<p>For example, in order to implement the command <a href="https://redis.io/docs/latest/commands/zcount/"><code>ZCOUNT</code></a> (Returns the number of elements in the sorted set at key with a score between min and max):</p>
+<ul>
+<li><code>SableDb</code> first loads the metadata using the zset key in order to obtain its unique ID</li>
+<li>Creates an iterator using the prefix <code>[5 | ZSET UID | MIN_SCORE]</code> (Index: "Find by score")</li>
+<li>Start iterating until it either finds the first entry that does not belong to the zset, or it finds the <code>MAX_SCORE</code> value</li>
+</ul>
 
 
 
