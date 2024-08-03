@@ -14,13 +14,15 @@
         <link rel="prev" href="../replication/">
       
       
+        <link rel="next" href="../eviction/">
+      
       
       <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.21">
     
     
       
-        <title>Data encdoing - SableDb</title>
+        <title>Data encoding - SableDb</title>
       
     
     
@@ -106,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Data encdoing
+              Data encoding
             
           </span>
         </div>
@@ -276,7 +278,7 @@
           
   
   <span class="md-ellipsis">
-    Data encdoing
+    Data encoding
   </span>
   
 
@@ -287,7 +289,7 @@
         
   
   <span class="md-ellipsis">
-    Data encdoing
+    Data encoding
   </span>
   
 
@@ -377,10 +379,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#bookkeeping-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bookkeeping records
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../eviction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data eviction
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -475,6 +506,15 @@
   <a href="#the-set-data-type" class="md-nav__link">
     <span class="md-ellipsis">
       The Set data type
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bookkeeping-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bookkeeping records
     </span>
   </a>
   
@@ -681,7 +721,7 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 
    A    B       C        D                E        F        G         H    
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Set name  | =&gt; | 4u8 | Expirtaion | Hash UID|  size |  
+| 1u8 | DB# |  Slot# | Set name  | =&gt; | 4u8 | Expirtaion | Set UID |  size |  
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Set item:
@@ -697,6 +737,24 @@ Set item:
 <li><code>Q</code> the set ID for which this member belongs to</li>
 <li><code>R</code> the set field</li>
 <li><code>S</code> null (not used)</li>
+</ul>
+<h2 id="bookkeeping-records">Bookkeeping records</h2>
+<p>Every composite item (<code>Hash</code>, <code>Sorted Set</code>, <code>List</code> or <code>Set</code>) created by <code>SableDb</code>, also creates a record in the <code>bookkeeping</code> "table".
+A bookkeeping records keeps track of the composite item unique ID + its type (which is needed by the <a href="/design/eviction/#composite-item-has-been-overwritten">data eviction job</a>)</p>
+<p>The <code>bookkeeping</code> record is encoded as follows:</p>
+<div class="highlight"><pre><span></span><code>Bookkeeping:
+
+   A    B       C        D                E
++-----+----+--------+-----------+    +----------+
+| 0u8 | UID|  DB#   | UID type  | =&gt; | user key |  
++-----+----+--------+-----------+    +----------+
+</code></pre></div>
+<ul>
+<li><code>A</code> a bookkeeping records starts with <code>0</code></li>
+<li><code>B</code> a <code>u64</code> field containing the composite item UID (e.g. <code>Hash UID</code>)</li>
+<li><code>C</code> the database ID for which the UID belongs to</li>
+<li><code>D</code> the UID type when it was created (e.g. "hash" or "set")</li>
+<li><code>E</code> the user key associated with the UID (e.g. the hash name)</li>
 </ul>
 
 

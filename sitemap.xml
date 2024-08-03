@@ -11,6 +11,11 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
+         <loc>https://sabledb.io/design/eviction/</loc>
+         <lastmod>2024-08-03</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
          <loc>https://sabledb.io/design/overview/</loc>
          <lastmod>2024-08-03</lastmod>
          <changefreq>daily</changefreq>

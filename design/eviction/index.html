@@ -8,24 +8,26 @@
       
       
       
-        <link rel="canonical" href="https://sabledb.io/">
+        <link rel="canonical" href="https://sabledb.io/design/eviction/">
+      
+      
+        <link rel="prev" href="../data-encoding/">
       
       
       
-      
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.21">
     
     
       
-        <title>SableDb</title>
+        <title>Data eviction - SableDb</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.66ac8b77.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.66ac8b77.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -44,7 +46,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -68,7 +70,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#what-is-sabledb" class="md-skip">
+        <a href="#data-eviction" class="md-skip">
           Skip to content
         </a>
       
@@ -84,7 +86,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="SableDb" class="md-header__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDb" class="md-header__button md-logo" aria-label="SableDb" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
@@ -104,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              What is SableDb?
+              Data eviction
             
           </span>
         </div>
@@ -191,7 +193,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="SableDb" class="md-nav__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDb" class="md-nav__button md-logo" aria-label="SableDb" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
@@ -221,7 +223,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/overview/" class="md-nav__link">
+      <a href="../overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -241,7 +243,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/replication/" class="md-nav__link">
+      <a href="../replication/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -261,7 +263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/data-encoding/" class="md-nav__link">
+      <a href="../data-encoding/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -278,10 +280,30 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="design/eviction/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Data eviction
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -290,6 +312,53 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#expired-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expired items
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
+    <span class="md-ellipsis">
+      Composite item has been overwritten
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
+    <span class="md-ellipsis">
+      User triggered clean-up (FLUSHALL or FLUSHDB)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -314,6 +383,41 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#expired-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expired items
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
+    <span class="md-ellipsis">
+      Composite item has been overwritten
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
+    <span class="md-ellipsis">
+      User triggered clean-up (FLUSHALL or FLUSHDB)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -330,11 +434,36 @@
   
 
 
-<h1 id="what-is-sabledb">What is <code>SableDb</code>?</h1>
-<p><img src="images/sabledb.svg" width="200" height="200" align="right" /></p>
-<p><code>SableDb</code> is a key-value NoSQL database that utilizes <a href="https://rocksdb.org/"><code>RocksDb</code></a> as its storage engine and is compatible with the Redis protocol.
-It aims to reduce memory costs and increase capacity compared to Redis. <code>SableDb</code> features include Redis-compatible access via 
-any Redis client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.</p>
+<h1 id="data-eviction">Data eviction</h1>
+<p>This chapter covers the data eviction as it being handled by <code>SableDb</code>.</p>
+<p>There are 3 cases where items needs to be purged:</p>
+<ul>
+<li>Item is expired</li>
+<li>A composite item was overwritten by another type (e.g. user called <code>SET MYHASH SOMEVALUE</code> on an item <code>MYHASH</code> which was previously a <code>Hash</code>)</li>
+<li>User called <code>FLUSHDB</code> or <code>FLUSHALL</code></li>
+</ul>
+<h2 id="expired-items">Expired items</h2>
+<p>Since the main storage used by <code>SableDb</code> is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
+the item is deleted and a <code>null</code> value is returned to the caller.</p>
+<h2 id="composite-item-has-been-overwritten">Composite item has been overwritten</h2>
+<p>To explain the problem here, consider the following data is stored in <code>SableDb</code> (using <code>Hash</code> data type):</p>
+<div class="highlight"><pre><span></span><code>&quot;OverwatchTanks&quot; =&gt; 
+    { 
+        {&quot;tank_1&quot; =&gt; &quot;Reinhardt&quot;}, 
+        {&quot;tank_2&quot; =&gt; &quot;Orisa&quot;}, 
+        {&quot;tank_3&quot; =&gt; &quot;Roadhog&quot;}
+    }
+</code></pre></div>
+<p>In the above example, we have a hash identified by the key <code>OverwatchTanks</code>. Now, imagine a user that executes the following command:</p>
+<p><code>set OverwatchTanks bla</code> - this effectively changes the type of the key <code>OverwatchTanks</code> and set it into a <code>String</code>.
+However, as explained in <a href="/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDb</code> records.
+So by calling the <code>set</code> command, the <code>hash</code> fields <code>tank_1</code>, <code>tank_2</code> and <code>tank_3</code> are now "orphaned" (i.e. the user can not access them)</p>
+<p><code>SableDb</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
+In the above example: the type of the key <code>OverwatchTanks</code> is a <code>String</code> while it should have been <code>Hash</code>. When such a discrepancy is detected,
+the cron task deletes the orphan records from the database.</p>
+<p>The cron job knows the original type by checking the <a href="/design/data-encoding/#bookkeeping-records"><code>bookkeeping record</code></a></p>
+<h2 id="user-triggered-clean-up-flushall-or-flushdb">User triggered clean-up (<code>FLUSHALL</code> or <code>FLUSHDB</code>)</h2>
+<p>When one of these commands is called, <code>SableDb</code> uses <code>RocksDb</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
 
 
 
@@ -376,10 +505,10 @@ any Redis client, up to 64K databases support, asynchronous replication using tr
     </div>
     
     
-    <script id="__config" type="application/json">{"base": ".", "features": ["navigation.expand", "navigation.sections", "content.code.copy"], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.expand", "navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="assets/javascripts/bundle.a7c05c9e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.a7c05c9e.min.js"></script>
       
     
   </body>
