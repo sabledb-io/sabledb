@@ -214,7 +214,7 @@ impl Cron {
     /// ```no_compile
     /// [0 | UID | Type ] -> [ user key ]
     /// ```
-    /// So in the above example, even if a user overode the value by calling `set` command
+    /// So in the above example, even if a user overrode the value by calling `set` command
     /// we can still access the orphan values and remove them from the database
     async fn evict(
         store: &StorageAdapter,
@@ -227,6 +227,7 @@ impl Cron {
                 ValueType::Zset,
                 vec![KeyType::ZsetMemberItem, KeyType::ZsetScoreItem],
             ),
+            (ValueType::Set, vec![KeyType::SetItem]),
         ];
 
         let mut items_evicted = 0usize;
