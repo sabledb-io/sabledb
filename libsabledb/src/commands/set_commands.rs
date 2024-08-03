@@ -6,8 +6,8 @@ use crate::{
     parse_string_to_number,
     server::ClientState,
     storage::{
-        FindSmallestResult, GetSetMetadataResult, HashDeleteResult, HashExistsResult,
-        HashGetResult, IteratorAdapter, ScanCursor, SetDb, SetLenResult, SetPutResult,
+        FindSmallestResult, GetSetMetadataResult, HashDeleteResult, HashGetResult, IteratorAdapter,
+        ScanCursor, SetDb, SetExistsResult, SetLenResult, SetPutResult,
     },
     types::List,
     utils::RespBuilderV2,
@@ -76,6 +76,12 @@ impl SetCommands {
             }
             RedisCommandName::Sinterstore => {
                 Self::sinterstore(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Sismember => {
+                Self::sismember(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Smismember => {
+                Self::smismember(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -380,9 +386,76 @@ impl SetCommands {
         Ok(())
     }
 
-    //  ==
+    /// Returns if member is a member of the set stored at key
+    /// `SISMEMBER key member`
+    async fn sismember(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 1);
+        let member = command_arg_at!(command, 2);
+
+        // read-lock
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        let exists = match set_db.member_exists(key, member)? {
+            SetExistsResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            SetExistsResult::Exists => 1usize,
+            SetExistsResult::NotExists => 0usize,
+        };
+
+        builder.number_usize(response_buffer, exists);
+        Ok(())
+    }
+
+    /// Returns if member is a member of the set stored at key
+    /// `SISMEMBER key member`
+    async fn smismember(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 1);
+
+        // read-lock
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        let mut iter = command.args_vec().iter();
+        iter.next(); // skips the command
+        iter.next(); // skips the key
+
+        let mut result = Vec::<usize>::with_capacity(command.arg_count().saturating_sub(2));
+        for member in iter {
+            let exists = match set_db.member_exists(key, member)? {
+                SetExistsResult::WrongType => {
+                    builder_return_wrong_type!(builder, response_buffer);
+                }
+                SetExistsResult::Exists => 1usize,
+                SetExistsResult::NotExists => 0usize,
+            };
+            result.push(exists);
+        }
+
+        builder.add_array_len(response_buffer, result.len());
+        for exists in result {
+            builder.add_number(response_buffer, exists, false);
+        }
+        Ok(())
+    }
+
+    // ===
     // Internal API
-    //  ==
+    // ===
 
     fn diff(
         client_state: Rc<ClientState>,
@@ -669,6 +742,25 @@ mod test {
         ("sinterstore dst set1", ":4\r\n"),
         ("scard dst", ":4\r\n"),
     ]; "test_sinterstore")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sismember", "-ERR wrong number of arguments for 'sismember' command\r\n"),
+        ("sismember key", "-ERR wrong number of arguments for 'sismember' command\r\n"),
+        ("sismember strkey member", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("sismember set1 1", ":1\r\n"),
+        ("sismember set1 5", ":0\r\n"),
+        ("sismember nosuchkey 1", ":0\r\n"),
+    ]; "test_sismember")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("smismember", "-ERR wrong number of arguments for 'smismember' command\r\n"),
+        ("smismember key", "-ERR wrong number of arguments for 'smismember' command\r\n"),
+        ("smismember strkey member", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sadd set1 1 2 3 4", ":4\r\n"),
+        ("smismember set1 1 2 8", "*3\r\n:1\r\n:1\r\n:0\r\n"),
+        ("smismember nosuchkey 1 2 8", "*3\r\n:0\r\n:0\r\n:0\r\n"),
+    ]; "test_smismember")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

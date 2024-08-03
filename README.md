@@ -258,6 +258,8 @@ and visit this page again in couple of days
 | sinter | ✓ |✓ | |
 | sintercard | ✓ |✓ | |
 | sinterstore | ✓ |✓ | |
+| sismember | ✓ |✓ | |
+| smismember | ✓ |✓ | |
 
 ### Generic commands
 

@@ -607,7 +607,9 @@ impl Client {
             | RedisCommandName::Sdiffstore
             | RedisCommandName::Sinter
             | RedisCommandName::Sintercard
-            | RedisCommandName::Sinterstore => {
+            | RedisCommandName::Sinterstore
+            | RedisCommandName::Sismember
+            | RedisCommandName::Smismember => {
                 match SetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
