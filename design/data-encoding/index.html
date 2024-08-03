@@ -8,13 +8,11 @@
       
       
       
-        <link rel="canonical" href="https://sabledb.io/design/replication/">
+        <link rel="canonical" href="https://sabledb.io/design/data-encoding/">
       
       
-        <link rel="prev" href="../overview/">
+        <link rel="prev" href="../replication/">
       
-      
-        <link rel="next" href="../data-encoding/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +20,7 @@
     
     
       
-        <title>Replication - SableDb</title>
+        <title>Data encdoing - SableDb</title>
       
     
     
@@ -108,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Replication
+              Data encdoing
             
           </span>
         </div>
@@ -242,6 +240,26 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../replication/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Replication
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -251,12 +269,14 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
+        
+      
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
           
   
   <span class="md-ellipsis">
-    Replication
+    Data encdoing
   </span>
   
 
@@ -267,7 +287,7 @@
         
   
   <span class="md-ellipsis">
-    Replication
+    Data encdoing
   </span>
   
 
@@ -279,6 +299,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -287,35 +309,20 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#the-string-data-type" class="md-nav__link">
     <span class="md-ellipsis">
-      Overview
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#replication-client-server-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      Replication Client / Server model
+      The String data type
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#replication-client" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#the-list-data-type" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication client
+      The List data type
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -323,26 +330,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../data-encoding/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Data encdoing
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -364,6 +351,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -372,35 +361,20 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#the-string-data-type" class="md-nav__link">
     <span class="md-ellipsis">
-      Overview
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#replication-client-server-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      Replication Client / Server model
+      The String data type
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#replication-client" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#the-list-data-type" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication client
+      The List data type
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -422,45 +396,98 @@
   
 
 
-  <h1>Replication</h1>
+<h1 id="overview">Overview</h1>
+<p><code>SableDb</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code> 
+as its mature, maintained and widely used in the industry by giant companies.</p>
+<p>Because the <code>RocksDb</code> is key-value storage and Redis data structures can be more complex, an additional 
+data encoding is required.</p>
+<p>This chapter covers how <code>SableDb</code> encodes the data for the various data types (e.g. <code>String</code>, <code>Hash</code>, <code>Set</code> etc)</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Numbers are encoded using Big Endians to preserve lexicographic ordering</p>
+</div>
+<h2 id="the-string-data-type">The <code>String</code> data type</h2>
+<p>The most basic data type in <code>SableDb</code> is the <code>String</code> data type. <code>String</code>s in <code>SableDb</code> are always binary safe
+Each <code>String</code> record in the <code>SableDb</code> consists of a single entry in <code>RocksDb</code>:</p>
+<div class="highlight"><pre><span></span><code>   A    B      C      D                E        F       G     H
++-----+-----+-------+----------+    +-----+------------+----+-------+
+| 1u8 | DB# | Slot# | user key | =&gt; | 0u8 | Expirtaion | ID | value |
++-----+-----+-------+----------+    +-----+------------+----+-------+
+</code></pre></div>
+<p>The key for a <code>String</code> record is encoded as follows:</p>
+<ul>
+<li><code>A</code> the first byte ( <code>u8</code> ) is always set to <code>1</code> - this indicates that this is a data entry (there are other type of keys in the database)</li>
+<li><code>B</code> the database ID is encoded as <code>u16</code> (this implies that <code>SableDb</code> supports up to <code>64K</code> databases)</li>
+<li><code>C</code> the slot number</li>
+<li><code>D</code> the actual key value (e.g. <code>set mykey myvalue</code>  -&gt; <code>mykey</code> is set here)</li>
+</ul>
+<p>The value is encoded as follows:</p>
+<ul>
+<li><code>E</code> the first byte is the type bit, value of <code>0</code> means that the this record is of type <code>String</code></li>
+<li><code>F</code> the record expiration info</li>
+<li><code>G</code> unique ID (relevant for complex types like <code>Hash</code>), for <code>String</code> this is always <code>0</code></li>
+<li><code>H</code> the user value</li>
+</ul>
+<p>Using the above encoding, we can now understand how <code>SableDb</code> reads from the database. Lets have a look a the command:</p>
+<div class="highlight"><pre><span></span><code>get mykey
+</code></pre></div>
+<p><code>SableDb</code> encodes a key from the user key (<code>mykey</code>) by prepending the following:</p>
+<ul>
+<li><code>1</code>u8 - to indicate that this is the data record</li>
+<li>The active database number (defaults to <code>0</code>)</li>
+<li>The slot number</li>
+<li>The user string key (i.e. <code>mykey</code>)</li>
+</ul>
+<p>This is the key that is passed to <code>RocksDb</code> for reading
+- If the key exists in the database:
+    - If the type (field <code>E</code>) is <code>!= 0</code> - i.e. the entry is not a <code>String</code>, <code>SableDb</code> returns a <code>-WRONGTYPE</code> error
+    - If value is expired -&gt; <code>SableDb</code> returns <code>null</code> and deletes the record from the database
+    - Otherwise, <code>SableDb</code> returns the <code>H</code> part of the value (the actual user data)
+- Else (no such key) return <code>null</code></p>
+<h2 id="the-list-data-type">The <code>List</code> data type</h2>
+<p>A <code>List</code> is a composite data type. <code>SableDb</code> stores the metadata of the list using a dedicated record and each list element
+is stored in a separate entry.</p>
+<div class="highlight"><pre><span></span><code>List metadata:
 
-<h2 id="overview">Overview</h2>
-<p><code>SableDb</code> supports a <code>1</code> : <code>N</code> replication (single primary -&gt; multiple replicas) configuration.</p>
-<h3 id="replication-client-server-model">Replication Client / Server model</h3>
-<p>On startup, <code>SableDb</code> spawns a thread (internally called <code>Relicator</code>) which is listening on the main port + <code>1000</code>.
-So if, for example, the server is configured to listen on port <code>6379</code>, the replication port is set to <code>7379</code></p>
-<p>For every new incoming replication client, a new thread is spawned and served.
-thread-safe</p>
-<p>The replication is done using the following methodology:</p>
-<ol>
-<li>The replica is requesting from the primary a set of changes starting from a given ID</li>
-<li>If the primary is able to locate the requested change ID, it builds a "change request message" and sends it over to the client (the ID accepted from the client is the starting ID for the change request)</li>
-<li>Steps 1-2 are repeated indefinitely</li>
-<li>If the primary is unable to locate the requested change ID, it replies with a "Negative ack" to the client</li>
-<li>The client sends a "Full Sync" request to the server</li>
-<li>The primary creates a checkpoint from the database and sends it over to the replica + it sends the last change committed to the checkpoint (this will be the "Next ID" to fetch)</li>
-<li>From hereon, steps 1-2 are repeated</li>
-</ol>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Its worth mentioning that the primary server is <strong>stateless</strong> i.e. it does not keep track of its replicas. It is up to the 
-replica server to pull data from the primary and to keep track of the next change sequence ID to pull.</p>
-</div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>In case there are no changes to send to the replica, the primary delays the response until something is available</p>
-</div>
-<p>Internally, <code>SableDb</code> utilizes <code>RocksDb</code> APIs: <a href="https://github.com/facebook/rocksdb/wiki/Checkpoints"><code>create_checkpoint</code></a> and <a href="https://github.com/facebook/rocksdb/wiki/Replication-Helpers"><code>get_updates_since</code></a></p>
-<p>In addition to the above APIs, <code>SableDb</code> maintains a file named <code>changes.seq</code> inside the database folder of the replica server
-which holds the next transaction ID that should be pulled from the primary.</p>
-<p>In any case of error, the replica switches to <code>FULLSYNC</code> request.</p>
-<p>The below sequence of events describes the data flow between the replica and the primary:</p>
-<p><img alt="changes sync" src="../../images/happy-flow-sync.svg" /></p>
-<p>When a <code>FULLSYNC</code> is needed, the flow changes to this:</p>
-<p><img alt="fullsync" src="../../images/fullsync.svg" /></p>
-<h3 id="replication-client">Replication client</h3>
-<p>In addition to the above, the replication instance of <code>SableDb</code> is running in <code>read-only</code> mode. i.e. it does not allow
-execution of any command marked as <code>Write</code></p>
+   A    B       C        D            
++-----+---- +--------+------------+ 
+| 1u8 | DB# |  Slot# |  list name |  
++-----+---- +--------+------------+    
+                             E        F        G        H      I       J
+                        +-----+------------+--------- +------+------+-------+
+                   =&gt;   | 1u8 | Expirtaion | List UID | head | tail |  size |
+                        +-----+------------+--------- +------+------+-------+
+
+List item:
+
+   K        L              M                 N      O           P
++-----+--------------+---------------+    +------+--------+------------+
+| 2u8 | List ID(u64) |  Item ID(u64) | =&gt; | Left | Right  |     value  |
++-----+--------------+---------------+    +------+--------+------------+
+</code></pre></div>
+<p>Unlike <code>String</code>, a <code>List</code> is using an additional entry in the database that holds the list metadata.</p>
+<ul>
+<li>Encoded items <code>A</code> -&gt; <code>D</code> are the same as <code>String</code></li>
+<li><code>E</code> the first byte is always set to <code>1</code> (unlike <code>String</code> which is set to <code>0</code>)</li>
+<li><code>F</code> Expiration info</li>
+<li><code>G</code> The list UID. Each list is assigned with a unique ID (an incremental number that never repeat itself, evern after restarts)</li>
+<li><code>H</code> the UID of the list head item (<code>u64</code>)</li>
+<li><code>I</code> the UID of the list tail item (<code>u64</code>)</li>
+<li><code>J</code> the list length</li>
+</ul>
+<p>In addition to the list metadata (<code>SableDb</code> keepts a single metadata item per list) we add a list item per new list item
+using the following encoding:</p>
+<ul>
+<li><code>K</code> the first bit which is always set to <code>2</code> ("List Item")</li>
+<li><code>L</code> the parent list ID (see field <code>G</code> above)</li>
+<li><code>M</code> the item UID</li>
+<li><code>N</code> the UID of the previous item in the list ( <code>0</code> means that this item is the head)</li>
+<li><code>O</code> the UID of the next item in the list ( <code>0</code> means that this item is the last item)</li>
+<li><code>P</code> the list value</li>
+</ul>
+<p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to 
+the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
+the requested list items are visited)</p>
 
 
 
