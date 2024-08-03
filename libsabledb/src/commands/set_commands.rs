@@ -15,6 +15,7 @@ use crate::{
     SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
 
+use crate::io::RespWriter;
 use bytes::BytesMut;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,7 +53,7 @@ impl SetCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
@@ -82,6 +83,12 @@ impl SetCommands {
             }
             RedisCommandName::Smismember => {
                 Self::smismember(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Smembers => {
+                // Since - potentially - we could have a large set, stream the responses and don't build them
+                // up in the memory first
+                Self::smembers(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -453,6 +460,71 @@ impl SetCommands {
         Ok(())
     }
 
+    /// Returns all the members of the set value stored at key
+    /// `SMEMBERS key`
+    async fn smembers(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let key = command_arg_at!(command, 1);
+
+        // read-lock
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
+        let md = match set_db.set_metadata(key)? {
+            GetSetMetadataResult::WrongType => {
+                writer_return_wrong_type!(writer);
+            }
+            GetSetMetadataResult::NotFound => {
+                writer_return_empty_array!(writer);
+            }
+            GetSetMetadataResult::Some(md) => md,
+        };
+
+        // Create an iterator over all the set members and stream them
+        let set_prefix = md.prefix();
+
+        // create an iterator that points to the start of the set elements
+        writer.add_array_len(md.len() as usize).await?;
+        let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
+        let mut count = 0u64;
+        while db_iter.valid() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&set_prefix) {
+                break;
+            }
+
+            let member = SetMemberKey::from_bytes(key)?;
+            writer.add_bulk_string(member.key()).await?;
+            count = count.saturating_add(1);
+            db_iter.next();
+        }
+
+        if count != md.len() {
+            // internal error: the metadata does not match the number of items read
+            // return a SableError here to close the connection
+            let errmsg =
+                format!(
+                        "Number of set ('{:?}') items read ({}), does not match the expected items count ({}) ",
+                        key,
+                        count,
+                        md.len()
+                );
+            return Err(SableError::Corrupted(errmsg));
+        }
+
+        // flush an remaining items from the writer
+        writer.flush().await?;
+        Ok(())
+    }
+
     // ===
     // Internal API
     // ===
@@ -761,6 +833,14 @@ mod test {
         ("smismember set1 1 2 8", "*3\r\n:1\r\n:1\r\n:0\r\n"),
         ("smismember nosuchkey 1 2 8", "*3\r\n:0\r\n:0\r\n:0\r\n"),
     ]; "test_smismember")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("smembers", "-ERR wrong number of arguments for 'smembers' command\r\n"),
+        ("smembers strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sadd set1 one two three four", ":4\r\n"),
+        ("smembers set1", "*4\r\n$4\r\nfour\r\n$3\r\none\r\n$5\r\nthree\r\n$3\r\ntwo\r\n"),
+        ("smembers nosuchkey", "*0\r\n"),
+    ]; "test_smembers")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

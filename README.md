@@ -260,6 +260,7 @@ and visit this page again in couple of days
 | sinterstore | ✓ |✓ | |
 | sismember | ✓ |✓ | |
 | smismember | ✓ |✓ | |
+| smembers | ✓ |✓ | |
 
 ### Generic commands
 

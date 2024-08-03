@@ -54,6 +54,8 @@ pub enum SableError {
     LockCancelledTxnPrep(Vec<u16>),
     #[error("Client is in invalid state")]
     ClientInvalidState,
+    #[error("Corrupted database. {0}")]
+    Corrupted(String),
 }
 
 #[allow(dead_code)]

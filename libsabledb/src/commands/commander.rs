@@ -163,6 +163,7 @@ pub enum RedisCommandName {
     Sinterstore,
     Sismember,
     Smismember,
+    Smembers,
     NotSupported(String),
 }
 
@@ -1259,6 +1260,12 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Smismember)
                     .read_only()
                     .with_arity(-3),
+            ),
+            (
+                "smembers",
+                CommandMetadata::new(RedisCommandName::Smembers)
+                    .read_only()
+                    .with_arity(2),
             ),
         ]);
 
