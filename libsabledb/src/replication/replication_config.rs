@@ -1,21 +1,40 @@
 use crate::SableError;
-use serde::{Deserialize, Serialize};
-use std::io::Write;
+use ini::Ini;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::RwLock;
 
 lazy_static::lazy_static! {
     static ref FILE_LOCK: RwLock<u8> = RwLock::new(0);
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone)]
 pub enum ServerRole {
     #[default]
     Primary,
     Replica,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl FromStr for ServerRole {
+    type Err = SableError;
+    fn from_str(s: &str) -> Result<Self, SableError> {
+        match s.to_lowercase().as_str() {
+            "replica" => Ok(ServerRole::Replica),
+            _ => Ok(ServerRole::Primary),
+        }
+    }
+}
+
+impl std::fmt::Display for ServerRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            ServerRole::Primary => write!(f, "primary"),
+            ServerRole::Replica => write!(f, "replica"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ReplicationConfig {
     /// Server role ("primary", "replica")
     pub role: ServerRole,
@@ -42,7 +61,7 @@ impl Default for ReplicationConfig {
 }
 
 impl ReplicationConfig {
-    const REPLICATION_CONF: &'static str = "replication.json";
+    const REPLICATION_CONF: &'static str = "replication.ini";
 
     pub fn primary_config(ip: String, port: u16) -> Self {
         ReplicationConfig {
@@ -61,36 +80,49 @@ impl ReplicationConfig {
         let _guard = FILE_LOCK.read();
         let replication_conf = Self::file_path_from_dir(configuration_dir);
 
-        let conf = if replication_conf.exists() {
-            let path_buf = replication_conf.to_path_buf();
-            match std::fs::read_to_string(path_buf.clone()) {
-                Ok(content) => {
-                    tracing::info!("Parsing replication config: {}", content);
-                    match serde_json::from_str(&content) {
-                        Ok(conf) => conf,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to de-serialize replication config from file {}. {:?}",
-                                replication_conf.display(),
-                                e
-                            );
-                            ReplicationConfig::primary_config(default_listen_ip, default_port)
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    ReplicationConfig::primary_config(default_listen_ip, default_port)
-                }
-                Err(e) => {
-                    tracing::warn!("Could not read file: {}. {:?}", path_buf.display(), e);
-                    ReplicationConfig::primary_config(default_listen_ip, default_port)
-                }
-            }
-        } else {
-            ReplicationConfig::primary_config(default_listen_ip, default_port)
+        // The replication configuration file is using an INI format
+        let Ok(ini_file) = Ini::load_from_file(&replication_conf) else {
+            return ReplicationConfig::primary_config(default_listen_ip, default_port);
         };
-        let _ = Self::write_file_internal(&conf, configuration_dir);
-        conf
+
+        let Some(replication) = ini_file.section(Some("replication")) else {
+            tracing::warn!(
+                "Replication configuration file {} does not contain a 'replication' section",
+                replication_conf.display()
+            );
+            return ReplicationConfig::primary_config(default_listen_ip, default_port);
+        };
+
+        // parse the port number
+        let port = if let Some(port) = replication.get("port") {
+            let Ok(port) = port.parse::<u16>() else {
+                tracing::warn!("Failed to parse port number. '{}'", port);
+                return ReplicationConfig::primary_config(default_listen_ip, default_port);
+            };
+            port
+        } else {
+            default_port
+        };
+
+        // read the role
+        let role = if let Some(role) = replication.get("role") {
+            ServerRole::from_str(role).expect("can't fail") // can not fail, see `from_str` impl above
+        } else {
+            ServerRole::Primary
+        };
+
+        // read the role
+        let address = if let Some(address) = replication.get("address") {
+            address.to_string()
+        } else {
+            "127.0.0.1".to_string()
+        };
+
+        ReplicationConfig {
+            role,
+            ip: address,
+            port,
+        }
     }
 
     /// Write `repl_config` to a file overriding previous content
@@ -110,25 +142,13 @@ impl ReplicationConfig {
         configuration_dir: Option<&Path>,
     ) -> Result<(), SableError> {
         let replication_conf = Self::file_path_from_dir(configuration_dir);
-        tracing::debug!("Updating {}", replication_conf.display());
-        let json = match serde_json::to_string_pretty(repl_config) {
-            Err(e) => {
-                let errmsg = format!(
-                    "Failed to convert struct {:?} into JSON. {:?}",
-                    repl_config, e
-                );
-                return Err(SableError::OtherError(errmsg));
-            }
-            Ok(json) => json,
-        };
-
-        let mut file = std::fs::File::create(replication_conf.clone())?;
-        file.write_all(json.as_bytes())?;
-        tracing::debug!(
-            "{} updated successfully with content:\n{}",
-            replication_conf.display(),
-            json
-        );
+        let mut ini = ini::Ini::default();
+        ini.with_section(Some("replication"))
+            .set("role", format!("{}", repl_config.role))
+            .set("address", repl_config.ip.clone())
+            .set("port", format!("{}", repl_config.port));
+        ini.write_to_file(&replication_conf)?;
+        tracing::info!("Successfully updated file: {}", replication_conf.display());
         Ok(())
     }
 
