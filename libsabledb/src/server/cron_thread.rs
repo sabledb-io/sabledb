@@ -306,13 +306,13 @@ impl Cron {
 
         // Sub-items are always encoded with: the type (u8) followed by the instance UID (u64)
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_u8(*key_type as u8);
+        builder.write_key_type(*key_type);
         builder.write_u64(record.uid());
 
         let mut db_iter = store.create_iterator(&prefix)?;
         let mut count = 0usize;
         while db_iter.valid() {
-            let Some((key, _)) = db_iter.key_value() else {
+            let Some(key) = db_iter.key() else {
                 break;
             };
 
@@ -335,19 +335,23 @@ impl Cron {
         expected_value_type: &ValueType,
     ) -> Result<RecordExistsResult, SableError> {
         let mut generic_db = GenericDb::with_storage(store, record.db_id());
+        // Load from the database CommonValueMetadata and verify that it has
+        // the same type (e.g. List, Hash etc) AND has the same UID (i.e. it is the same instance)
         let md = generic_db.value_common_metadata(user_key)?;
         match md {
-            Some(md) => Ok(if md.value_type().eq(expected_value_type) {
-                RecordExistsResult::Found
-            } else {
-                tracing::info!(
-                    "'{:?}' found but with wrong type. Expected {:?}, Found: {:?}",
-                    user_key,
-                    expected_value_type,
-                    md.value_type()
-                );
-                RecordExistsResult::WrongType
-            }),
+            Some(ref md) => Ok(
+                if md.value_type().eq(expected_value_type) && md.uid().eq(&record.uid()) {
+                    RecordExistsResult::Found
+                } else {
+                    tracing::info!(
+                        "'{:?}' found but with wrong type. Expected {:?}, Found: {:?}",
+                        user_key,
+                        expected_value_type,
+                        md.value_type()
+                    );
+                    RecordExistsResult::WrongType
+                },
+            ),
             None => Ok(RecordExistsResult::NotFound),
         }
     }
@@ -402,7 +406,8 @@ impl Cron {
 mod tests {
     use super::*;
     use crate::storage::{
-        PutFlags, StringsDb, ZSetAddMemberResult, ZSetDb, ZSetLenResult, ZWriteFlags,
+        PutFlags, SetDb, SetExistsResult, SetLenResult, StringsDb, ZSetAddMemberResult, ZSetDb,
+        ZSetLenResult, ZWriteFlags,
     };
 
     #[test]
@@ -449,7 +454,7 @@ mod tests {
                 ZSetLenResult::Some(4)
             );
 
-            // overide the set creating zombie entries
+            // override the set creating zombie entries
 
             let mut strings_db = StringsDb::with_storage(&db, 0);
             let string_md = crate::StringValueMetadata::default();
@@ -475,6 +480,65 @@ mod tests {
             let server_options = ServerOptions::default();
             let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
             assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
+        });
+    }
+
+    #[test]
+    fn test_composite_item_overriden_with_the_same_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_deleter, db) = crate::tests::open_store();
+            let mut set_db = SetDb::with_storage(&db, 0);
+
+            let set1 = BytesMut::from("set1");
+
+            // set1 items
+            let one1 = BytesMut::from("one1");
+            let two1 = BytesMut::from("two1");
+            let three1 = BytesMut::from("three1");
+
+            // new set1 items
+            let one2 = BytesMut::from("one2");
+            let two2 = BytesMut::from("two2");
+            let three2 = BytesMut::from("three2");
+
+            set_db
+                .put_multi(&set1, &vec![&one1, &two1, &three1])
+                .unwrap();
+            set_db.commit().unwrap();
+            assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
+
+            let server_options = ServerOptions::default();
+            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
+            assert_eq!(items_evicted, 0); // 0 items should be evicted
+
+            // Create another set, using the same *name* but with a different UID
+            set_db
+                .put_multi_overwrite(&set1, &vec![&one2, &two2, &three2])
+                .unwrap();
+            set_db.commit().unwrap();
+            assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
+
+            // Try evicting again, this time we expect 3 items to be evicted
+            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
+            assert_eq!(items_evicted, 3); // 3 items should be evicted
+
+            // The length should be still 3
+            assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
+
+            // Make sure that the correct items were purged (one1, two1 and three1) and the new items (one2, two2 and three2)
+            // exist in the database
+            let items = vec![(&one1, &one2), (&two1, &two2), (&three1, &three2)];
+            for (item_does_not_exist, item_exists) in items {
+                assert_eq!(
+                    set_db.member_exists(&set1, item_does_not_exist).unwrap(),
+                    SetExistsResult::NotExists
+                );
+                assert_eq!(
+                    set_db.member_exists(&set1, item_exists).unwrap(),
+                    SetExistsResult::Exists
+                );
+            }
         });
     }
 }
