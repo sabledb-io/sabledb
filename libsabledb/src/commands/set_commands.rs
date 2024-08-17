@@ -128,6 +128,9 @@ impl SetCommands {
                 Self::smembers(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
+            RedisCommandName::Srem => {
+                Self::srem(client_state, command, &mut response_buffer).await?;
+            }
             RedisCommandName::Spop => {
                 // Since - potentially - we could have a large set, stream the responses and don't build them
                 // up in the memory first
@@ -765,7 +768,7 @@ impl SetCommands {
                     break;
                 }
             }
-            
+
             curidx = curidx.saturating_add(1);
             db_iter.next();
         }
@@ -774,6 +777,36 @@ impl SetCommands {
         writer.flush().await?;
         Ok(())
     }
+
+    /// Remove the specified members from the set stored at key. Specified members that are not a member of this set
+    /// are ignored. If key does not exist, it is treated as an empty set and this command returns 0.
+    /// `SREM key member [member ...]`
+    async fn srem(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 1);
+
+        // obtains a write lock
+        let _lock = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let members: Vec<&BytesMut> = command.args_vec()[2..].iter().collect();
+
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        let count = match set_db.delete(key, &members)? {
+            SetDeleteResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            SetDeleteResult::Some(count) => count,
+        };
+        set_db.commit()?;
+        builder.number_usize(response_buffer, count);
+        Ok(())
+    }
+
     // ===
     // Internal API
     // ===
@@ -1142,6 +1175,16 @@ mod test {
         ("srandmember s1", "$-1\r\n"),
         ("srandmember s1 1", "*-1\r\n"),
     ]; "test_srandmember")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("srem strkey", "-ERR wrong number of arguments for 'srem' command\r\n"),
+        ("srem strkey 1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("srem s1 1 2", ":2\r\n"),
+        ("smembers s1", "*3\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
+        ("srem s1 1 2 3 4 5", ":3\r\n"),
+        ("scard s1", ":0\r\n"),
+    ]; "test_srem")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
