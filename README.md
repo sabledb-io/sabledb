@@ -266,6 +266,8 @@ and visit this page again in couple of days
 | srandmember | ✓ |✓ | |
 | srem | ✓ |✓ | |
 | sscan | ✓ |✓ | |
+| sunion | ✓ |✓ | |
+| sunionstore | ✓ |✓ | |
 
 ### Generic commands
 

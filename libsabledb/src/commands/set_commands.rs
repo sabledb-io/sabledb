@@ -45,6 +45,12 @@ enum IntersectResult {
 }
 
 #[derive(PartialEq, Debug)]
+enum UnionResult {
+    Some(Vec<BytesMut>),
+    WrongType,
+}
+
+#[derive(PartialEq, Debug)]
 enum PickRandomIndexResult {
     Some(VecDeque<usize>),
     WrongType,
@@ -146,6 +152,12 @@ impl SetCommands {
             }
             RedisCommandName::Sscan => {
                 Self::sscan(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Sunion => {
+                Self::sunion(client_state, command, &mut response_buffer).await?;
+            }
+            RedisCommandName::Sunionstore => {
+                Self::sunionstore(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -981,6 +993,56 @@ impl SetCommands {
         Ok(())
     }
 
+    /// `SUNION key [key ...]`
+    async fn sunion(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
+
+        let keys: Vec<&BytesMut> = command.args_vec()[1..].iter().collect();
+        let _lock = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
+        let builder = RespBuilderV2::default();
+        let members = match Self::set_union(client_state, &keys)? {
+            UnionResult::Some(members) => members,
+            UnionResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        };
+        builder.add_array_len(response_buffer, members.len());
+        for member in &members {
+            builder.add_bulk_string(response_buffer, member);
+        }
+        Ok(())
+    }
+
+    /// `SUNIONSTORE destination key [key ...]`
+    async fn sunionstore(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let destination = command_arg_at!(command, 1);
+        let keys: Vec<&BytesMut> = command.args_vec()[2..].iter().collect();
+        let _lock = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
+        let builder = RespBuilderV2::default();
+        let members = match Self::set_union(client_state.clone(), &keys)? {
+            UnionResult::Some(members) => members,
+            UnionResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+        };
+
+        let members: Vec<&BytesMut> = members.iter().collect();
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        set_db.put_multi_overwrite(destination, &members)?;
+        set_db.commit()?;
+        builder.number_usize(response_buffer, members.len());
+        Ok(())
+    }
+
     // ===
     // Internal API
     // ===
@@ -1115,6 +1177,42 @@ impl SetCommands {
             .map(|(set_name, _)| set_name.clone())
             .collect();
         Ok(IntersectResult::Some(intersection))
+    }
+
+    /// Helper method for `SUNION` and `SUNIONESTORE` commands
+    fn set_union(
+        client_state: Rc<ClientState>,
+        all_sets: &[&BytesMut],
+    ) -> Result<UnionResult, SableError> {
+        let result_set = Rc::new(RefCell::new(BTreeSet::<BytesMut>::new()));
+
+        // create an iterator that points to no where
+        let mut db_iter = client_state
+            .database()
+            .create_iterator(&BytesMut::default())?;
+
+        // Visit the sets
+        for set_name in all_sets {
+            let result_set_cloned = result_set.clone();
+            let iter_result = Self::iterate_by_member_and_apply(
+                client_state.clone(),
+                &mut db_iter,
+                set_name,
+                move |member| {
+                    result_set_cloned
+                        .borrow_mut()
+                        .insert(BytesMut::from(member));
+                    Ok(IterateCallbackResult::Continue)
+                },
+            )?;
+
+            if iter_result == IterateResult::WrongType {
+                return Ok(UnionResult::WrongType);
+            }
+        }
+
+        let intersection: Vec<BytesMut> = result_set.borrow().iter().cloned().collect();
+        Ok(UnionResult::Some(intersection))
     }
 
     /// Iterate over all items of `set_name` and apply callback on them
@@ -1368,6 +1466,24 @@ mod test {
         ("sscan s1 0 count 5", "*2\r\n:0\r\n*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
         ("sscan s1 0 count 100", "*2\r\n:0\r\n*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
     ]; "test_sscan")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("sadd s2 1 2 3 4 5 6 7 8 9 0", ":10\r\n"),
+        ("sunion s1 strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sunion", "-ERR wrong number of arguments for 'sunion' command\r\n"),
+        ("sunion s1 s2", "*10\r\n$1\r\n0\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n$1\r\n6\r\n$1\r\n7\r\n$1\r\n8\r\n$1\r\n9\r\n"),
+    ]; "test_sunion")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("set dst value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("sadd s2 1 2 3 4 5 6 7 8 9 0", ":10\r\n"),
+        ("sunionstore dst s1 strkey", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sunionstore dst", "-ERR wrong number of arguments for 'sunionstore' command\r\n"),
+        ("sunionstore dst s1 s2", ":10\r\n"),
+        ("smembers dst", "*10\r\n$1\r\n0\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n$1\r\n6\r\n$1\r\n7\r\n$1\r\n8\r\n$1\r\n9\r\n"),
+    ]; "test_sunionstore")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
