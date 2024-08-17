@@ -247,6 +247,28 @@ macro_rules! writer_return_null_string {
 }
 
 #[macro_export]
+macro_rules! writer_return_null_array {
+    ($writer:expr) => {
+        $writer.null_array().await?;
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! writer_return_null_reply {
+    ($writer:expr, $return_array:expr) => {
+        if $return_array {
+            $writer.null_array().await?;
+        } else {
+            $writer.null_string().await?;
+        }
+        $writer.flush().await?;
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! writer_return_wrong_type {
     ($writer:expr) => {
         $writer.error_string(Strings::WRONGTYPE).await?;

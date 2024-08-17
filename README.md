@@ -261,6 +261,9 @@ and visit this page again in couple of days
 | sismember | ✓ |✓ | |
 | smismember | ✓ |✓ | |
 | smembers | ✓ |✓ | |
+| smove | ✓ |✓ | |
+| spop | ✓ |✓ | |
+| srandmember | ✓ |✓ | |
 
 ### Generic commands
 

@@ -610,7 +610,14 @@ impl Client {
             | RedisCommandName::Sinterstore
             | RedisCommandName::Sismember
             | RedisCommandName::Smismember
-            | RedisCommandName::Smembers => {
+            | RedisCommandName::Smembers
+            | RedisCommandName::Smove
+            | RedisCommandName::Spop
+            | RedisCommandName::Srandmember
+            | RedisCommandName::Srem
+            | RedisCommandName::Sscan
+            | RedisCommandName::Sunion
+            | RedisCommandName::Sunionstore => {
                 match SetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(

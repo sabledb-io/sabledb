@@ -1,24 +1,20 @@
-#[allow(unused_imports)]
 use crate::{
-    check_args_count, check_value_type, command_arg_at,
-    commands::{HandleCommandResult, StringCommands, Strings},
+    check_args_count, command_arg_at,
+    commands::{HandleCommandResult, Strings},
     metadata::SetMemberKey,
-    parse_string_to_number,
     server::ClientState,
     storage::{
-        FindSmallestResult, GetSetMetadataResult, HashDeleteResult, HashGetResult, IteratorAdapter,
-        ScanCursor, SetDb, SetExistsResult, SetLenResult, SetPutResult,
+        FindSmallestResult, GetSetMetadataResult, IteratorAdapter, SetDb, SetDeleteResult,
+        SetExistsResult, SetLenResult, SetPutResult,
     },
-    types::List,
     utils::RespBuilderV2,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
 };
 
 use crate::io::RespWriter;
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
@@ -45,6 +41,45 @@ enum DiffResult {
 enum IntersectResult {
     Some(Vec<BytesMut>),
     WrongType,
+}
+
+#[derive(PartialEq, Debug)]
+enum PickRandomIndexResult {
+    Some(VecDeque<usize>),
+    WrongType,
+    NotFound,
+}
+
+/// Return the set metadata
+macro_rules! writer_get_set_metadata_or_empty_array {
+    ($set_db:expr, $key:expr, $writer:expr) => {{
+        let md = match $set_db.set_metadata($key)? {
+            GetSetMetadataResult::WrongType => {
+                writer_return_wrong_type!($writer);
+            }
+            GetSetMetadataResult::NotFound => {
+                writer_return_empty_array!($writer);
+            }
+            GetSetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
+}
+
+/// Return the set metadata
+macro_rules! writer_get_set_metadata_or_null {
+    ($set_db:expr, $key:expr, $writer:expr, $return_array:expr) => {{
+        let md = match $set_db.set_metadata($key)? {
+            GetSetMetadataResult::WrongType => {
+                writer_return_wrong_type!($writer);
+            }
+            GetSetMetadataResult::NotFound => {
+                writer_return_null_reply!($writer, $return_array);
+            }
+            GetSetMetadataResult::Some(md) => md,
+        };
+        md
+    }};
 }
 
 pub struct SetCommands {}
@@ -84,15 +119,30 @@ impl SetCommands {
             RedisCommandName::Smismember => {
                 Self::smismember(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Smove => {
+                Self::smove(client_state, command, &mut response_buffer).await?;
+            }
             RedisCommandName::Smembers => {
                 // Since - potentially - we could have a large set, stream the responses and don't build them
                 // up in the memory first
                 Self::smembers(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
+            RedisCommandName::Spop => {
+                // Since - potentially - we could have a large set, stream the responses and don't build them
+                // up in the memory first
+                Self::spop(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Srandmember => {
+                // Since - potentially - we could have a large set, stream the responses and don't build them
+                // up in the memory first
+                Self::srandmember(client_state, command, tx).await?;
+                return Ok(HandleCommandResult::ResponseSent);
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
-                    "None SET command {}",
+                    "SET command '{}' is not supported",
                     command.main_command()
                 )));
             }
@@ -475,15 +525,7 @@ impl SetCommands {
         let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut writer = RespWriter::new(tx, 1024, client_state.clone());
-        let md = match set_db.set_metadata(key)? {
-            GetSetMetadataResult::WrongType => {
-                writer_return_wrong_type!(writer);
-            }
-            GetSetMetadataResult::NotFound => {
-                writer_return_empty_array!(writer);
-            }
-            GetSetMetadataResult::Some(md) => md,
-        };
+        let md = writer_get_set_metadata_or_empty_array!(set_db, key, writer);
 
         // Create an iterator over all the set members and stream them
         let set_prefix = md.prefix();
@@ -525,6 +567,213 @@ impl SetCommands {
         Ok(())
     }
 
+    /// Move member from the set at source to the set at destination. This operation is atomic. In every given moment
+    /// the element will appear to be a member of source or destination for other clients
+    /// `SMOVE source destination member`
+    async fn smove(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+        let source = command_arg_at!(command, 1);
+        let destination = command_arg_at!(command, 2);
+        let member = command_arg_at!(command, 3);
+
+        // write-lock
+        let _unused = LockManager::lock_multi(
+            &[source, destination],
+            client_state.clone(),
+            command.clone(),
+        )
+        .await?;
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+
+        // Delete from the source
+        match set_db.delete(source, &[member])? {
+            SetDeleteResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            SetDeleteResult::Some(0) => {
+                // does not exist
+                builder.number_usize(response_buffer, 0);
+                return Ok(());
+            }
+            SetDeleteResult::Some(_) => {}
+        }
+
+        // Add to the target
+        match set_db.put_multi(destination, &[member])? {
+            SetPutResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            SetPutResult::Some(_) => {}
+        }
+
+        set_db.commit()?;
+        builder.number_usize(response_buffer, 1);
+        Ok(())
+    }
+
+    /// Removes and returns one or more random members from the set value store at key
+    /// `SPOP key [count]`
+    async fn spop(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let set_name = command_arg_at!(command, 1);
+
+        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
+        let (count, return_array) = if let Some(count) = command.args_vec().get(2) {
+            let Some(count) = BytesMutUtils::parse::<usize>(count) else {
+                writer
+                    .error_string(Strings::ZERR_VALUE_MUST_BE_POSITIVE)
+                    .await?;
+                writer.flush().await?;
+                return Ok(());
+            };
+            (count, true)
+        } else {
+            (1usize, false)
+        };
+
+        let _lock = LockManager::lock(set_name, client_state.clone(), command.clone()).await?;
+        let mut indexes =
+            match Self::pick_random_indexes(client_state.clone(), set_name, count, false)? {
+                PickRandomIndexResult::WrongType => {
+                    writer_return_wrong_type!(writer);
+                }
+                PickRandomIndexResult::NotFound => {
+                    writer_return_null_reply!(writer, return_array);
+                }
+                PickRandomIndexResult::Some(indexes) => indexes,
+            };
+
+        let mut set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let md = writer_get_set_metadata_or_null!(set_db, set_name, writer, return_array);
+
+        let set_prefix = md.prefix();
+        let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
+
+        let mut curidx = 0usize;
+
+        if return_array {
+            writer.add_array_len(indexes.len()).await?;
+        }
+        while db_iter.valid() && !indexes.is_empty() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&set_prefix) {
+                break;
+            }
+
+            if let Some(top_index) = indexes.front() {
+                if *top_index == curidx {
+                    // pop it
+                    indexes.pop_front();
+                    // write this key
+                    let item = SetMemberKey::from_bytes(key)?;
+                    writer.add_bulk_string(item.key()).await?;
+                    // delete it from the set
+                    set_db.delete(set_name, &[&BytesMut::from(item.key())])?;
+                }
+            }
+            curidx = curidx.saturating_add(1);
+            db_iter.next();
+        }
+
+        // Commit the changes
+        set_db.commit()?;
+        writer.flush().await?;
+        Ok(())
+    }
+
+    /// When called with just the key argument, return a random element from the set value stored at key.
+    /// If the provided count argument is positive, return an array of distinct elements. The array's length is either
+    /// count or the set's cardinality (SCARD), whichever is lower.
+    /// If called with a negative count, the behavior changes and the command is allowed to return the same element
+    /// multiple times. In this case, the number of returned elements is the absolute value of the specified count
+    /// `SRANDMEMBER key [count]`
+    async fn srandmember(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let set_name = command_arg_at!(command, 1);
+
+        let mut writer = RespWriter::new(tx, 1024, client_state.clone());
+        let (count, return_array, allow_dups) = if let Some(count) = command.args_vec().get(2) {
+            let Some(count) = BytesMutUtils::parse::<i32>(count) else {
+                writer
+                    .error_string(Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE)
+                    .await?;
+                writer.flush().await?;
+                return Ok(());
+            };
+            (count.unsigned_abs() as usize, true, count < 0)
+        } else {
+            (1usize, false, false)
+        };
+
+        let _lock = LockManager::lock(set_name, client_state.clone(), command.clone()).await?;
+        let mut indexes =
+            match Self::pick_random_indexes(client_state.clone(), set_name, count, allow_dups)? {
+                PickRandomIndexResult::WrongType => {
+                    writer_return_wrong_type!(writer);
+                }
+                PickRandomIndexResult::NotFound => {
+                    writer_return_null_reply!(writer, return_array);
+                }
+                PickRandomIndexResult::Some(indexes) => indexes,
+            };
+
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let md = writer_get_set_metadata_or_null!(set_db, set_name, writer, return_array);
+
+        let set_prefix = md.prefix();
+        let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
+
+        let mut curidx = 0usize;
+
+        if return_array {
+            writer.add_array_len(indexes.len()).await?;
+        }
+
+        while db_iter.valid() && !indexes.is_empty() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&set_prefix) {
+                break;
+            }
+
+            let item = SetMemberKey::from_bytes(key)?;
+            while let Some(wanted_index) = indexes.front() {
+                if curidx.eq(wanted_index) {
+                    writer.add_bulk_string(item.key()).await?;
+                    // pop the first element
+                    indexes.pop_front();
+                    // Don't progress the iterator here,  we might have another item with the same index
+                } else {
+                    break;
+                }
+            }
+            
+            curidx = curidx.saturating_add(1);
+            db_iter.next();
+        }
+
+        // Commit the changes
+        writer.flush().await?;
+        Ok(())
+    }
     // ===
     // Internal API
     // ===
@@ -704,6 +953,27 @@ impl SetCommands {
         limit_keyword.eq_ignore_ascii_case(b"limit")
             && BytesMutUtils::parse::<usize>(limit_value).is_some()
     }
+
+    /// Pick up to `count` indexes from the set represented by `set_name`
+    /// the returned indexes vector is sorted
+    fn pick_random_indexes(
+        client_state: Rc<ClientState>,
+        set_name: &BytesMut,
+        count: usize,
+        allow_dups: bool,
+    ) -> Result<PickRandomIndexResult, SableError> {
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+        let md = match set_db.set_metadata(set_name)? {
+            GetSetMetadataResult::WrongType => return Ok(PickRandomIndexResult::WrongType),
+            GetSetMetadataResult::NotFound => return Ok(PickRandomIndexResult::NotFound),
+            GetSetMetadataResult::Some(md) => md,
+        };
+
+        let possible_indexes = (0..md.len() as usize).collect::<Vec<usize>>();
+        Ok(PickRandomIndexResult::Some(
+            crate::utils::choose_multiple_values(count, &possible_indexes, allow_dups)?,
+        ))
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -841,6 +1111,37 @@ mod test {
         ("smembers set1", "*4\r\n$4\r\nfour\r\n$3\r\none\r\n$5\r\nthree\r\n$3\r\ntwo\r\n"),
         ("smembers nosuchkey", "*0\r\n"),
     ]; "test_smembers")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("smove s1 s2", "-ERR wrong number of arguments for 'smove' command\r\n"),
+        ("sadd s1 a c", ":2\r\n"),
+        ("sadd s2 a b", ":2\r\n"),
+        ("smove s1 strkey a", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("smove strkey s2 a", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("smove s1 s2 a", ":1\r\n"),
+        ("scard s1", ":1\r\n"),
+        ("scard s2", ":2\r\n"),
+        ("smove s1 s2 c", ":1\r\n"),
+        ("scard s1", ":0\r\n"),
+        ("scard s2", ":3\r\n"),
+    ]; "test_smove")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("spop strkey 1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("spop s1 5", "*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
+        ("spop s1", "$-1\r\n"),
+        ("spop s1 1", "*-1\r\n"),
+    ]; "test_spop")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("spop strkey 1", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("srandmember s1 5", "*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
+        ("spop s1 5", "*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"), // empty the set
+        ("srandmember s1", "$-1\r\n"),
+        ("srandmember s1 1", "*-1\r\n"),
+    ]; "test_srandmember")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

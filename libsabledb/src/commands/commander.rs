@@ -164,6 +164,13 @@ pub enum RedisCommandName {
     Sismember,
     Smismember,
     Smembers,
+    Smove,
+    Spop,
+    Srandmember,
+    Srem,
+    Sscan,
+    Sunion,
+    Sunionstore,
     NotSupported(String),
 }
 
@@ -1266,6 +1273,57 @@ impl Default for CommandsManager {
                 CommandMetadata::new(RedisCommandName::Smembers)
                     .read_only()
                     .with_arity(2),
+            ),
+            (
+                "smove",
+                CommandMetadata::new(RedisCommandName::Smove)
+                    .write()
+                    .with_arity(4)
+                    .with_first_key(1)
+                    .with_last_key(2)
+                    .with_step(1),
+            ),
+            (
+                "spop",
+                CommandMetadata::new(RedisCommandName::Spop)
+                    .write()
+                    .with_arity(-2),
+            ),
+            (
+                "srandmember",
+                CommandMetadata::new(RedisCommandName::Srandmember)
+                    .read_only()
+                    .with_arity(-2),
+            ),
+            (
+                "srem",
+                CommandMetadata::new(RedisCommandName::Srem)
+                    .write()
+                    .with_arity(-3),
+            ),
+            (
+                "sscan",
+                CommandMetadata::new(RedisCommandName::Sscan)
+                    .read_only()
+                    .with_arity(-3),
+            ),
+            (
+                "sunion",
+                CommandMetadata::new(RedisCommandName::Sunion)
+                    .read_only()
+                    .with_arity(-2)
+                    .with_first_key(1)
+                    .with_last_key(-1)
+                    .with_step(1),
+            ),
+            (
+                "sunionstore",
+                CommandMetadata::new(RedisCommandName::Sunionstore)
+                    .write()
+                    .with_arity(-3)
+                    .with_first_key(1)
+                    .with_last_key(-1)
+                    .with_step(1),
             ),
         ]);
 
