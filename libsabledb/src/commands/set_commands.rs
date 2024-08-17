@@ -3,6 +3,7 @@ use crate::{
     commands::{HandleCommandResult, Strings},
     metadata::SetMemberKey,
     server::ClientState,
+    storage::ScanCursor,
     storage::{
         FindSmallestResult, GetSetMetadataResult, IteratorAdapter, SetDb, SetDeleteResult,
         SetExistsResult, SetLenResult, SetPutResult,
@@ -142,6 +143,9 @@ impl SetCommands {
                 // up in the memory first
                 Self::srandmember(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
+            }
+            RedisCommandName::Sscan => {
+                Self::sscan(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -807,6 +811,176 @@ impl SetCommands {
         Ok(())
     }
 
+    /// `SSCAN key cursor [MATCH pattern] [COUNT count]`
+    async fn sscan(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+
+        let set_name = command_arg_at!(command, 1);
+        let cursor_id = command_arg_at!(command, 2);
+
+        let builder = RespBuilderV2::default();
+        let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
+            builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
+            return Ok(());
+        };
+
+        // parse the arguments
+        let mut iter = command.args_vec().iter();
+        iter.next(); // sscan
+        iter.next(); // key
+        iter.next(); // cursor
+
+        let mut count = 10usize;
+        let mut search_pattern: Option<&BytesMut> = None;
+        while let Some(arg) = iter.next() {
+            let arg = BytesMutUtils::to_string(arg).to_lowercase();
+            match arg.as_str() {
+                "match" => {
+                    let Some(pattern) = iter.next() else {
+                        builder_return_syntax_error!(builder, response_buffer);
+                    };
+
+                    // TODO: parse the pattern and make sure it is valid
+                    search_pattern = Some(pattern);
+                }
+                "count" => {
+                    let Some(n) = iter.next() else {
+                        builder_return_syntax_error!(builder, response_buffer);
+                    };
+                    // parse `n`
+                    let Some(n) = BytesMutUtils::parse::<usize>(n) else {
+                        builder_return_value_not_int!(builder, response_buffer);
+                    };
+
+                    // TODO: scan number of items should be configurable
+                    count = if n == 0 { 10usize } else { n };
+                }
+                _ => {
+                    builder_return_syntax_error!(builder, response_buffer);
+                }
+            }
+        }
+
+        // multiple db calls, requires exclusive lock
+        let _unused = LockManager::lock(set_name, client_state.clone(), command.clone()).await?;
+        let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
+
+        let md = match set_db.set_metadata(set_name)? {
+            GetSetMetadataResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            GetSetMetadataResult::NotFound => {
+                builder.add_array_len(response_buffer, 2);
+                builder.add_number(response_buffer, 0, false);
+                builder.add_empty_array(response_buffer);
+                return Ok(());
+            }
+            GetSetMetadataResult::Some(md) => md,
+        };
+
+        // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
+        // otherwise, return respond with an error
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::default()))
+        else {
+            builder.error_string(
+                response_buffer,
+                format!("ERR: Invalid cursor id {}", cursor_id).as_str(),
+            );
+            return Ok(());
+        };
+
+        // Build the prefix matcher
+        let matcher = search_pattern.map(|search_pattern| {
+            wildmatch::WildMatch::new(
+                BytesMutUtils::to_string(search_pattern)
+                    .to_string()
+                    .as_str(),
+            )
+        });
+
+        // Build the prefix
+        let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
+            BytesMut::from(saved_prefix)
+        } else {
+            md.prefix()
+        };
+
+        let set_prefix = md.prefix();
+
+        let mut results = Vec::<BytesMut>::with_capacity(count);
+        let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
+        while db_iter.valid() && count > 0 {
+            // get the key & value
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            // Go over this hash items only
+            if !key.starts_with(&set_prefix) {
+                break;
+            }
+
+            // extract the key from the row data
+            let member = SetMemberKey::from_bytes(key)?;
+            let item_user_key = member.key();
+
+            // If we got a matcher, use it
+            if let Some(matcher) = &matcher {
+                let key_str = BytesMutUtils::to_string(item_user_key);
+                if matcher.matches(key_str.as_str()) {
+                    results.push(BytesMut::from(item_user_key));
+                    count = count.saturating_sub(1);
+                }
+            } else {
+                results.push(BytesMut::from(item_user_key));
+                count = count.saturating_sub(1);
+            }
+            db_iter.next();
+        }
+
+        let cursor_id = if db_iter.valid() && count == 0 {
+            // read the next key to be used as the next starting point for next iteration
+            let Some(key) = db_iter.key() else {
+                // this is an error
+                builder.error_string(
+                    response_buffer,
+                    "ERR internal error: failed to read key from the database",
+                );
+                return Ok(());
+            };
+
+            if key.starts_with(&set_prefix) {
+                // store the next cursor
+                let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
+                // and store the cursor state
+                client_state.set_cursor(cursor.clone());
+                cursor.id()
+            } else {
+                // there are more items, but they don't belong to this hash
+                client_state.remove_cursor(cursor.id());
+                0u64
+            }
+        } else {
+            // reached the end
+            // delete the cursor
+            client_state.remove_cursor(cursor.id());
+            0u64
+        };
+
+        // write the response
+        builder.add_array_len(response_buffer, 2);
+        builder.add_number(response_buffer, cursor_id, false);
+        builder.add_array_len(response_buffer, results.len());
+        for member in results.iter() {
+            builder.add_bulk_string(response_buffer, member);
+        }
+        Ok(())
+    }
+
     // ===
     // Internal API
     // ===
@@ -1185,6 +1359,15 @@ mod test {
         ("srem s1 1 2 3 4 5", ":3\r\n"),
         ("scard s1", ":0\r\n"),
     ]; "test_srem")]
+    #[test_case(vec![
+        ("set strkey value", "+OK\r\n"),
+        ("sadd s1 1 2 3 4 5", ":5\r\n"),
+        ("sscan s1", "-ERR wrong number of arguments for 'sscan' command\r\n"),
+        ("sscan s1 cursor_id", "-ERR value is not an integer or out of range\r\n"),
+        ("sscan strkey 0 count 5", "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"),
+        ("sscan s1 0 count 5", "*2\r\n:0\r\n*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
+        ("sscan s1 0 count 100", "*2\r\n:0\r\n*5\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n4\r\n$1\r\n5\r\n"),
+    ]; "test_sscan")]
     fn test_set_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

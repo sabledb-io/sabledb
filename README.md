@@ -265,6 +265,7 @@ and visit this page again in couple of days
 | spop | ✓ |✓ | |
 | srandmember | ✓ |✓ | |
 | srem | ✓ |✓ | |
+| sscan | ✓ |✓ | |
 
 ### Generic commands
 
