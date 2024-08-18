@@ -35,4 +35,4 @@ macro_rules! storage_rocksdb {
     }};
 }
 
-pub const SEQUENCES_FILE: &'static str = "changes.seq";
+pub const SEQUENCES_FILE: &str = "changes.seq";

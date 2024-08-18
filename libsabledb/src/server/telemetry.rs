@@ -55,7 +55,7 @@ impl ReplicationTelemetry {
 
         match d.role {
             ServerRole::Primary => {
-                for (_, info) in &mut d.primary_telemetry.replicas {
+                for info in &mut d.primary_telemetry.replicas.values_mut() {
                     info.distance_from_primary =
                         seq_num.saturating_sub(info.last_change_sequence_number);
                 }
