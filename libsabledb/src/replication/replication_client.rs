@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_replication_must_start_with_fullsync() -> Result<(), SableError> {
-        let replica_db = create_database("replication_replica", false)?;
+        let replica_db = create_database("replication_replica.1", false)?;
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
 
@@ -528,8 +528,8 @@ mod tests {
         // requests the primary to get all changes since last change (for the
         // test purpose, it is always set to 0). Once the changes are passed,
         // the replica stores them into `replica_db`
-        let primary_db = create_database("replication_primary", true)?;
-        let replica_db = create_database("replication_replica", false)?;
+        let primary_db = create_database("replication_primary.2", true)?;
+        let replica_db = create_database("replication_replica.2", false)?;
 
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
