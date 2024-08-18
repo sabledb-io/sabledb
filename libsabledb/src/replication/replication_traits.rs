@@ -36,7 +36,8 @@ impl<'a> TcpStreamBytesWriter<'a> {
 impl<'a> BytesWriter for TcpStreamBytesWriter<'a> {
     fn write_message(&mut self, message: &mut BytesMut) -> Result<(), SableError> {
         self.write_usize(message.len())?;
-        io::write_bytes(&mut self.tcp_stream, message)
+        io::write_bytes(&mut self.tcp_stream, message)?;
+        Ok(())
     }
 }
 

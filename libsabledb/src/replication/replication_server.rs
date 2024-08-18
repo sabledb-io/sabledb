@@ -7,7 +7,8 @@ use crate::utils;
 use crate::{
     io::Archive,
     replication::{
-        BytesReader, BytesWriter, ReplicationMessage, TcpStreamBytesReader, TcpStreamBytesWriter,
+        BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse, ResponseCommon,
+        ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     SableError, StorageAdapter,
 };
@@ -15,6 +16,12 @@ use crate::{
 use num_format::{Locale, ToFormattedString};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::net::TcpListener;
+
+#[cfg(not(test))]
+use tracing::{debug, error, info};
+
+#[cfg(test)]
+use std::{println as info, println as debug, println as error};
 
 #[derive(Default)]
 pub struct ReplicationServer {}
@@ -26,7 +33,7 @@ lazy_static::lazy_static! {
 
 /// Notify the replication threads to stop and wait for them to terminate
 pub async fn replication_thread_stop_all() {
-    tracing::info!("Notifying all replication threads to shutdown");
+    info!("Notifying all replication threads to shutdown");
     STOP_FLAG.store(true, Ordering::Relaxed);
     loop {
         let running_threads = REPLICATION_THREADS.load(Ordering::Relaxed);
@@ -36,7 +43,7 @@ pub async fn replication_thread_stop_all() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     STOP_FLAG.store(false, Ordering::Relaxed);
-    tracing::info!("All replication threads have stopped");
+    info!("All replication threads have stopped");
 }
 
 /// Increment the number of running replication threads by 1
@@ -79,12 +86,12 @@ impl Drop for ReplicationThreadMarker {
 impl ReplicationServer {
     fn read_request(
         reader: &mut dyn BytesReader,
-    ) -> Result<Option<ReplicationMessage>, SableError> {
+    ) -> Result<Option<ReplicationRequest>, SableError> {
         // Read the request (this is a fixed size request)
         let result = reader.read_message()?;
         match result {
             None => Ok(None),
-            Some(bytes) => Ok(ReplicationMessage::from_bytes(&bytes)),
+            Some(bytes) => Ok(ReplicationRequest::from_bytes(&bytes)),
         }
     }
 
@@ -104,14 +111,14 @@ impl ReplicationServer {
         stream.set_read_timeout(None)?;
 
         let ts = utils::current_time(utils::CurrentTimeResolution::Microseconds).to_string();
-        tracing::info!("Preparing checkpoint for replica {}", replica_addr);
+        info!("Preparing checkpoint for replica {}", replica_addr);
         let backup_db_path = std::path::PathBuf::from(format!(
             "{}.checkpoint.{}",
             store.open_params().db_path.display(),
             ts
         ));
         store.create_checkpoint(&backup_db_path)?;
-        tracing::info!(
+        info!(
             "Checkpoint {} created successfully",
             backup_db_path.display()
         );
@@ -122,7 +129,7 @@ impl ReplicationServer {
         // Send the file size first
         let mut file = std::fs::File::open(&tar_file)?;
         let file_len = file.metadata()?.len() as usize;
-        tracing::info!(
+        info!(
             "Sending tar file: {}, Len: {} bytes",
             tar_file.display(),
             file_len.to_formatted_string(&Locale::en)
@@ -133,7 +140,7 @@ impl ReplicationServer {
 
         // Now send the content
         std::io::copy(&mut file, stream)?;
-        tracing::info!("Sending tar file {} completed", tar_file.display());
+        info!("Sending tar file {} completed", tar_file.display());
         prepare_std_socket(stream)?;
 
         // Delete the tar + folder
@@ -153,12 +160,12 @@ impl ReplicationServer {
         let mut reader = TcpStreamBytesReader::new(stream);
         let mut writer = TcpStreamBytesWriter::new(stream);
 
-        tracing::debug!("Waiting for replication request..");
+        debug!("Waiting for replication request..");
         let req = loop {
             let result = Self::read_request(&mut reader);
             match result {
                 Err(e) => {
-                    tracing::error!("Failed to read request. {:?}", e);
+                    error!("Failed to read request. {:?}", e);
                     return false;
                 }
                 // And this is why I ❤ Rust...
@@ -166,41 +173,47 @@ impl ReplicationServer {
                 Ok(None) => {
                     // timeout
                     if replication_thread_is_going_down() {
-                        tracing::info!("Received request to shutdown - bye");
+                        info!("Received request to shutdown - bye");
                         return false;
                     }
                     continue;
                 }
             };
         };
-        tracing::debug!("Received replication request {:?}", req);
+        debug!("Received replication request {:?}", req);
 
         match req {
-            ReplicationMessage::FullSync => {
+            ReplicationRequest::FullSync(common) => {
+                debug!("Received request FullSync(Id:{})", common.request_id());
                 if let Err(e) = Self::send_checkpoint(store, options, replica_addr, stream) {
-                    tracing::info!(
+                    info!(
                         "Failed sending db chceckpoint to replica {}. {:?}",
-                        replica_addr,
-                        e
+                        replica_addr, e
                     );
                     return false;
                 }
             }
-            ReplicationMessage::GetUpdatesSince(seq) => {
-                tracing::debug!(
+            ReplicationRequest::GetUpdatesSince((common, seq)) => {
+                debug!(
+                    "Received request GetUpdatesSince({}, ChangesSince:{})",
+                    common, seq
+                );
+                debug!(
                     "Replica {} is requesting changes since: {}",
-                    replica_addr,
-                    seq
+                    replica_addr, seq
                 );
 
-                if seq == 0 {
-                    // This is the first time 
-                    let response_not_ok = ReplicationMessage::GetChangesErr(bytes::BytesMut::from(
-                        "First time replica. Switch to FullSync",
-                    ));
+                if common.request_id() == 0 {
+                    // This is the first request - force a fullsync
+                    let response_not_ok = ReplicationResponse::NotOk(
+                        ResponseCommon::new(common.request_id())
+                            .with_reason(ResponseReason::NoFullSyncDone),
+                    );
+
+                    debug!("Sending replication response: {}", response_not_ok);
                     let mut response_not_ok_buffer = response_not_ok.to_bytes();
                     if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
-                        tracing::error!("Failed to send 'GetChangesErr' control message. {:?}", e);
+                        error!("Failed to send 'GetChangesErr' control message. {:?}", e);
                         // cant recover here, close the connection
                         return false;
                     }
@@ -219,19 +232,23 @@ impl ReplicationServer {
                             let msg =
                                 format!("Failed to construct 'changes since' message. {:?}", e);
                             tracing::warn!(msg);
-                            let response_not_ok = ReplicationMessage::GetChangesErr(
-                                bytes::BytesMut::from(msg.as_bytes()),
+
+                            // build the response + the error code and send it back
+                            let response_not_ok = ReplicationResponse::NotOk(
+                                ResponseCommon::new(common.request_id())
+                                    .with_reason(ResponseReason::CreatingUpdatesSinceError),
                             );
+
                             let mut response_not_ok_buffer = response_not_ok.to_bytes();
                             if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
-                                tracing::error!(
-                                    "Failed to send 'GetChangesErr' control message. {:?}",
-                                    e
+                                error!(
+                                    "Failed to send '{}' control message. {:?}",
+                                    response_not_ok, e
                                 );
                                 // cant recover here, close the connection
                                 return false;
                             }
-                            tracing::info!("Sent GetChangesErr message to replica");
+                            info!("Sent {} message to replica", response_not_ok);
                             // return true here so we wont close the connection
                             return true;
                         }
@@ -250,13 +267,13 @@ impl ReplicationServer {
                     }
                 };
 
-                tracing::info!("Sending replication update: {}", storage_updates);
+                info!("Sending replication update: {}", storage_updates);
 
-                // Send a `GET_CHANGES_OK` message, followed by the data
-                let response_ok = ReplicationMessage::GetChangesOk;
+                // Send a `ReplicationResponse::Ok` message, followed by the data
+                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(common.request_id()));
                 let mut response_ok_buffer = response_ok.to_bytes();
                 if let Err(e) = writer.write_message(&mut response_ok_buffer) {
-                    tracing::error!("Failed to send 'GET_CHANGES_OK' control message. {:?}", e);
+                    error!("Failed to send 'Ok' control message. {:?}", e);
                     return false;
                 }
 
@@ -268,18 +285,11 @@ impl ReplicationServer {
                         return false;
                     }
                     Err(e) => {
-                        tracing::error!("Failed to send changes to replica. {:?}", e);
+                        error!("Failed to send changes to replica. {:?}", e);
                         return false;
                     }
                     _ => {}
                 }
-            }
-            _ => {
-                tracing::error!(
-                    "Replication protocol error. Unknown replication request with type {:?}",
-                    req
-                );
-                return false;
             }
         }
         true
@@ -298,14 +308,14 @@ impl ReplicationServer {
         let listener = TcpListener::bind(address.clone())
             .await
             .unwrap_or_else(|_| panic!("failed to bind address {}", address));
-        tracing::info!("Replication server started on address: {}", address);
+        info!("Replication server started on address: {}", address);
         loop {
             let (socket, addr) = listener.accept().await?;
-            tracing::info!("Accepted new connection from replica: {:?}", addr);
+            info!("Accepted new connection from replica: {:?}", addr);
             let mut stream = match socket.into_std() {
                 Ok(socket) => socket,
                 Err(e) => {
-                    tracing::error!("Failed to convert async socket -> std socket!. {:?}", e);
+                    error!("Failed to convert async socket -> std socket!. {:?}", e);
                     continue;
                 }
             };
@@ -316,7 +326,7 @@ impl ReplicationServer {
             // this will allow us to write directly from the storage -> network
             // without building buffers in the memory
             let _handle = std::thread::spawn(move || {
-                tracing::info!("Replication thread started for connection {:?}", addr);
+                info!("Replication thread started for connection {:?}", addr);
                 let _guard = ReplicationThreadMarker::new(addr.to_string());
                 let replica_name = addr.to_string();
 
@@ -326,7 +336,7 @@ impl ReplicationServer {
 
                 // First, prepare the socket
                 if let Err(e) = prepare_std_socket(&stream) {
-                    tracing::error!("Failed to prepare socket. {:?}", e);
+                    error!("Failed to prepare socket. {:?}", e);
                     let _ = stream.shutdown(std::net::Shutdown::Both);
                     return;
                 }
@@ -338,7 +348,7 @@ impl ReplicationServer {
                         &mut stream,
                         &replica_name,
                     ) {
-                        tracing::info!("Closing connection with replica: {:?}", stream);
+                        info!("Closing connection with replica: {:?}", stream);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;
                     }

@@ -505,6 +505,17 @@ impl<'a> U8ArrayBuilder<'a> {
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         self.buffer.extend_from_slice(bytes);
     }
+    /// Write a message to the buffer. A message is the combination of `[len|bytes]`
+    /// This function is similar to:
+    ///
+    /// ```no_compile
+    /// write_usize(len);
+    /// write_bytes(bytes);
+    /// ```
+    pub fn write_message(&mut self, bytes: &[u8]) {
+        self.write_usize(bytes.len());
+        self.write_bytes(bytes);
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____

@@ -1,6 +1,6 @@
 use crate::replication::{
-    prepare_std_socket, BytesReader, BytesWriter, ReplicationMessage, TcpStreamBytesReader,
-    TcpStreamBytesWriter,
+    prepare_std_socket, BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse,
+    RequestCommon, TcpStreamBytesReader, TcpStreamBytesWriter,
 };
 use crate::server::ServerOptions;
 use crate::{
@@ -15,6 +15,12 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
 
+#[cfg(not(test))]
+use tracing::{debug, error, info};
+
+#[cfg(test)]
+use std::{println as info, println as debug, println as error};
+
 #[allow(dead_code)]
 pub enum ReplClientCommand {
     Shutdown,
@@ -26,6 +32,7 @@ enum CheckShutdownResult {
     Err(String),
 }
 
+#[derive(Debug, PartialEq)]
 enum RequestChangesResult {
     /// Close the current connection and attempt to re-connect with the primary
     Reconnect,
@@ -62,14 +69,14 @@ impl ReplicationClient {
                             // Check whether we should attempt to reconnect
                             match Self::check_command_channel(&mut rx) {
                                 CheckShutdownResult::Terminate => {
-                                    tracing::info!(
+                                    info!(
                                         "Requested to terminate replication client thread. Closing connection with primary"
                                     );
                                     break; // leave the thread
                                 }
                                 CheckShutdownResult::Timeout => {}
                                 CheckShutdownResult::Err(e) => {
-                                    tracing::error!(
+                                    error!(
                                         "Error occurred while reading from channel. {:?}",
                                         e
                                     );
@@ -84,7 +91,7 @@ impl ReplicationClient {
 
                     // hereon: use socket with timeout
                     if let Err(e) = prepare_std_socket(&stream) {
-                        tracing::error!("Failed to prepare socket. {:?}", e);
+                        error!("Failed to prepare socket. {:?}", e);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;
                     }
@@ -92,30 +99,31 @@ impl ReplicationClient {
                     // This is the replication main loop:
                     // We continuously calling `request_changes` from the primary
                     // and store them in our database
+                    let mut request_id = 0u64;
                     loop {
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
-                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx);
+                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id);
                         match result {
                             RequestChangesResult::Success => {
                                 // Note: if there are no changes, the primary server will stall
                                 // the response
                             }
                             RequestChangesResult::Reconnect => {
-                                tracing::info!("Closing connection with primary: {:?}", stream);
+                                info!("Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 break;
                             }
                             RequestChangesResult::ExitThread => {
-                                tracing::info!("Closing connection with primary: {:?}", stream);
+                                info!("Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 return; // leave the thread
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) = Self::fullsync(&store, &options, &mut stream).await {
-                                    tracing::error!("Fullsync error. {:?}", e);
+                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id).await {
+                                    error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
                                     break;
                                 }
@@ -134,11 +142,11 @@ impl ReplicationClient {
     fn connect_to_primary(options: &ServerOptions) -> Result<TcpStream, SableError> {
         let repl_config = options.load_replication_config();
         let address = format!("{}:{}", repl_config.ip, repl_config.port);
-        tracing::info!("Connecting to primary at: {}", address);
+        info!("Connecting to primary at: {}", address);
 
         let addr = address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect(addr)?;
-        tracing::info!("Successfully connected to primary at: {}", address);
+        info!("Successfully connected to primary at: {}", address);
         Ok(stream)
     }
 
@@ -148,7 +156,7 @@ impl ReplicationClient {
         // Check the channel for commands
         match rx.try_recv() {
             Ok(ReplClientCommand::Shutdown) => {
-                tracing::info!("Received request to shutdown replication client");
+                info!("Received request to shutdown replication client");
                 CheckShutdownResult::Terminate
             }
             Err(TryRecvError::Empty) => CheckShutdownResult::Timeout,
@@ -164,13 +172,15 @@ impl ReplicationClient {
         store: &StorageAdapter,
         options: &ServerOptions,
         stream: &mut std::net::TcpStream,
+        request_id: &mut u64,
     ) -> Result<(), SableError> {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(None);
 
         // Send a "FULL_SYNC" message
-        tracing::info!("Sending FULL SYNC message to primary");
-        let request = ReplicationMessage::FullSync;
+        let request = ReplicationRequest::FullSync(RequestCommon::with_request_id(request_id));
+        info!("Sending {} message to primary", request);
+
         let mut buffer = request.to_bytes();
         let mut writer = TcpStreamBytesWriter::new(stream);
         writer.write_message(&mut buffer)?;
@@ -183,7 +193,7 @@ impl ReplicationClient {
         const CHUNK_SIZE: usize = 10 << 20; // 10MB
         let count = crate::BytesMutUtils::to_usize(&bytes::BytesMut::from(file_len.as_slice()));
 
-        tracing::info!(
+        info!(
             "Reading file of size: {} bytes",
             count.to_formatted_string(&Locale::en)
         );
@@ -191,7 +201,7 @@ impl ReplicationClient {
         let target_folder_path = format!("{}.checkpoint", options.open_params.db_path.display());
         let mut file = std::fs::File::create(&output_file_name)?;
         crate::io::read_exact(stream, &mut file, count)?;
-        tracing::info!(
+        info!(
             "File {} successfully received from primary",
             output_file_name
         );
@@ -201,16 +211,16 @@ impl ReplicationClient {
         let target_folder_path = PathBuf::from(&target_folder_path);
         let archiver = Archive::default();
         archiver.extract(&output_file_name, &target_folder_path)?;
-        tracing::info!(
+        info!(
             "Backup database extracted to: {}",
             target_folder_path.display()
         );
 
         let _unused = crate::LockManager::lock_all_keys_shared().await?;
-        tracing::info!("Database is now locked (read-only mode)");
+        info!("Database is now locked (read-only mode)");
 
         store.restore_from_checkpoint(&target_folder_path, true)?;
-        tracing::info!("Database successfully restored from backup");
+        info!("Database successfully restored from backup");
 
         let _ = std::fs::remove_file(&output_file_name);
         let _ = std::fs::remove_dir_all(&target_folder_path);
@@ -222,12 +232,12 @@ impl ReplicationClient {
 
     fn read_replication_message(
         reader: &mut dyn BytesReader,
-    ) -> Result<ReplicationMessage, SableError> {
+    ) -> Result<ReplicationResponse, SableError> {
         // Read the request (this is a fixed size request)
         loop {
             let result = match reader.read_message()? {
                 None => None,
-                Some(bytes) => ReplicationMessage::from_bytes(&bytes),
+                Some(bytes) => ReplicationResponse::from_bytes(&bytes),
             };
             match result {
                 // And this is why I ❤ Rust...
@@ -253,6 +263,7 @@ impl ReplicationClient {
         reader: &mut impl BytesReader,
         writer: &mut impl BytesWriter,
         rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
+        request_id: &mut u64,
     ) -> RequestChangesResult {
         // Before we start, check for termination request
         match Self::check_command_channel(rx) {
@@ -261,7 +272,7 @@ impl ReplicationClient {
             }
             CheckShutdownResult::Timeout => {}
             CheckShutdownResult::Err(e) => {
-                tracing::error!("Error occurred while reading from channel. {:?}", e);
+                error!("Error occurred while reading from channel. {:?}", e);
                 return RequestChangesResult::ExitThread;
             }
         }
@@ -270,44 +281,47 @@ impl ReplicationClient {
         let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
-        tracing::info!(
+        info!(
             "Next sequence: {}",
             sequence_number.to_formatted_string(&Locale::en)
         );
 
-        let request = ReplicationMessage::GetUpdatesSince(sequence_number);
+        let request = ReplicationRequest::GetUpdatesSince((
+            RequestCommon::with_request_id(request_id),
+            sequence_number,
+        ));
 
         let mut buffer = request.to_bytes();
         if let Err(e) = writer.write_message(&mut buffer) {
-            tracing::error!("Failed to send replication request. {:?}", e);
+            error!("Failed to send replication request. {:?}", e);
             return RequestChangesResult::ExitThread;
         };
 
-        // We expect now a `GET_CHANGES_OK` or `GET_CHANGES_ERR` message
+        debug!("Successfully sent requesst: {} to primary", request);
+
+        // We expect now an "Ok" or "NotOk" response
         match Self::read_replication_message(reader) {
             Err(e) => {
-                tracing::error!("Error reading replication message. {:?}", e);
+                error!("Error reading replication message. {:?}", e);
                 return RequestChangesResult::Reconnect;
             }
             Ok(msg) => {
                 match msg {
-                    ReplicationMessage::GetChangesOk => {
+                    ReplicationResponse::Ok(common) => {
                         // fall through
+                        debug!("Got Ok for replication request: {}", common.request_id());
                     }
-                    ReplicationMessage::GetChangesErr(msg) => {
+                    ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
                         // do a full sync
-                        tracing::info!("Failed to get changes. Requesting fullsync. {:?}", msg);
+                        info!("Failed to get changes. Requesting fullsync. {}", common);
                         return RequestChangesResult::FullSync;
-                    }
-                    other => {
-                        tracing::error!("Protocol error: unexpected message type: {:?}", other);
-                        return RequestChangesResult::Reconnect;
                     }
                 }
             }
         }
 
+        // Read the storage changes
         let buffer = loop {
             match reader.read_message() {
                 Ok(None) => {
@@ -320,28 +334,28 @@ impl ReplicationClient {
                             continue;
                         }
                         CheckShutdownResult::Err(e) => {
-                            tracing::error!("Error occurred while reading from channel. {:?}", e);
+                            error!("Error occurred while reading from channel. {:?}", e);
                             return RequestChangesResult::ExitThread;
                         }
                     }
                 }
                 Ok(Some(buffer)) => break buffer,
                 Err(e) => {
-                    tracing::error!("Error reading replication response. {:?}", e);
+                    error!("Error reading replication response. {:?}", e);
                     return RequestChangesResult::Reconnect;
                 }
             }
         };
 
         let Some(storage_updates) = StorageUpdates::from_bytes(&buffer) else {
-            tracing::error!(
+            error!(
                 "Failed to deserialise `StorageUpdats` from bytes. `{:?}`",
                 buffer
             );
             return RequestChangesResult::ExitThread;
         };
 
-        tracing::info!("Received changes updates: {}", storage_updates);
+        info!("Received changes updates: {}", storage_updates);
 
         // Keep the "next sequence number" to fetch from the primary
         let sequence_number = storage_updates.end_seq_number;
@@ -361,7 +375,7 @@ impl ReplicationClient {
             }
             if batch_update.len() % MAX_BATCH_SIZE == 0 {
                 if let Err(e) = store.apply_batch(&batch_update) {
-                    tracing::error!("Failed to apply replication batch into store. {:?}", e);
+                    error!("Failed to apply replication batch into store. {:?}", e);
                     return RequestChangesResult::Reconnect;
                 }
                 batch_update.clear();
@@ -371,13 +385,13 @@ impl ReplicationClient {
         // make sure all items are applied
         if !batch_update.is_empty() {
             if let Err(e) = store.apply_batch(&batch_update) {
-                tracing::error!("Failed to apply replication batch into store. {:?}", e);
+                error!("Failed to apply replication batch into store. {:?}", e);
                 return RequestChangesResult::Reconnect;
             }
             batch_update.clear();
         }
 
-        tracing::info!(
+        info!(
             "Applied {} changes to store, next sequence is: {}",
             changes_count.to_formatted_string(&Locale::en),
             sequence_number.to_formatted_string(&Locale::en)
@@ -395,7 +409,7 @@ impl ReplicationClient {
                 if let Ok(seq) = content.parse::<u64>() {
                     Some(seq)
                 } else {
-                    tracing::error!(
+                    error!(
                         "Failed to parse changes sequence number from path: {}.",
                         sequence_file.display()
                     );
@@ -404,7 +418,7 @@ impl ReplicationClient {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(0),
             Err(e) => {
-                tracing::error!("Failed to read sequence file content: {:?}.", e);
+                error!("Failed to read sequence file content: {:?}.", e);
                 None
             }
         }
@@ -414,7 +428,7 @@ impl ReplicationClient {
     fn write_next_sequence(sequence_file: PathBuf, sequence_number: u64) -> RequestChangesResult {
         let sequence_number = format!("{}", sequence_number);
         if let Err(e) = std::fs::write(sequence_file, sequence_number) {
-            tracing::error!("Failed to read sequence file content: {:?}.", e);
+            error!("Failed to read sequence file content: {:?}.", e);
             RequestChangesResult::Reconnect
         } else {
             RequestChangesResult::Success
@@ -431,9 +445,13 @@ impl ReplicationClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{storage::PutFlags, StorageOpenParams};
+    use crate::{
+        replication::{ResponseCommon, ResponseReason},
+        storage::PutFlags,
+        StorageOpenParams,
+    };
     use bytes::BytesMut;
-    const DB_SIZE: usize = 100_000;
+    const DB_SIZE: usize = 10;
 
     fn create_database(db_name: &str, populate_it: bool) -> Result<StorageAdapter, SableError> {
         let _ = std::fs::create_dir_all("tests");
@@ -469,7 +487,40 @@ mod tests {
     }
 
     #[test]
-    fn test_replication_flow() -> Result<(), SableError> {
+    fn test_replication_must_start_with_fullsync() -> Result<(), SableError> {
+        let replica_db = create_database("replication_replica", false)?;
+        let mut writer = SimpleBytesWriter::default();
+        let mut reader = StorageUpdatesBytesReader::default();
+
+        // At first we expect to get a "NotOk" response with "NoFullSyncDone" set as the reason
+        reader.add_response(
+            ReplicationResponse::NotOk(
+                ResponseCommon::new(0).with_reason(ResponseReason::NoFullSyncDone),
+            )
+            .to_bytes(),
+        );
+
+        let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
+
+        let mut server_options = ServerOptions::default();
+        let mut request_id = 0u64;
+        server_options.open_params = replica_db.open_params().clone();
+        let res = ReplicationClient::request_changes(
+            &replica_db,
+            &server_options,
+            &mut reader,
+            &mut writer,
+            &mut rx,
+            &mut request_id,
+        );
+
+        // request_changes should return a "FullSync" result
+        assert_eq!(res, RequestChangesResult::FullSync);
+        Ok(())
+    }
+
+    #[test]
+    fn test_replication_changes_flow() -> Result<(), SableError> {
         // Create 2 databases:
         // Primary database with 100K records and another replication database
         // with no records. After the primary database is populated, trigger
@@ -482,16 +533,21 @@ mod tests {
 
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
+
+        // The replica is expected to send a "FullSync" message and the expected response should be
+        // "Ok"
         reader.add_response(
-            ReplicationMessage::new()
-                .with_type(ReplicationMessage::GET_CHANGES_OK)
+            ReplicationResponse::Ok(ResponseCommon::new(1).with_reason(ResponseReason::Invalid))
                 .to_bytes(),
         );
+
+        // Followed by the change set
         reader.add_response(primary_db.storage_updates_since(0, None, None)?.to_bytes());
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
         let mut server_options = ServerOptions::default();
+        let mut request_id = 1u64;
         server_options.open_params = replica_db.open_params().clone();
         ReplicationClient::request_changes(
             &replica_db,
@@ -499,16 +555,13 @@ mod tests {
             &mut reader,
             &mut writer,
             &mut rx,
+            &mut request_id,
         );
 
         // Ensure that all record exist in the replication db
         verify_all_records_exist(&replica_db)?;
         Ok(())
     }
-
-    // Mocks used for this test
-    #[derive(Default)]
-    struct ReplRequestBytesReader {}
 
     #[derive(Default)]
     struct StorageUpdatesBytesReader {
@@ -524,15 +577,6 @@ mod tests {
         fn write_message(&mut self, buffer: &mut BytesMut) -> Result<(), SableError> {
             self.buffers.push(buffer.clone());
             Ok(())
-        }
-    }
-
-    impl BytesReader for ReplRequestBytesReader {
-        fn read_message(&mut self) -> Result<Option<BytesMut>, SableError> {
-            let repl_request = ReplicationMessage::new()
-                .with_type(ReplicationMessage::GET_UPDATES_SINCE)
-                .with_sequence(0);
-            Ok(Some(repl_request.to_bytes()))
         }
     }
 
