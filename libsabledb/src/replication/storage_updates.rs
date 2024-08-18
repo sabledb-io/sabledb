@@ -14,24 +14,74 @@ pub struct PutRecord {
     pub value: BytesMut,
 }
 
+const LEN_TYPE_8: u8 = 0u8;
+const LEN_TYPE_16: u8 = 1u8;
+const LEN_TYPE_32: u8 = 2u8;
+const LEN_TYPE_64: u8 = 3u8;
+
+/// Encode length + data into the builder
+/// If the length of `buf` is < u8::MAX, this function uses `u8` as the length variable
+/// If the length of `buf` is < u16::MAX, this function uses `u16` as the length variable
+/// If the length of `buf` is < u32::MAX, this function uses `u32` as the length variable
+/// else use `u64` as the length
+/// The type is encoded into the first byte
+fn write_buffer(builder: &mut U8ArrayBuilder, buf: &[u8]) {
+    if buf.len() < u8::MAX as usize {
+        builder.write_u8(LEN_TYPE_8);
+        builder.write_u8(buf.len() as u8);
+    } else if buf.len() < u16::MAX as usize {
+        builder.write_u8(LEN_TYPE_16);
+        builder.write_u16(buf.len() as u16);
+    } else if buf.len() < u32::MAX as usize {
+        builder.write_u8(LEN_TYPE_32);
+        builder.write_u32(buf.len() as u32);
+    } else {
+        builder.write_u8(LEN_TYPE_64);
+        builder.write_u64(buf.len() as u64);
+    }
+    builder.write_bytes(buf);
+}
+
+/// Simialr to `write_buffer` -> but this time, decode it
+fn read_buffer(reader: &mut U8ArrayReader) -> Option<BytesMut> {
+    let encoded_len = reader.read_u8()?;
+    let key_len = match encoded_len {
+        LEN_TYPE_8 => {
+            let key_len = reader.read_u8()?;
+            key_len as usize
+        }
+        LEN_TYPE_16 => {
+            let key_len = reader.read_u16()?;
+            key_len as usize
+        }
+        LEN_TYPE_32 => {
+            let key_len = reader.read_u32()?;
+            key_len as usize
+        }
+        LEN_TYPE_64 => {
+            let key_len = reader.read_u64()?;
+            key_len as usize
+        }
+        _ => {
+            return None;
+        }
+    };
+
+    reader.read_bytes(key_len)
+}
+
 impl PutRecord {
     pub fn to_bytes(builder: &mut U8ArrayBuilder, key: &[u8], value: &[u8]) {
-        builder.write_usize(key.len());
-        builder.write_bytes(key);
-        builder.write_usize(value.len());
-        builder.write_bytes(value);
+        write_buffer(builder, key);
+        write_buffer(builder, value);
     }
 
     /// Deserialise `PutRecord` from bytes.
     /// On failure return `None`. On success, return the deserialised object +
     /// remove the bytes used to construct the object from the buffer
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<PutRecord> {
-        let key_len = reader.read_usize()?;
-        let key = reader.read_bytes(key_len)?;
-
-        let value_len = reader.read_usize()?;
-        let value = reader.read_bytes(value_len)?;
-
+        let key = read_buffer(reader)?;
+        let value = read_buffer(reader)?;
         Some(PutRecord::new(key, value))
     }
 
@@ -48,16 +98,14 @@ pub struct DeleteRecord {
 
 impl DeleteRecord {
     pub fn to_bytes(builder: &mut U8ArrayBuilder, key: &[u8]) {
-        builder.write_usize(key.len());
-        builder.write_bytes(key);
+        write_buffer(builder, key);
     }
 
     /// Deserialise `DeleteRecord` from bytes.
     /// On failure return `None`. On success, return the deserialised object +
     /// remove the bytes used to construct the object from the buffer
     pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<DeleteRecord> {
-        let key_len = reader.read_usize()?;
-        let key = reader.read_bytes(key_len)?;
+        let key = read_buffer(reader)?;
         Some(DeleteRecord::new(key))
     }
 
