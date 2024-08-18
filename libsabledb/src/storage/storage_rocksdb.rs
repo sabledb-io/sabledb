@@ -4,7 +4,7 @@ use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
-        PutFlags, StorageTrait,
+        PutFlags, StorageTrait, SEQUENCES_FILE,
     },
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
@@ -199,15 +199,21 @@ impl StorageTrait for StorageRocksDb {
         Ok(())
     }
 
-    /// Create a consistent checkpoint at `location`
+    /// Create a consistent checkpoint at `location`. Return the number of changes stored in the checkpoint
     /// Note that `location` must not exist, it will be created
-    fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
+    fn create_checkpoint(&self, location: &Path) -> Result<u64, SableError> {
         let chk_point = rocksdb::checkpoint::Checkpoint::new(&self.store)?;
         chk_point.create_checkpoint(location)?;
 
-        let sequence_file = location.join("changes.seq");
-        self.write_next_sequence(sequence_file, self.store.latest_sequence_number())?;
-        Ok(())
+        let sequence_file = location.join(SEQUENCES_FILE);
+        let changes_count = self.store.latest_sequence_number();
+        self.write_next_sequence(sequence_file, changes_count)?;
+        Ok(changes_count)
+    }
+    
+    /// The sequence number of the most recent transaction.
+    fn latest_sequence_number(&self) -> Result<u64, SableError> {
+        Ok(self.store.latest_sequence_number())
     }
 
     /// Restore the database from checkpoint database.
@@ -253,7 +259,7 @@ impl StorageTrait for StorageRocksDb {
             self.store.write(updates)?;
         }
 
-        let sequence_file = self.path.join("changes.seq");
+        let sequence_file = self.path.join(SEQUENCES_FILE);
         tracing::info!(
             "Restore completed. Put {} records",
             updates_counter.to_formatted_string(&Locale::en)

@@ -21,7 +21,7 @@ pub use hash_db::{
 pub use scan_cursor::ScanCursor;
 pub use set_db::*;
 pub use storage_rocksdb::StorageRocksDb;
-pub use storage_trait::{StorageIterator, StorageMetadata, StorageTrait, IteratorAdapter};
+pub use storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata, StorageTrait};
 pub use string_db::*;
 pub use write_cache::{DbCacheEntry, DbWriteCache};
 pub use zset_db::*;
@@ -34,3 +34,5 @@ macro_rules! storage_rocksdb {
         db
     }};
 }
+
+pub const SEQUENCES_FILE: &'static str = "changes.seq";

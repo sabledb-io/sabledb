@@ -481,7 +481,7 @@ impl StorageAdapter {
         Ok(())
     }
 
-    pub fn create_checkpoint(&self, location: &Path) -> Result<(), SableError> {
+    pub fn create_checkpoint(&self, location: &Path) -> Result<u64, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
@@ -545,6 +545,14 @@ impl StorageAdapter {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
         db.storage_updates_since(sequence_number, memory_limit, changes_count_limit)
+    }
+
+    /// The sequence number of the most recent transaction.
+    pub fn latest_sequence_number(&self) -> Result<u64, SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.latest_sequence_number()
     }
 
     pub fn create_iterator(&self, prefix: &BytesMut) -> Result<IteratorAdapter, SableError> {

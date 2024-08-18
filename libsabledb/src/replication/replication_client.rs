@@ -1,12 +1,16 @@
-use crate::replication::{
-    prepare_std_socket, BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse,
-    RequestCommon, TcpStreamBytesReader, TcpStreamBytesWriter,
-};
 use crate::server::ServerOptions;
 use crate::{
     io::Archive,
     replication::{StorageUpdates, StorageUpdatesIterItem},
     BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
+};
+use crate::{
+    replication::{
+        prepare_std_socket, BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse,
+        RequestCommon, TcpStreamBytesReader, TcpStreamBytesWriter,
+    },
+    storage::SEQUENCES_FILE,
+    ReplicationTelemetry,
 };
 
 use num_format::{Locale, ToFormattedString};
@@ -218,9 +222,14 @@ impl ReplicationClient {
 
         let _unused = crate::LockManager::lock_all_keys_shared().await?;
         info!("Database is now locked (read-only mode)");
-
+        info!("Loading database from checkpoint...");
         store.restore_from_checkpoint(&target_folder_path, true)?;
         info!("Database successfully restored from backup");
+
+        let sequence_file = options.open_params.db_path.join(SEQUENCES_FILE);
+        if let Some(seq) = Self::read_next_sequence(sequence_file) {
+            ReplicationTelemetry::set_last_change(seq);
+        }
 
         let _ = std::fs::remove_file(&output_file_name);
         let _ = std::fs::remove_dir_all(&target_folder_path);
@@ -277,7 +286,7 @@ impl ReplicationClient {
             }
         }
 
-        let sequence_file = options.open_params.db_path.join("changes.seq");
+        let sequence_file = options.open_params.db_path.join(SEQUENCES_FILE);
         let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
@@ -348,10 +357,7 @@ impl ReplicationClient {
         };
 
         let Some(storage_updates) = StorageUpdates::from_bytes(&buffer) else {
-            error!(
-                "Failed to deserialise `StorageUpdats` from bytes. `{:?}`",
-                buffer
-            );
+            error!("Failed to deserialise `StorageUpdats` from bytes");
             return RequestChangesResult::ExitThread;
         };
 
@@ -426,6 +432,7 @@ impl ReplicationClient {
 
     /// Write the next sequence to get from the primary to the file system.
     fn write_next_sequence(sequence_file: PathBuf, sequence_number: u64) -> RequestChangesResult {
+        ReplicationTelemetry::set_last_change(sequence_number);
         let sequence_number = format!("{}", sequence_number);
         if let Err(e) = std::fs::write(sequence_file, sequence_number) {
             error!("Failed to read sequence file content: {:?}.", e);

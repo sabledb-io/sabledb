@@ -12,13 +12,14 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::sync::RwLock as StdRwLock;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 #[derive(Default)]
 struct BlockedClients {
@@ -91,8 +92,8 @@ pub enum BlockClientResult {
 }
 
 pub struct ServerState {
-    blocked_clients: RwLock<BlockedClients>,
-    telemetry: Arc<Mutex<Telemetry>>,
+    blocked_clients: TokioRwLock<BlockedClients>,
+    telemetry: Arc<StdRwLock<Telemetry>>,
     opts: ServerOptions,
     role_primary: AtomicBool,
     replicator_context: Option<Arc<ReplicatorContext>>,
@@ -115,8 +116,8 @@ impl Default for ServerState {
 impl ServerState {
     pub fn new() -> Self {
         ServerState {
-            telemetry: Arc::new(Mutex::new(Telemetry::default())),
-            blocked_clients: RwLock::new(BlockedClients::default()),
+            telemetry: Arc::new(StdRwLock::<Telemetry>::default()),
+            blocked_clients: TokioRwLock::<BlockedClients>::default(),
             opts: ServerOptions::default(),
             role_primary: AtomicBool::new(true),
             replicator_context: None,
@@ -168,7 +169,7 @@ impl ServerState {
         Ok(())
     }
 
-    pub fn shared_telemetry(&self) -> Arc<Mutex<Telemetry>> {
+    pub fn shared_telemetry(&self) -> Arc<StdRwLock<Telemetry>> {
         self.telemetry.clone()
     }
 

@@ -528,13 +528,18 @@ impl Client {
             }
             RedisCommandName::Info => {
                 let mut buffer = BytesMut::with_capacity(1024);
+                crate::ReplicationTelemetry::set_last_change(
+                    client_state.database().latest_sequence_number()?,
+                );
+
                 // build the stats
                 let stats = client_state
                     .server_inner_state()
                     .shared_telemetry()
-                    .lock()
+                    .read()
                     .expect("mutex")
                     .to_string();
+
                 builder.bulk_string(&mut buffer, &BytesMut::from(stats.as_bytes()));
                 Self::send_response(tx, &buffer, client_state.id()).await?;
                 ClientNextAction::NoAction

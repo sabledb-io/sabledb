@@ -119,9 +119,10 @@ pub trait StorageTrait {
     /// Manually flush any journal to the disk
     fn flush_wal(&self) -> Result<(), SableError>;
 
-    /// Create a database checkpoint for backup purposes and store it at `location`
+    /// Create a database checkpoint for backup purposes and store it at `location`. Returns the number of changes included
+    /// in the checkpoint.
     /// `location` is a directory
-    fn create_checkpoint(&self, location: &Path) -> Result<(), SableError>;
+    fn create_checkpoint(&self, location: &Path) -> Result<u64, SableError>;
 
     /// Restore database from a backup database located at `backup_location` (a directory)
     /// If `delete_all_before_store` is true, we will purge all current records from the
@@ -142,6 +143,9 @@ pub trait StorageTrait {
         memory_limit: Option<u64>,
         changes_count_limit: Option<u64>,
     ) -> Result<StorageUpdates, SableError>;
+
+    /// The sequence number of the most recent transaction.
+    fn latest_sequence_number(&self) -> Result<u64, SableError>;
 
     /// Create a database iterator starting from `prefix`
     fn create_iterator(&self, prefix: &BytesMut) -> Result<IteratorAdapter, SableError>;

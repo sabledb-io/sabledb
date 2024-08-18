@@ -2,7 +2,7 @@ use crate::{replication::ServerRole, storage::StorageMetadata};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 
 thread_local! {
     pub static WORKER_TELEMETRY: RefCell<Telemetry> = RefCell::new(Telemetry::default());
@@ -10,7 +10,7 @@ thread_local! {
 
 lazy_static::lazy_static! {
     /// Replication info goes into a separate data structure
-    static ref REPLICATION_INFO: Mutex<ReplicationTelemetry> = Mutex::new(ReplicationTelemetry::default());
+    static ref REPLICATION_INFO: RwLock<ReplicationTelemetry> = RwLock::<ReplicationTelemetry>::default();
     static ref STORAGE_MD: RwLock<StorageMetadata> = RwLock::<StorageMetadata>::default();
 }
 
@@ -24,7 +24,7 @@ pub struct ReplicationTelemetry {
 
 #[derive(Clone, Default, Debug)]
 pub struct ReplicaTelemetry {
-    pub lag_from_primary: u64,
+    pub distance_from_primary: u64,
     pub last_change_sequence_number: u64,
 }
 
@@ -36,19 +36,36 @@ pub struct PrimaryTelemetry {
 impl ReplicationTelemetry {
     /// Replication: set this instance role
     pub fn set_role(role: ServerRole) {
-        REPLICATION_INFO.lock().expect("poisoned mutex").role = role;
+        REPLICATION_INFO.write().expect("poisoned mutex").role = role;
+    }
+
+    /// Return the current node's role
+    pub fn role() -> ServerRole {
+        REPLICATION_INFO
+            .read()
+            .expect("poisoned mutex")
+            .role
+            .clone()
     }
 
     /// Replication: update the last change in the database
     pub fn set_last_change(seq_num: u64) {
-        REPLICATION_INFO
-            .lock()
-            .expect("poisoned mutex")
-            .last_change_sequence_number = seq_num;
+        let mut d = REPLICATION_INFO.write().expect("poisoned mutex");
+        d.last_change_sequence_number = seq_num;
+
+        match d.role {
+            ServerRole::Primary => {
+                for (_, info) in &mut d.primary_telemetry.replicas {
+                    info.distance_from_primary =
+                        seq_num.saturating_sub(info.last_change_sequence_number);
+                }
+            }
+            ServerRole::Replica => {}
+        }
     }
 
     pub fn update_replica_info(replica_id: String, info: ReplicaTelemetry) {
-        let mut replication_telemetry = REPLICATION_INFO.lock().expect("poisoned mutex");
+        let mut replication_telemetry = REPLICATION_INFO.write().expect("poisoned mutex");
         if let Some(replica_data) = replication_telemetry
             .primary_telemetry
             .replicas
@@ -64,7 +81,7 @@ impl ReplicationTelemetry {
     }
 
     pub fn remove_replica(replica_id: &String) {
-        let mut replication_telemetry = REPLICATION_INFO.lock().expect("poisoned mutex");
+        let mut replication_telemetry = REPLICATION_INFO.write().expect("poisoned mutex");
         replication_telemetry
             .primary_telemetry
             .replicas
@@ -333,7 +350,7 @@ impl std::fmt::Display for Telemetry {
             f,
             "{}\n{}",
             as_str,
-            REPLICATION_INFO.lock().expect("poisoned mutex")
+            REPLICATION_INFO.read().expect("poisoned mutex")
         )
     }
 }

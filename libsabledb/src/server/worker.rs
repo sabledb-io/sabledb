@@ -267,7 +267,7 @@ impl Worker {
         if cur_ts - *last_merge > self.stats_merge_interval {
             self.server_state
                 .shared_telemetry()
-                .lock()
+                .write()
                 .expect("mutex")
                 .merge_worker_telemetry(Telemetry::clone());
             Telemetry::clear();

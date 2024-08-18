@@ -51,11 +51,7 @@ where
 }
 
 /// Read exactly `count` bytes from `reader` and write them into `writer`
-pub fn read_exact<R, W>(
-    reader: &mut R,
-    writer: &mut W,
-    count: usize,
-) -> Result<(), SableError>
+pub fn read_exact<R, W>(reader: &mut R, writer: &mut W, count: usize) -> Result<(), SableError>
 where
     R: ?Sized + Read,
     W: ?Sized + Write,

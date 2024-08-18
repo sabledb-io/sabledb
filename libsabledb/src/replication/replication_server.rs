@@ -104,7 +104,7 @@ impl ReplicationServer {
         _options: &ServerOptions,
         replica_addr: &String,
         stream: &mut std::net::TcpStream,
-    ) -> Result<(), SableError> {
+    ) -> Result<u64, SableError> {
         // async sockets are non-blocking. Make it blocking for sending the file
         stream.set_nonblocking(false)?;
         stream.set_write_timeout(None)?;
@@ -117,10 +117,11 @@ impl ReplicationServer {
             store.open_params().db_path.display(),
             ts
         ));
-        store.create_checkpoint(&backup_db_path)?;
+        let changes_count = store.create_checkpoint(&backup_db_path)?;
         info!(
-            "Checkpoint {} created successfully",
-            backup_db_path.display()
+            "Checkpoint {} created successfully with {} changes",
+            backup_db_path.display(),
+            changes_count
         );
 
         let archiver = Archive::default();
@@ -146,7 +147,7 @@ impl ReplicationServer {
         // Delete the tar + folder
         let _ = std::fs::remove_file(&tar_file);
         let _ = std::fs::remove_dir_all(&backup_db_path);
-        Ok(())
+        Ok(changes_count)
     }
 
     /// The main replication request -> reply flow is happening here.
@@ -185,13 +186,23 @@ impl ReplicationServer {
         match req {
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request FullSync(Id:{})", common.request_id());
-                if let Err(e) = Self::send_checkpoint(store, options, replica_addr, stream) {
-                    info!(
-                        "Failed sending db chceckpoint to replica {}. {:?}",
-                        replica_addr, e
-                    );
-                    return false;
-                }
+                let changes_count =
+                    match Self::send_checkpoint(store, options, replica_addr, stream) {
+                        Err(e) => {
+                            info!(
+                                "Failed sending db chceckpoint to replica {}. {:?}",
+                                replica_addr, e
+                            );
+                            return false;
+                        }
+                        Ok(count) => count,
+                    };
+
+                let replinfo = ReplicaTelemetry {
+                    last_change_sequence_number: changes_count,
+                    distance_from_primary: 0,
+                };
+                ReplicationTelemetry::update_replica_info(replica_addr.to_string(), replinfo);
             }
             ReplicationRequest::GetUpdatesSince((common, seq)) => {
                 debug!(
@@ -288,7 +299,16 @@ impl ReplicationServer {
                         error!("Failed to send changes to replica. {:?}", e);
                         return false;
                     }
-                    _ => {}
+                    _ => {
+                        let replinfo = ReplicaTelemetry {
+                            last_change_sequence_number: storage_updates.end_seq_number,
+                            distance_from_primary: 0,
+                        };
+                        ReplicationTelemetry::update_replica_info(
+                            replica_addr.to_string(),
+                            replinfo,
+                        );
+                    }
                 }
             }
         }
