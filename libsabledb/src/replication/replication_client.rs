@@ -170,7 +170,7 @@ impl ReplicationClient {
 
         // Send a "FULL_SYNC" message
         tracing::info!("Sending FULL SYNC message to primary");
-        let request = ReplicationMessage::new().with_type(ReplicationMessage::FULL_SYNC);
+        let request = ReplicationMessage::FullSync;
         let mut buffer = request.to_bytes();
         let mut writer = TcpStreamBytesWriter::new(stream);
         writer.write_message(&mut buffer)?;
@@ -275,9 +275,7 @@ impl ReplicationClient {
             sequence_number.to_formatted_string(&Locale::en)
         );
 
-        let request = ReplicationMessage::new()
-            .with_type(ReplicationMessage::GET_UPDATES_SINCE)
-            .with_sequence(sequence_number);
+        let request = ReplicationMessage::GetUpdatesSince(sequence_number);
 
         let mut buffer = request.to_bytes();
         if let Err(e) = writer.write_message(&mut buffer) {
@@ -292,14 +290,14 @@ impl ReplicationClient {
                 return RequestChangesResult::Reconnect;
             }
             Ok(msg) => {
-                match msg.message_type {
-                    ReplicationMessage::GET_CHANGES_OK => {
+                match msg {
+                    ReplicationMessage::GetChangesOk => {
                         // fall through
                     }
-                    ReplicationMessage::GET_CHANGES_ERR => {
+                    ReplicationMessage::GetChangesErr(msg) => {
                         // the requested sequence was is not acceptable by the server
                         // do a full sync
-                        tracing::info!("Failed to get changes. Requesting fullsync");
+                        tracing::info!("Failed to get changes. Requesting fullsync. {:?}", msg);
                         return RequestChangesResult::FullSync;
                     }
                     other => {

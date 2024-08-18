@@ -429,6 +429,18 @@ impl<'a> U8ArrayReader<'a> {
         Some(arr)
     }
 
+    /// Read a message from the buffer. A message is the combination of `[len|bytes]`
+    /// This function is similar to:
+    ///
+    /// ```no_compile
+    /// let len = read_usize().unwrap();
+    /// let msg = read_bytes(len).unwrap();
+    /// ```
+    pub fn read_message(&mut self) -> Option<BytesMut> {
+        let len = self.read_usize()?;
+        self.read_bytes(len)
+    }
+
     pub fn read_u64(&mut self) -> Option<u64> {
         if self.buffer.len().saturating_sub(self.consumed) < U8ArrayReader::U64_SIZE {
             return None;

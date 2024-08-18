@@ -142,9 +142,8 @@ impl ReplicationServer {
         Ok(())
     }
 
-    /// The main replication request -> reply flow is happening
-    /// This function reads a single replication request
-    /// and responds with the proper response.
+    /// The main replication request -> reply flow is happening here.
+    /// This function reads a single replication request and responds with the proper response.
     fn handle_single_request(
         store: &StorageAdapter,
         options: &ServerOptions,
@@ -176,8 +175,8 @@ impl ReplicationServer {
         };
         tracing::debug!("Received replication request {:?}", req);
 
-        match req.message_type {
-            ReplicationMessage::FULL_SYNC => {
+        match req {
+            ReplicationMessage::FullSync => {
                 if let Err(e) = Self::send_checkpoint(store, options, replica_addr, stream) {
                     tracing::info!(
                         "Failed sending db chceckpoint to replica {}. {:?}",
@@ -187,35 +186,52 @@ impl ReplicationServer {
                     return false;
                 }
             }
-            ReplicationMessage::GET_UPDATES_SINCE => {
+            ReplicationMessage::GetUpdatesSince(seq) => {
                 tracing::debug!(
                     "Replica {} is requesting changes since: {}",
                     replica_addr,
-                    req.payload
+                    seq
                 );
+
+                if seq == 0 {
+                    // This is the first time 
+                    let response_not_ok = ReplicationMessage::GetChangesErr(bytes::BytesMut::from(
+                        "First time replica. Switch to FullSync",
+                    ));
+                    let mut response_not_ok_buffer = response_not_ok.to_bytes();
+                    if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
+                        tracing::error!("Failed to send 'GetChangesErr' control message. {:?}", e);
+                        // cant recover here, close the connection
+                        return false;
+                    }
+                    return true;
+                }
 
                 // Get the changes from the database. If no changes available
                 // hold the request until we have some changes to send over
                 let storage_updates = loop {
                     let storage_updates = match store.storage_updates_since(
-                        req.payload,
+                        seq,
                         Some(options.replication_limits.single_update_buffer_size as u64),
                         Some(options.replication_limits.num_updates_per_message as u64),
                     ) {
                         Err(e) => {
-                            tracing::warn!("Failed to construct 'changes since' message. {:?}", e);
-                            let response_not_ok = ReplicationMessage::new()
-                                .with_type(ReplicationMessage::GET_CHANGES_ERR);
+                            let msg =
+                                format!("Failed to construct 'changes since' message. {:?}", e);
+                            tracing::warn!(msg);
+                            let response_not_ok = ReplicationMessage::GetChangesErr(
+                                bytes::BytesMut::from(msg.as_bytes()),
+                            );
                             let mut response_not_ok_buffer = response_not_ok.to_bytes();
                             if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
                                 tracing::error!(
-                                    "Failed to send 'GET_CHANGES_ERR' control message. {:?}",
+                                    "Failed to send 'GetChangesErr' control message. {:?}",
                                     e
                                 );
                                 // cant recover here, close the connection
                                 return false;
                             }
-                            tracing::info!("Sent GET_CHANGES_ERR message to replica");
+                            tracing::info!("Sent GetChangesErr message to replica");
                             // return true here so we wont close the connection
                             return true;
                         }
@@ -237,8 +253,7 @@ impl ReplicationServer {
                 tracing::info!("Sending replication update: {}", storage_updates);
 
                 // Send a `GET_CHANGES_OK` message, followed by the data
-                let response_ok =
-                    ReplicationMessage::new().with_type(ReplicationMessage::GET_CHANGES_OK);
+                let response_ok = ReplicationMessage::GetChangesOk;
                 let mut response_ok_buffer = response_ok.to_bytes();
                 if let Err(e) = writer.write_message(&mut response_ok_buffer) {
                     tracing::error!("Failed to send 'GET_CHANGES_OK' control message. {:?}", e);
@@ -261,8 +276,8 @@ impl ReplicationServer {
             }
             _ => {
                 tracing::error!(
-                    "Replication protocol error. Unknown replication request with type {}",
-                    req.message_type
+                    "Replication protocol error. Unknown replication request with type {:?}",
+                    req
                 );
                 return false;
             }
@@ -270,6 +285,8 @@ impl ReplicationServer {
         true
     }
 
+    // Primary node main loop: wait for a new replica connection
+    // and launch a thread to handle it
     pub async fn run(
         &self,
         options: ServerOptions,
