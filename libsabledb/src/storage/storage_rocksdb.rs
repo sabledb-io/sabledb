@@ -53,6 +53,7 @@ impl StorageRocksDb {
     pub fn open(open_params: StorageOpenParams) -> Result<Self, SableError> {
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
+        options.set_enable_pipelined_write(true);
         options.create_missing_column_families(true);
         options.set_max_write_buffer_number(open_params.rocksdb.max_write_buffer_number as i32);
         options.set_max_background_jobs(open_params.rocksdb.max_background_jobs as i32);
@@ -195,7 +196,7 @@ impl StorageTrait for StorageRocksDb {
         // measure time spent doing IO
         Telemetry::inc_total_io_write_calls();
         let _io_stop_watch = IoDurationStopWatch::default();
-        self.store.delete(key)?;
+        self.store.delete_opt(key, &self.write_opts)?;
         Ok(())
     }
 
@@ -210,7 +211,7 @@ impl StorageTrait for StorageRocksDb {
         self.write_next_sequence(sequence_file, changes_count)?;
         Ok(changes_count)
     }
-    
+
     /// The sequence number of the most recent transaction.
     fn latest_sequence_number(&self) -> Result<u64, SableError> {
         Ok(self.store.latest_sequence_number())
@@ -249,14 +250,14 @@ impl StorageTrait for StorageRocksDb {
             updates_counter = updates_counter.saturating_add(1);
             updates.put(key, value);
             if updates.len() % 100_000 == 0 {
-                self.store.write(updates)?;
+                self.store.write_opt(updates, &self.write_opts)?;
                 updates = rocksdb::WriteBatch::default();
             }
         }
 
         // apply the remainders
         if !updates.is_empty() {
-            self.store.write(updates)?;
+            self.store.write_opt(updates, &self.write_opts)?;
         }
 
         let sequence_file = self.path.join(SEQUENCES_FILE);
@@ -391,7 +392,7 @@ impl StorageTrait for StorageRocksDb {
 
         let mut updates = rocksdb::WriteBatch::default();
         updates.delete_range(&start, &end);
-        self.store.write(updates)?;
+        self.store.write_opt(updates, &self.write_opts)?;
         Ok(())
     }
 }
