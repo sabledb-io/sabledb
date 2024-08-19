@@ -53,11 +53,18 @@ impl StorageRocksDb {
     pub fn open(open_params: StorageOpenParams) -> Result<Self, SableError> {
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
-        options.set_enable_pipelined_write(true);
+        options.set_enable_pipelined_write(open_params.rocksdb.enable_pipelined_write);
         options.create_missing_column_families(true);
         options.set_max_write_buffer_number(open_params.rocksdb.max_write_buffer_number as i32);
         options.set_max_background_jobs(open_params.rocksdb.max_background_jobs as i32);
         options.set_manual_wal_flush(open_params.rocksdb.manual_wal_flush);
+
+        if open_params.rocksdb.bloom_filter_bits_per_key > 0 {
+            let mut opts = rocksdb::BlockBasedOptions::default();
+            opts.set_bloom_filter(open_params.rocksdb.bloom_filter_bits_per_key as f64, true);
+            options.set_block_based_table_factory(&opts);
+        }
+
         options.set_compression_type(if open_params.rocksdb.compression_enabled {
             rocksdb::DBCompressionType::Snappy
         } else {

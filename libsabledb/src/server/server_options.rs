@@ -173,6 +173,13 @@ impl ServerOptions {
                         options.open_params.rocksdb.manual_wal_flush_interval_ms =
                             parse_number!(value, usize)
                     }
+                    "enable_pipelined_write" => {
+                        options.open_params.rocksdb.enable_pipelined_write = ini_bool!(value)
+                    }
+                    "bloom_filter_bits_per_key" => {
+                        options.open_params.rocksdb.bloom_filter_bits_per_key =
+                            parse_number!(value, usize)
+                    }
                     "max_open_files" => {
                         options.open_params.rocksdb.max_open_files = parse_number!(value, isize)
                     }

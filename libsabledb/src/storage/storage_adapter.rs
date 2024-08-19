@@ -55,20 +55,35 @@ pub struct RocksDbParams {
     /// Enable data compression
     /// Default: true
     pub compression_enabled: bool,
+    /// If you're doing point lookups on an uncompacted DB, you definitely want to turn bloom filters on. RocksDb uses 
+    /// bloom filters to avoid unnecessary disk reads. Default `bloom_filter_bits_per_key` is 10, which yields ~1% false positive rate. 
+    /// Larger `bloom_filter_bits_per_key` values will reduce false positive rate, but increase memory usage and space amplification.
+    /// To disable bloom filter, set this value to `0`
+    /// Default: 10
+    pub bloom_filter_bits_per_key: usize,
     /// If true, writes will not first go to the write ahead log,
     /// and the write may get lost after a crash. The backup engine
     /// relies on write-ahead logs to back up the memtable.
     /// Default: false
     pub disable_wal: bool,
+    /// The pipelined write feature added in RocksDB 5.5 is to improve concurrent write throughput in case WAL is enabled. 
+    /// By default, a single write thread queue is maintained for concurrent writers. The thread gets to the head of the 
+    /// queue becomes write batch group leader and responsible for writing to WAL and memtable for the batch group. 
+    /// One observation is that WAL writes and memtable writes are sequential, and by making them run in parallel we can 
+    /// increase throughput.
+    /// Default: true
+    pub enable_pipelined_write: bool,
     /// Disable automatic WAL flush and do it manually after N milliseconds
     pub manual_wal_flush: bool,
     /// If `manual_wal_flush` is enabled, flush it every `manual_wal_flush_interval_ms` mislliseconds
+    /// Default: 250
     pub manual_wal_flush_interval_ms: usize,
     /// Sets the number of open files that can be used by the DB. You may need to
     /// increase this if your database has a large working set. Value `-1` means
     /// files opened are always kept open. You can estimate number of files based
     /// on target_file_size_base and target_file_size_multiplier for level-based
     /// compaction. For universal-style compaction, you can usually set it to `-1`.
+    /// Default: -1
     pub max_open_files: isize,
 }
 
@@ -83,8 +98,10 @@ impl Default for StorageOpenParams {
                 compression_enabled: true,
                 disable_wal: false,
                 manual_wal_flush: false,
-                manual_wal_flush_interval_ms: 500,
+                manual_wal_flush_interval_ms: 250,
                 max_open_files: -1,
+                enable_pipelined_write: true,
+                bloom_filter_bits_per_key: 10,
             },
             db_path: PathBuf::from("sabledb.db"),
         }
