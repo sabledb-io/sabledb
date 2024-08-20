@@ -305,19 +305,21 @@ impl ServerState {
     // Connect to primary instance
     pub async fn connect_to_primary(&self, address: String, port: u16) -> Result<(), SableError> {
         if let Some(repliction_context) = &self.replicator_context {
-            // Update the configurationf file first
+            // Update the configuration file first
             let repl_config = ReplicationConfig {
                 role: ServerRole::Replica,
-                ip: address,
+                ip: address.clone(),
                 port,
             };
+
+            // Update the replication.ini first (the values in this file are used to determine the primary to connect to)
             ReplicationConfig::write_file(
                 &repl_config,
                 self.options().general_settings.config_dir.as_deref(),
             )?;
 
             repliction_context
-                .send(ReplicationWorkerMessage::ConnectToPrimary)
+                .send(ReplicationWorkerMessage::ConnectToPrimary((address, port)))
                 .await?;
             self.set_replica();
         }
