@@ -711,6 +711,27 @@ pub fn choose_multiple_values(
     Ok(chosen)
 }
 
+pub trait ToBytes {
+    /// Serialise "self" into raw bytes
+    fn to_bytes(&self) -> BytesMut;
+}
+
+pub trait FromBytes {
+    type Item;
+    /// Construct "self" from raw bytes
+    fn from_bytes(bytes: &[u8]) -> Option<Self::Item>;
+}
+
+pub trait FromU8Reader {
+    type Item;
+    /// We use here `u64`, but the caller can pass any type of `uN`
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item>;
+}
+
+pub trait ToU8Builder {
+    fn to_builder(&self, builder: &mut U8ArrayBuilder);
+}
+
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
 // | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
 // | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
