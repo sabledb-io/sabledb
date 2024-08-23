@@ -1,4 +1,3 @@
-mod heartbeat;
 mod replication_client;
 mod replication_config;
 mod replication_messages;
@@ -6,11 +5,9 @@ mod replication_server;
 mod replication_traits;
 mod replicator;
 mod storage_updates;
-mod udp_messages;
 
 pub use crate::SableError;
 
-pub use udp_messages::UdpMessageType;
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::{ReplicationConfig, ServerRole};
 pub use replication_messages::{

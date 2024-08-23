@@ -55,8 +55,8 @@ pub struct RocksDbParams {
     /// Enable data compression
     /// Default: true
     pub compression_enabled: bool,
-    /// If you're doing point lookups on an uncompacted DB, you definitely want to turn bloom filters on. RocksDb uses 
-    /// bloom filters to avoid unnecessary disk reads. Default `bloom_filter_bits_per_key` is 10, which yields ~1% false positive rate. 
+    /// If you're doing point lookups on an uncompacted DB, you definitely want to turn bloom filters on. RocksDb uses
+    /// bloom filters to avoid unnecessary disk reads. Default `bloom_filter_bits_per_key` is 10, which yields ~1% false positive rate.
     /// Larger `bloom_filter_bits_per_key` values will reduce false positive rate, but increase memory usage and space amplification.
     /// To disable bloom filter, set this value to `0`
     /// Default: 10
@@ -66,10 +66,10 @@ pub struct RocksDbParams {
     /// relies on write-ahead logs to back up the memtable.
     /// Default: false
     pub disable_wal: bool,
-    /// The pipelined write feature added in RocksDB 5.5 is to improve concurrent write throughput in case WAL is enabled. 
-    /// By default, a single write thread queue is maintained for concurrent writers. The thread gets to the head of the 
-    /// queue becomes write batch group leader and responsible for writing to WAL and memtable for the batch group. 
-    /// One observation is that WAL writes and memtable writes are sequential, and by making them run in parallel we can 
+    /// The pipelined write feature added in RocksDB 5.5 is to improve concurrent write throughput in case WAL is enabled.
+    /// By default, a single write thread queue is maintained for concurrent writers. The thread gets to the head of the
+    /// queue becomes write batch group leader and responsible for writing to WAL and memtable for the batch group.
+    /// One observation is that WAL writes and memtable writes are sequential, and by making them run in parallel we can
     /// increase throughput.
     /// Default: true
     pub enable_pipelined_write: bool,

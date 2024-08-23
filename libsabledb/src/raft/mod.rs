@@ -1,0 +1,144 @@
+use crate::utils::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
+use dashmap::DashMap;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+
+mod raft_messages;
+lazy_static::lazy_static! {
+    static ref NODE_ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
+}
+
+use crate::SableError;
+pub use raft_messages::*;
+
+#[async_trait::async_trait]
+pub trait RaftTransport {
+    /// Broadcast a heartbeat message to the network
+    async fn broadcast_heartbeat(&self) -> Result<(), SableError>;
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum RaftNodeFlags {
+    NonVoter,
+    Voter,
+}
+
+#[derive(Debug)]
+pub struct RaftNode {
+    ip: String,
+    port: u16,
+    state: AtomicU64,
+    node_id: AtomicU64,
+}
+
+impl FromU8Reader for RaftNode {
+    type Item = RaftNode;
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
+        let ip = String::from_reader(reader)?;
+        let port = u16::from_reader(reader)?;
+        let state = AtomicU64::from_reader(reader)?;
+        let node_id = AtomicU64::from_reader(reader)?;
+        Some(RaftNode {
+            ip,
+            port,
+            state,
+            node_id,
+        })
+    }
+}
+
+impl ToU8Builder for RaftNode {
+    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
+        self.ip.to_builder(builder);
+        self.port.to_builder(builder);
+        self.state.to_builder(builder);
+        self.node_id.to_builder(builder);
+    }
+}
+
+impl Default for RaftNode {
+    fn default() -> Self {
+        Self::new("", 0)
+    }
+}
+
+impl RaftNode {
+    pub fn new(ip: &str, port: u16) -> Self {
+        let state = RaftNodeFlags::NonVoter as u64;
+        RaftNode {
+            ip: ip.to_string(),
+            port,
+            state: AtomicU64::new(state),
+            node_id: AtomicU64::default(), // 0
+        }
+    }
+
+    pub fn set_node_id(&self, id: u64) {
+        self.node_id.store(id, Ordering::Relaxed);
+    }
+
+    pub fn node_id(&self) -> u64 {
+        self.node_id.load(Ordering::Relaxed)
+    }
+
+    pub fn set_non_voter(&self) {
+        self.clear_flag(RaftNodeFlags::Voter);
+        self.set_flag(RaftNodeFlags::NonVoter);
+    }
+
+    pub fn set_voter(&self) {
+        self.clear_flag(RaftNodeFlags::NonVoter);
+        self.set_flag(RaftNodeFlags::Voter);
+    }
+
+    fn clear_flag(&self, flag: RaftNodeFlags) {
+        let mut curstate = self.state.load(Ordering::Relaxed);
+        curstate &= !(flag as u64);
+        self.state.store(curstate, Ordering::Relaxed);
+    }
+
+    fn set_flag(&self, flag: RaftNodeFlags) {
+        let mut curstate = self.state.load(Ordering::Relaxed);
+        curstate |= flag as u64;
+        self.state.store(curstate, Ordering::Relaxed);
+    }
+
+    fn has_flag(&self, flag: RaftNodeFlags) -> bool {
+        let curstate = self.state.load(Ordering::Relaxed);
+        curstate & flag as u64 != 0
+    }
+}
+
+#[allow(dead_code)]
+pub struct Raft {
+    transport: Arc<dyn RaftTransport>,
+    nodes: DashMap<u64, RaftNode>,
+}
+
+#[allow(dead_code)]
+impl Raft {
+    pub fn with_transport(transport: Arc<dyn RaftTransport>) -> Self {
+        Raft {
+            transport,
+            nodes: DashMap::default(),
+        }
+    }
+
+    /// Launch a task that periodically send heartbeat messages to the network
+    pub async fn start_primary(&self) -> Result<(), SableError> {
+        Ok(())
+    }
+
+    /// Add a node to the network
+    async fn add_node(&self, node: RaftNode) -> Result<(), SableError> {
+        // assign the new node an ID
+        node.set_non_voter();
+        let node_id = NODE_ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
+        self.nodes.insert(node_id, node);
+
+        // Notify the network that a new node was added
+        Ok(())
+    }
+}
