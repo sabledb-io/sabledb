@@ -6,6 +6,7 @@ use crate::utils;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
+    raft::{Raft, RaftNode, RaftNodeFlags},
     replication::{
         BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse, ResponseCommon,
         ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
@@ -29,6 +30,7 @@ pub struct ReplicationServer {}
 lazy_static::lazy_static! {
     static ref REPLICATION_THREADS: AtomicUsize = AtomicUsize::new(0);
     static ref STOP_FLAG: AtomicBool = AtomicBool::new(false);
+    static ref RAFT: Raft = Raft::default();
 }
 
 /// Notify the replication threads to stop and wait for them to terminate
@@ -184,6 +186,31 @@ impl ReplicationServer {
         debug!("Received replication request {:?}", req);
 
         match req {
+            ReplicationRequest::JoinShard(mut common) => {
+                debug!("Received request JoinShard(Id:{})", common.request_id());
+                let node_id = RAFT.allocate_node_id();
+                let peer_addr = stream.peer_addr().expect("peer_addr");
+                let node = RaftNode::new(peer_addr.ip().to_string().as_str(), peer_addr.port());
+                node.set_non_voter();
+                node.set_node_id(node_id);
+                let _ = RAFT.add_node(node);
+                common.set_node_id(node_id);
+                info!(
+                    "New replica joined the shard: {:?}, NodeId:{}",
+                    peer_addr, node_id
+                );
+
+                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
+
+                debug!("Sending replication response: {}", response_ok);
+                let mut response_ok_buffer = response_ok.to_bytes();
+                if let Err(e) = writer.write_message(&mut response_ok_buffer) {
+                    error!("Failed to send 'Ok' control message. {:?}", e);
+                    // cant recover here, close the connection
+                    return false;
+                }
+                return true;
+            }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request FullSync(Id:{})", common.request_id());
                 let changes_count =
@@ -217,8 +244,7 @@ impl ReplicationServer {
                 if common.request_id() == 0 {
                     // This is the first request - force a fullsync
                     let response_not_ok = ReplicationResponse::NotOk(
-                        ResponseCommon::new(common.request_id())
-                            .with_reason(ResponseReason::NoFullSyncDone),
+                        ResponseCommon::new(&common).with_reason(ResponseReason::NoFullSyncDone),
                     );
 
                     debug!("Sending replication response: {}", response_not_ok);
@@ -246,7 +272,7 @@ impl ReplicationServer {
 
                             // build the response + the error code and send it back
                             let response_not_ok = ReplicationResponse::NotOk(
-                                ResponseCommon::new(common.request_id())
+                                ResponseCommon::new(&common)
                                     .with_reason(ResponseReason::CreatingUpdatesSinceError),
                             );
 
@@ -281,7 +307,7 @@ impl ReplicationServer {
                 info!("Sending replication update: {}", storage_updates);
 
                 // Send a `ReplicationResponse::Ok` message, followed by the data
-                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(common.request_id()));
+                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
                 let mut response_ok_buffer = response_ok.to_bytes();
                 if let Err(e) = writer.write_message(&mut response_ok_buffer) {
                     error!("Failed to send 'Ok' control message. {:?}", e);

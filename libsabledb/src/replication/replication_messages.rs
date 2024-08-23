@@ -1,11 +1,14 @@
-use crate::{U8ArrayBuilder, U8ArrayReader};
+use crate::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
-/// Message types
+/// Message types (requests)
 const GET_UPDATES_SINCE: u8 = 0;
 const FULL_SYNC: u8 = 1;
-const ACK: u8 = 2; // Acknowledged
-const NACK: u8 = 3; // Negative Acknowledged
+const JOIN_SHARD: u8 = 2; // Request to join an existing shard
+
+// Message types (response)
+const ACK: u8 = 100; // Acknowledged
+const NACK: u8 = 101; // Negative Acknowledged
 
 /// NotOk reason
 const NOTOK_REASON_UNKNOWN: u8 = 0;
@@ -16,6 +19,9 @@ const NOTOK_REASON_UPDATES_SINCE_CREATE_ERR: u8 = 2;
 pub struct RequestCommon {
     /// The request unique ID. The `req_id` is auto generated when constructing a new `RequestCommon` struct
     req_id: u64,
+
+    /// The ID of the requesting node
+    node_id: u64,
 }
 
 impl std::fmt::Display for RequestCommon {
@@ -24,24 +30,45 @@ impl std::fmt::Display for RequestCommon {
     }
 }
 
+impl ToU8Builder for RequestCommon {
+    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
+        self.req_id.to_builder(builder);
+        self.node_id.to_builder(builder);
+    }
+}
+
+impl FromU8Reader for RequestCommon {
+    type Item = RequestCommon;
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
+        Some(RequestCommon {
+            req_id: u64::from_reader(reader)?,
+            node_id: u64::from_reader(reader)?,
+        })
+    }
+}
+
 impl RequestCommon {
-    pub fn with_request_id(req_id: &mut u64) -> Self {
+    pub fn new(node_id: u64) -> Self {
+        RequestCommon { req_id: 0, node_id }
+    }
+
+    pub fn with_request_id(mut self, req_id: &mut u64) -> Self {
         let id = *req_id;
         *req_id = req_id.saturating_add(1);
-        RequestCommon { req_id: id }
+        self.req_id = id;
+        self
     }
 
     pub fn request_id(&self) -> u64 {
         self.req_id
     }
 
-    pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<Self> {
-        let req_id = reader.read_u64()?;
-        Some(RequestCommon { req_id })
+    pub fn node_id(&self) -> u64 {
+        self.node_id
     }
 
-    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u64(self.req_id);
+    pub fn set_node_id(&mut self, node_id: u64) {
+        self.node_id = node_id;
     }
 }
 
@@ -49,14 +76,17 @@ impl RequestCommon {
 pub struct ResponseCommon {
     /// The request ID that generated this response
     req_id: u64,
+    /// The originating node ID
+    node_id: u64,
     /// Contains the reason for Nack response
     reason: ResponseReason,
 }
 
 impl ResponseCommon {
-    pub fn new(req_id: u64) -> Self {
+    pub fn new(request: &RequestCommon) -> Self {
         ResponseCommon {
-            req_id,
+            req_id: request.request_id(),
+            node_id: request.node_id(),
             reason: ResponseReason::Invalid,
         }
     }
@@ -74,15 +104,30 @@ impl ResponseCommon {
         self.req_id
     }
 
-    pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<Self> {
-        let req_id = reader.read_u64()?;
-        let reason = ResponseReason::from_u8(reader.read_u8()?)?;
-        Some(ResponseCommon { req_id, reason })
+    pub fn node_id(&self) -> u64 {
+        self.node_id
     }
+}
 
-    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u64(self.req_id);
-        builder.write_u8(self.reason.to_u8());
+impl FromU8Reader for ResponseCommon {
+    type Item = ResponseCommon;
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
+        let req_id = u64::from_reader(reader)?;
+        let node_id = u64::from_reader(reader)?;
+        let reason = ResponseReason::from_u8(u8::from_reader(reader)?)?;
+        Some(ResponseCommon {
+            req_id,
+            node_id,
+            reason,
+        })
+    }
+}
+
+impl ToU8Builder for ResponseCommon {
+    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
+        self.req_id.to_builder(builder);
+        self.node_id.to_builder(builder);
+        self.reason.to_u8().to_builder(builder);
     }
 }
 
@@ -97,6 +142,7 @@ impl std::fmt::Display for ResponseCommon {
 pub enum ReplicationRequest {
     GetUpdatesSince((RequestCommon, u64)),
     FullSync(RequestCommon),
+    JoinShard(RequestCommon),
 }
 
 #[derive(Debug, Clone)]
@@ -159,14 +205,18 @@ impl ReplicationRequest {
         match self {
             Self::GetUpdatesSince((common, seq)) => {
                 // the message type goes first
-                builder.write_u8(GET_UPDATES_SINCE);
-                common.to_bytes(&mut builder);
-                builder.write_u64(*seq);
+                GET_UPDATES_SINCE.to_builder(&mut builder);
+                common.to_builder(&mut builder);
+                seq.to_builder(&mut builder);
             }
             Self::FullSync(common) => {
                 // message type
-                builder.write_u8(FULL_SYNC);
-                common.to_bytes(&mut builder);
+                FULL_SYNC.to_builder(&mut builder);
+                common.to_builder(&mut builder);
+            }
+            Self::JoinShard(common) => {
+                JOIN_SHARD.to_builder(&mut builder);
+                common.to_builder(&mut builder);
             }
         }
         as_bytes
@@ -176,16 +226,20 @@ impl ReplicationRequest {
     pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
         let mut reader = U8ArrayReader::with_buffer(buf);
 
-        let req_type = reader.read_u8()?;
+        let req_type = u8::from_reader(&mut reader)?;
         match req_type {
             GET_UPDATES_SINCE => {
-                let common = RequestCommon::from_bytes(&mut reader)?;
-                let seq = reader.read_u64()?;
+                let common = RequestCommon::from_reader(&mut reader)?;
+                let seq = u64::from_reader(&mut reader)?;
                 Some(ReplicationRequest::GetUpdatesSince((common, seq)))
             }
             FULL_SYNC => {
-                let common = RequestCommon::from_bytes(&mut reader)?;
+                let common = RequestCommon::from_reader(&mut reader)?;
                 Some(ReplicationRequest::FullSync(common))
+            }
+            JOIN_SHARD => {
+                let common = RequestCommon::from_reader(&mut reader)?;
+                Some(ReplicationRequest::JoinShard(common))
             }
             _ => {
                 tracing::error!(
@@ -205,6 +259,9 @@ impl std::fmt::Display for ReplicationRequest {
             Self::GetUpdatesSince((common, seq)) => {
                 write!(f, "GetUpdatesSince({}, {})", common, seq)
             }
+            Self::JoinShard(common) => {
+                write!(f, "JoinShard({})", common)
+            }
         }
     }
 }
@@ -217,13 +274,13 @@ impl ReplicationResponse {
         match self {
             Self::Ok(common) => {
                 // the message type goes first
-                builder.write_u8(ACK);
-                common.to_bytes(&mut builder);
+                ACK.to_builder(&mut builder);
+                common.to_builder(&mut builder);
             }
             Self::NotOk(common) => {
                 // message type
-                builder.write_u8(NACK);
-                common.to_bytes(&mut builder);
+                NACK.to_builder(&mut builder);
+                common.to_builder(&mut builder);
             }
         }
         as_bytes
@@ -233,15 +290,15 @@ impl ReplicationResponse {
     pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
         let mut reader = U8ArrayReader::with_buffer(buf);
 
-        let req_type = reader.read_u8()?;
-        let common = ResponseCommon::from_bytes(&mut reader)?;
-        match req_type {
+        let response_type = u8::from_reader(&mut reader)?;
+        let common = ResponseCommon::from_reader(&mut reader)?;
+        match response_type {
             ACK => Some(ReplicationResponse::Ok(common)),
             NACK => Some(ReplicationResponse::NotOk(common)),
             _ => {
                 tracing::error!(
                     "Replication protocol error: read unknown replication response of type '{}'",
-                    req_type
+                    response_type
                 );
                 None
             }

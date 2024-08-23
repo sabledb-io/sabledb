@@ -1,9 +1,6 @@
 use crate::utils::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
 use dashmap::DashMap;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod raft_messages;
 lazy_static::lazy_static! {
@@ -111,34 +108,20 @@ impl RaftNode {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Default)]
 pub struct Raft {
-    transport: Arc<dyn RaftTransport>,
     nodes: DashMap<u64, RaftNode>,
 }
 
 #[allow(dead_code)]
 impl Raft {
-    pub fn with_transport(transport: Arc<dyn RaftTransport>) -> Self {
-        Raft {
-            transport,
-            nodes: DashMap::default(),
-        }
-    }
-
-    /// Launch a task that periodically send heartbeat messages to the network
-    pub async fn start_primary(&self) -> Result<(), SableError> {
-        Ok(())
+    pub fn allocate_node_id(&self) -> u64 {
+        NODE_ID_GENERATOR.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Add a node to the network
-    async fn add_node(&self, node: RaftNode) -> Result<(), SableError> {
-        // assign the new node an ID
-        node.set_non_voter();
-        let node_id = NODE_ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
-        self.nodes.insert(node_id, node);
-
-        // Notify the network that a new node was added
+    pub fn add_node(&self, node: RaftNode) -> Result<(), SableError> {
+        self.nodes.insert(node.node_id(), node);
         Ok(())
     }
 }

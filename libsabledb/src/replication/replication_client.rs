@@ -48,6 +48,14 @@ enum RequestChangesResult {
     FullSync,
 }
 
+#[derive(Debug, PartialEq)]
+enum JoinShardResult {
+    /// Successfully joined the shard, returns the node-id
+    Ok(u64),
+    /// Failed to join the shard
+    Err,
+}
+
 #[derive(Default)]
 pub struct ReplicationClient {}
 
@@ -100,6 +108,19 @@ impl ReplicationClient {
                         break;
                     }
 
+                    // The first thing a replication does is sending a "join shard"
+                    // request to the primary. On success, the primary assigns this replica with
+                    // a node-id (a unique number to the shard!)
+                    let mut reader = TcpStreamBytesReader::new(&stream);
+                    let mut writer = TcpStreamBytesWriter::new(&stream);
+                    let node_id = match Self::join_shard(&mut reader, &mut writer) {
+                        JoinShardResult::Ok(node_id) => node_id,
+                        JoinShardResult::Err => {
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                            break;
+                        }
+                    };
+
                     // This is the replication main loop:
                     // We continuously calling `request_changes` from the primary
                     // and store them in our database
@@ -108,7 +129,7 @@ impl ReplicationClient {
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
-                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id);
+                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id, node_id);
                         match result {
                             RequestChangesResult::Success => {
                                 // Note: if there are no changes, the primary server will stall
@@ -126,7 +147,7 @@ impl ReplicationClient {
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id).await {
+                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id, node_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
                                     break;
@@ -177,12 +198,14 @@ impl ReplicationClient {
         options: &ServerOptions,
         stream: &mut std::net::TcpStream,
         request_id: &mut u64,
+        node_id: u64,
     ) -> Result<(), SableError> {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(None);
 
         // Send a "FULL_SYNC" message
-        let request = ReplicationRequest::FullSync(RequestCommon::with_request_id(request_id));
+        let request =
+            ReplicationRequest::FullSync(RequestCommon::new(node_id).with_request_id(request_id));
         info!("Sending {} message to primary", request);
 
         let mut buffer = request.to_bytes();
@@ -258,6 +281,39 @@ impl ReplicationClient {
         }
     }
 
+    /// Request to join the shard, on success, return the node-id
+    fn join_shard(reader: &mut impl BytesReader, writer: &mut impl BytesWriter) -> JoinShardResult {
+        let join_request = ReplicationRequest::JoinShard(RequestCommon::new(0));
+        let mut buffer = join_request.to_bytes();
+        if let Err(e) = writer.write_message(&mut buffer) {
+            error!("Failed to send replication request. {:?}", e);
+            return JoinShardResult::Err;
+        };
+
+        // We expect now an "Ok" or "NotOk" response
+        match Self::read_replication_message(reader) {
+            Err(e) => {
+                error!("Error reading replication message. {:?}", e);
+                JoinShardResult::Err
+            }
+            Ok(msg) => {
+                match msg {
+                    ReplicationResponse::Ok(common) => {
+                        // fall through
+                        info!("JoinShard Ok. NodeId: {}", common.node_id());
+                        JoinShardResult::Ok(common.node_id())
+                    }
+                    ReplicationResponse::NotOk(common) => {
+                        // the requested sequence was is not acceptable by the server
+                        // do a full sync
+                        info!("Failed to join the shard! {}", common);
+                        JoinShardResult::Err
+                    }
+                }
+            }
+        }
+    }
+
     /// Request a single "change request"
     /// 1. Read the next sequence number to fetch from the primary
     /// 2. Send a `ReplRequest` to the primary
@@ -273,6 +329,7 @@ impl ReplicationClient {
         writer: &mut impl BytesWriter,
         rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
         request_id: &mut u64,
+        node_id: u64,
     ) -> RequestChangesResult {
         // Before we start, check for termination request
         match Self::check_command_channel(rx) {
@@ -296,7 +353,7 @@ impl ReplicationClient {
         );
 
         let request = ReplicationRequest::GetUpdatesSince((
-            RequestCommon::with_request_id(request_id),
+            RequestCommon::new(node_id).with_request_id(request_id),
             sequence_number,
         ));
 
@@ -499,10 +556,12 @@ mod tests {
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
 
+        let req = RequestCommon::new(42 /* node id */);
+
         // At first we expect to get a "NotOk" response with "NoFullSyncDone" set as the reason
         reader.add_response(
             ReplicationResponse::NotOk(
-                ResponseCommon::new(0).with_reason(ResponseReason::NoFullSyncDone),
+                ResponseCommon::new(&req).with_reason(ResponseReason::NoFullSyncDone),
             )
             .to_bytes(),
         );
@@ -519,6 +578,7 @@ mod tests {
             &mut writer,
             &mut rx,
             &mut request_id,
+            42,
         );
 
         // request_changes should return a "FullSync" result
@@ -541,10 +601,13 @@ mod tests {
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
 
+        let mut request_id = 1u64;
+        let req = RequestCommon::new(42 /* node id */).with_request_id(&mut request_id);
+
         // The replica is expected to send a "FullSync" message and the expected response should be
         // "Ok"
         reader.add_response(
-            ReplicationResponse::Ok(ResponseCommon::new(1).with_reason(ResponseReason::Invalid))
+            ReplicationResponse::Ok(ResponseCommon::new(&req).with_reason(ResponseReason::Invalid))
                 .to_bytes(),
         );
 
@@ -554,8 +617,9 @@ mod tests {
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
         let mut server_options = ServerOptions::default();
-        let mut request_id = 1u64;
+
         server_options.open_params = replica_db.open_params().clone();
+        let mut request_id = 1u64;
         ReplicationClient::request_changes(
             &replica_db,
             &server_options,
@@ -563,6 +627,7 @@ mod tests {
             &mut writer,
             &mut rx,
             &mut request_id,
+            42,
         );
 
         // Ensure that all record exist in the replication db
