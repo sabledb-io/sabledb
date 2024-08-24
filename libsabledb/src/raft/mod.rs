@@ -1,4 +1,4 @@
-use crate::utils::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
+use crate::utils::{FromU8Reader, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,12 +46,12 @@ impl FromU8Reader for RaftNode {
     }
 }
 
-impl ToU8Builder for RaftNode {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
-        self.ip.to_builder(builder);
-        self.port.to_builder(builder);
-        self.state.to_builder(builder);
-        self.node_id.to_builder(builder);
+impl ToU8Writer for RaftNode {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
+        self.ip.to_writer(builder);
+        self.port.to_writer(builder);
+        self.state.to_writer(builder);
+        self.node_id.to_writer(builder);
     }
 }
 

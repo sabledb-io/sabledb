@@ -1,4 +1,4 @@
-use crate::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
+use crate::{FromU8Reader, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 /// Message types (requests)
@@ -30,10 +30,10 @@ impl std::fmt::Display for RequestCommon {
     }
 }
 
-impl ToU8Builder for RequestCommon {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
-        self.req_id.to_builder(builder);
-        self.node_id.to_builder(builder);
+impl ToU8Writer for RequestCommon {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
+        self.req_id.to_writer(builder);
+        self.node_id.to_writer(builder);
     }
 }
 
@@ -123,11 +123,11 @@ impl FromU8Reader for ResponseCommon {
     }
 }
 
-impl ToU8Builder for ResponseCommon {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
-        self.req_id.to_builder(builder);
-        self.node_id.to_builder(builder);
-        self.reason.to_u8().to_builder(builder);
+impl ToU8Writer for ResponseCommon {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
+        self.req_id.to_writer(builder);
+        self.node_id.to_writer(builder);
+        self.reason.to_u8().to_writer(builder);
     }
 }
 
@@ -205,18 +205,18 @@ impl ReplicationRequest {
         match self {
             Self::GetUpdatesSince((common, seq)) => {
                 // the message type goes first
-                GET_UPDATES_SINCE.to_builder(&mut builder);
-                common.to_builder(&mut builder);
-                seq.to_builder(&mut builder);
+                GET_UPDATES_SINCE.to_writer(&mut builder);
+                common.to_writer(&mut builder);
+                seq.to_writer(&mut builder);
             }
             Self::FullSync(common) => {
                 // message type
-                FULL_SYNC.to_builder(&mut builder);
-                common.to_builder(&mut builder);
+                FULL_SYNC.to_writer(&mut builder);
+                common.to_writer(&mut builder);
             }
             Self::JoinShard(common) => {
-                JOIN_SHARD.to_builder(&mut builder);
-                common.to_builder(&mut builder);
+                JOIN_SHARD.to_writer(&mut builder);
+                common.to_writer(&mut builder);
             }
         }
         as_bytes
@@ -274,13 +274,13 @@ impl ReplicationResponse {
         match self {
             Self::Ok(common) => {
                 // the message type goes first
-                ACK.to_builder(&mut builder);
-                common.to_builder(&mut builder);
+                ACK.to_writer(&mut builder);
+                common.to_writer(&mut builder);
             }
             Self::NotOk(common) => {
                 // message type
-                NACK.to_builder(&mut builder);
-                common.to_builder(&mut builder);
+                NACK.to_writer(&mut builder);
+                common.to_writer(&mut builder);
             }
         }
         as_bytes

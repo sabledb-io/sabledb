@@ -117,8 +117,8 @@ macro_rules! impl_to_u8_builder_for {
     ($type_name:ident) => {
         // The macro will expand into the contents of this block.
         paste::item! {
-            impl $crate::utils::ToU8Builder for $type_name {
-                fn to_builder(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
+            impl $crate::utils::ToU8Writer for $type_name {
+                fn to_writer(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
                     builder.[< write_ $type_name >](*self);
                 }
             }
@@ -131,8 +131,8 @@ macro_rules! impl_to_u8_builder_for_atomic {
     ($type_name:ident, $simple_type_name:ident) => {
         // The macro will expand into the contents of this block.
         paste::item! {
-            impl $crate::utils::ToU8Builder for $type_name {
-                fn to_builder(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
+            impl $crate::utils::ToU8Writer for $type_name {
+                fn to_writer(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
                     let val = self.load(std::sync::atomic::Ordering::Relaxed);
                     builder.[< write_ $simple_type_name >](val);
                 }

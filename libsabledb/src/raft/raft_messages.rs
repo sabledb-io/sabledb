@@ -1,5 +1,5 @@
 use super::{RaftNode, RaftNodeFlags};
-use crate::utils::{FromU8Reader, ToU8Builder, U8ArrayBuilder, U8ArrayReader};
+use crate::utils::{FromU8Reader, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RaftMessageType {
@@ -22,8 +22,8 @@ impl FromU8Reader for RaftMessageType {
     }
 }
 
-impl ToU8Builder for RaftMessageType {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
+impl ToU8Writer for RaftMessageType {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
         match self {
             Self::Heartbeat => builder.write_u8(MT_HEARTBEAT),
             Self::AddNode => builder.write_u8(MT_ADD_NODE),
@@ -32,29 +32,29 @@ impl ToU8Builder for RaftMessageType {
 }
 
 #[derive(Clone, Debug)]
-pub struct Heartbeat {
+pub struct HeartbeatMsg {
     message_type: RaftMessageType,
 }
 
-impl Default for Heartbeat {
+impl Default for HeartbeatMsg {
     fn default() -> Self {
-        Heartbeat {
+        HeartbeatMsg {
             message_type: RaftMessageType::Heartbeat,
         }
     }
 }
 
-impl ToU8Builder for Heartbeat {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
-        self.message_type.to_builder(builder);
+impl ToU8Writer for HeartbeatMsg {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
+        self.message_type.to_writer(builder);
     }
 }
 
-impl FromU8Reader for Heartbeat {
-    type Item = Heartbeat;
+impl FromU8Reader for HeartbeatMsg {
+    type Item = HeartbeatMsg;
     fn from_reader(reader: &mut crate::utils::U8ArrayReader) -> Option<Self::Item> {
         let message_type = RaftMessageType::from_reader(reader)?;
-        Some(Heartbeat { message_type })
+        Some(HeartbeatMsg { message_type })
     }
 }
 
@@ -106,10 +106,10 @@ impl AddNodeMsg {
     }
 }
 
-impl ToU8Builder for AddNodeMsg {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder) {
-        self.message_type.to_builder(builder);
-        self.node.to_builder(builder);
+impl ToU8Writer for AddNodeMsg {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
+        self.message_type.to_writer(builder);
+        self.node.to_writer(builder);
     }
 }
 
@@ -134,7 +134,7 @@ mod tests {
         // Construct a "AddNodeMsg" and serialise it into "buffer"
         let msg1 =
             AddNodeMsg::with_node(RaftNode::new("127.0.0.1", 6999)).with_flag(RaftNodeFlags::Voter);
-        msg1.to_builder(&mut builder);
+        msg1.to_writer(&mut builder);
 
         // Deserialise a "AddNodeMsg" from the buffer
         let mut reader = U8ArrayReader::with_buffer(&buffer);
@@ -153,12 +153,12 @@ mod tests {
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
 
         // Construct a "Heartbeat" and serialise it into "buffer"
-        let msg1 = Heartbeat::default();
-        msg1.to_builder(&mut builder);
+        let msg1 = HeartbeatMsg::default();
+        msg1.to_writer(&mut builder);
 
         // Deserialise a "Heartbeat" from the buffer
         let mut reader = U8ArrayReader::with_buffer(&buffer);
-        let msg2 = Heartbeat::from_reader(&mut reader).unwrap();
+        let msg2 = HeartbeatMsg::from_reader(&mut reader).unwrap();
 
         // Compare the results
         assert_eq!(msg1.message_type, msg2.message_type);

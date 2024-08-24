@@ -649,8 +649,8 @@ pub trait FromU8Reader {
     fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item>;
 }
 
-pub trait ToU8Builder {
-    fn to_builder(&self, builder: &mut U8ArrayBuilder);
+pub trait ToU8Writer {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder);
 }
 
 impl_to_u8_builder_for!(u8);
@@ -686,8 +686,8 @@ impl FromU8Reader for String {
     }
 }
 
-impl ToU8Builder for String {
-    fn to_builder(&self, builder: &mut crate::utils::U8ArrayBuilder) {
+impl ToU8Writer for String {
+    fn to_writer(&self, builder: &mut crate::utils::U8ArrayBuilder) {
         builder.write_message(self.as_bytes());
     }
 }
