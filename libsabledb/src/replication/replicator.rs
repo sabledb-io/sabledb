@@ -147,16 +147,19 @@ impl Replicator {
                     // The replicator tasks:
                     // - The replication main loop (exchanging data)
                     // - Heartbeat task (using UDP)
+                    let server_options_cloned = server_options.clone();
                     let replicator_handle = tokio::task::spawn_local(async move {
                         let mut replicator =
-                            Replicator::new(rx, server_options.clone(), store.clone()).await;
+                            Replicator::new(rx, server_options_cloned, store.clone()).await;
                         if let Err(e) = replicator.main_loop(role_changed_tx).await {
                             tracing::error!("replicator error. {:?}", e);
                         }
                     });
 
                     let heartbeat_handle = tokio::task::spawn_local(async move {
-                        if let Err(e) = Self::heartbeat_loop(role_changed_rx).await {
+                        if let Err(e) =
+                            Self::heartbeat_loop(server_options.clone(), role_changed_rx).await
+                        {
                             tracing::error!("heartbeat_loop error. {:?}", e);
                         }
                     });
@@ -185,6 +188,7 @@ impl Replicator {
     /// If the server is Replica -> wait for heartbeat from the primary
     /// If the server is Primary -> send a heartbeat to our replicas
     async fn heartbeat_loop(
+        server_options: ServerOptions,
         mut role_changed_rx: TokioReciever<ServerRoleChanged>,
     ) -> Result<(), SableError> {
         let Some(role) = role_changed_rx.recv().await else {
@@ -192,12 +196,12 @@ impl Replicator {
                 "Failed to read from role_changed_rx channel!".into(),
             ));
         };
-
-        let mut heartbeat_task_handle = Self::run_heartbeat_task(role).await?;
+        let mut heartbeat_task_handle =
+            Self::run_heartbeat_task(server_options.clone(), role).await?;
         while let Some(role) = role_changed_rx.recv().await {
             // cancel the current heartbeat task and start a new one based on the new role
             heartbeat_task_handle.abort();
-            heartbeat_task_handle = Self::run_heartbeat_task(role).await?;
+            heartbeat_task_handle = Self::run_heartbeat_task(server_options.clone(), role).await?;
         }
 
         Ok(())
@@ -205,6 +209,7 @@ impl Replicator {
 
     /// Based on the new role, start the heartbeat task. Return its handle to the caller
     async fn run_heartbeat_task(
+        _server_options: ServerOptions,
         role: ServerRoleChanged,
     ) -> Result<tokio::task::JoinHandle<()>, SableError> {
         let handle = match role {
@@ -212,6 +217,7 @@ impl Replicator {
                 primary_ip,
                 primary_port,
             } => {
+                // The broadcast used is replication port +1
                 let primary_port = primary_port.saturating_add(1);
                 tokio::task::spawn_local(async move {
                     tracing::info!(
@@ -226,10 +232,11 @@ impl Replicator {
                 })
             }
             ServerRoleChanged::Primary { ip, port } => {
+                // The broadcast used is replication port +1
                 let port = port.saturating_add(1);
                 tokio::task::spawn_local(async move {
                     tracing::info!(
-                        "Server role is: Primary. Starting heartbeat UDP sender on ({}:{})",
+                        "Server role is: Primary. Starting heartbeat broadcaster ({}:{})",
                         ip,
                         port
                     );
