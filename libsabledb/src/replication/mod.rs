@@ -6,6 +6,8 @@ mod replication_traits;
 mod replicator;
 mod storage_updates;
 
+pub use crate::SableError;
+
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::{ReplicationConfig, ServerRole};
 pub use replication_messages::{
@@ -19,8 +21,8 @@ pub use replication_traits::{
 };
 pub use replicator::{ReplicationWorkerMessage, Replicator, ReplicatorContext};
 
-/// Prepare the socket by setting timeout and disabling delay
-pub fn prepare_std_socket(socket: &std::net::TcpStream) -> Result<(), crate::SableError> {
+/// Prepare the socket by setting time-out and disabling delay
+pub fn prepare_std_socket(socket: &std::net::TcpStream) -> Result<(), SableError> {
     // tokio sockets are non-blocking. We need to change this
     socket.set_nonblocking(false)?;
     socket.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;

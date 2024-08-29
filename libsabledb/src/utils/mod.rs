@@ -4,7 +4,12 @@ pub mod resp_response_parser_v2;
 pub mod shard_locker;
 pub mod stopwatch;
 pub mod ticker;
+
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
+
 pub use crate::{
+    impl_from_u8_reader_for, impl_from_u8_reader_for_atomic, impl_to_u8_builder_for,
+    impl_to_u8_builder_for_atomic,
     metadata::KeyType,
     server::{ParserError, SableError},
 };
@@ -382,6 +387,22 @@ impl<'a> U8ArrayReader<'a> {
         Some(u8::from_be_bytes(arr))
     }
 
+    pub fn read_bool(&mut self) -> Option<bool> {
+        if self.buffer.len().saturating_sub(self.consumed) < U8ArrayReader::U8_SIZE {
+            return None;
+        }
+
+        let mut arr = [0u8; U8ArrayReader::U8_SIZE];
+        arr.copy_from_slice(&self.buffer[self.consumed..self.consumed + U8ArrayReader::U8_SIZE]);
+        self.consumed = self.consumed.saturating_add(U8ArrayReader::U8_SIZE);
+        let v = u8::from_be_bytes(arr);
+        match v {
+            0u8 => Some(false),
+            1u8 => Some(true),
+            _ => None,
+        }
+    }
+
     /// Advance the buffer pointer by `count` bytes
     pub fn advance(&mut self, count: usize) -> Result<(), SableError> {
         if self.buffer.len().saturating_sub(self.consumed) < count {
@@ -490,6 +511,11 @@ impl<'a> U8ArrayBuilder<'a> {
         U8ArrayBuilder { buffer }
     }
 
+    pub fn write_bool(&mut self, val: bool) {
+        self.buffer
+            .extend_from_slice(&u8::to_be_bytes(if val { 1u8 } else { 0u8 }));
+    }
+
     pub fn write_u8(&mut self, val: u8) {
         self.buffer.extend_from_slice(&u8::to_be_bytes(val));
     }
@@ -531,6 +557,138 @@ impl<'a> U8ArrayBuilder<'a> {
     pub fn write_message(&mut self, bytes: &[u8]) {
         self.write_usize(bytes.len());
         self.write_bytes(bytes);
+    }
+}
+
+/// Number of slots
+pub const SLOT_SIZE: u16 = 16384;
+
+/// Provide an API for calculating the slot from a given user key
+pub fn calculate_slot(key: &BytesMut) -> u16 {
+    crc16::State::<crc16::XMODEM>::calculate(key) % SLOT_SIZE
+}
+
+pub enum CurrentTimeResolution {
+    Nanoseconds,
+    Microseconds,
+    Milliseconds,
+    Seconds,
+}
+
+/// Return the current timestamp since UNIX EPOCH - in seconds
+pub fn current_time(res: CurrentTimeResolution) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("SystemTime::now");
+    match res {
+        CurrentTimeResolution::Nanoseconds => now.as_nanos().try_into().unwrap_or(u64::MAX),
+        CurrentTimeResolution::Microseconds => now.as_micros().try_into().unwrap_or(u64::MAX),
+        CurrentTimeResolution::Milliseconds => now.as_millis().try_into().unwrap_or(u64::MAX),
+        CurrentTimeResolution::Seconds => now.as_secs(),
+    }
+}
+
+/// Given list of values `options`, return up to `count` values.
+/// The output is sorted.
+pub fn choose_multiple_values(
+    count: usize,
+    options: &Vec<usize>,
+    allow_dups: bool,
+) -> Result<VecDeque<usize>, SableError> {
+    let mut rng = rand::thread_rng();
+    let mut chosen = Vec::<usize>::new();
+    if allow_dups {
+        for _ in 0..count {
+            chosen.push(*options.choose(&mut rng).unwrap_or(&0));
+        }
+    } else {
+        let mut unique_values = options.clone();
+        unique_values.sort();
+        unique_values.dedup();
+        loop {
+            if unique_values.is_empty() {
+                break;
+            }
+
+            if chosen.len() == count {
+                break;
+            }
+
+            let pos = rng.gen_range(0..unique_values.len());
+            let Some(val) = unique_values.get(pos) else {
+                return Err(SableError::OtherError(format!(
+                    "Internal error: failed to read from vector (len: {}, pos: {})",
+                    unique_values.len(),
+                    pos
+                )));
+            };
+            chosen.push(*val);
+            unique_values.remove(pos);
+        }
+    }
+
+    chosen.sort();
+    let chosen: VecDeque<usize> = chosen.iter().copied().collect();
+    Ok(chosen)
+}
+
+pub trait ToBytes {
+    /// Serialise "self" into raw bytes
+    fn to_bytes(&self) -> BytesMut;
+}
+
+pub trait FromBytes {
+    type Item;
+    /// Construct "self" from raw bytes
+    fn from_bytes(bytes: &[u8]) -> Option<Self::Item>;
+}
+
+pub trait FromU8Reader {
+    type Item;
+    /// We use here `u64`, but the caller can pass any type of `uN`
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item>;
+}
+
+pub trait ToU8Writer {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder);
+}
+
+impl_to_u8_builder_for!(u8);
+impl_from_u8_reader_for!(u8);
+impl_to_u8_builder_for!(u16);
+impl_from_u8_reader_for!(u16);
+impl_to_u8_builder_for!(u32);
+impl_from_u8_reader_for!(u32);
+impl_to_u8_builder_for!(u64);
+impl_from_u8_reader_for!(u64);
+impl_to_u8_builder_for!(usize);
+impl_from_u8_reader_for!(usize);
+
+impl_to_u8_builder_for_atomic!(AtomicU8, u8);
+impl_to_u8_builder_for_atomic!(AtomicU16, u16);
+impl_to_u8_builder_for_atomic!(AtomicU32, u32);
+impl_to_u8_builder_for_atomic!(AtomicU64, u64);
+impl_to_u8_builder_for_atomic!(AtomicUsize, usize);
+impl_to_u8_builder_for_atomic!(AtomicBool, bool);
+
+impl_from_u8_reader_for_atomic!(AtomicU8, u8);
+impl_from_u8_reader_for_atomic!(AtomicU16, u16);
+impl_from_u8_reader_for_atomic!(AtomicU32, u32);
+impl_from_u8_reader_for_atomic!(AtomicU64, u64);
+impl_from_u8_reader_for_atomic!(AtomicUsize, usize);
+impl_from_u8_reader_for_atomic!(AtomicBool, bool);
+
+impl FromU8Reader for String {
+    type Item = String;
+    fn from_reader(reader: &mut crate::utils::U8ArrayReader) -> Option<Self::Item> {
+        let b = reader.read_message()?;
+        Some(String::from_utf8_lossy(&b).to_string())
+    }
+}
+
+impl ToU8Writer for String {
+    fn to_writer(&self, builder: &mut crate::utils::U8ArrayBuilder) {
+        builder.write_message(self.as_bytes());
     }
 }
 
@@ -637,90 +795,6 @@ mod test {
         }
         Ok(())
     }
-}
-
-/// Number of slots
-pub const SLOT_SIZE: u16 = 16384;
-
-/// Provide an API for calculating the slot from a given user key
-pub fn calculate_slot(key: &BytesMut) -> u16 {
-    crc16::State::<crc16::XMODEM>::calculate(key) % SLOT_SIZE
-}
-
-pub enum CurrentTimeResolution {
-    Nanoseconds,
-    Microseconds,
-    Milliseconds,
-    Seconds,
-}
-
-/// Return the current timestamp since UNIX EPOCH - in seconds
-pub fn current_time(res: CurrentTimeResolution) -> u64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("SystemTime::now");
-    match res {
-        CurrentTimeResolution::Nanoseconds => now.as_nanos().try_into().unwrap_or(u64::MAX),
-        CurrentTimeResolution::Microseconds => now.as_micros().try_into().unwrap_or(u64::MAX),
-        CurrentTimeResolution::Milliseconds => now.as_millis().try_into().unwrap_or(u64::MAX),
-        CurrentTimeResolution::Seconds => now.as_secs(),
-    }
-}
-
-/// Given list of values `options`, return up to `count` values.
-/// The output is sorted.
-pub fn choose_multiple_values(
-    count: usize,
-    options: &Vec<usize>,
-    allow_dups: bool,
-) -> Result<VecDeque<usize>, SableError> {
-    let mut rng = rand::thread_rng();
-    let mut chosen = Vec::<usize>::new();
-    if allow_dups {
-        for _ in 0..count {
-            chosen.push(*options.choose(&mut rng).unwrap_or(&0));
-        }
-    } else {
-        let mut unique_values = options.clone();
-        unique_values.sort();
-        unique_values.dedup();
-        loop {
-            if unique_values.is_empty() {
-                break;
-            }
-
-            if chosen.len() == count {
-                break;
-            }
-
-            let pos = rng.gen_range(0..unique_values.len());
-            let Some(val) = unique_values.get(pos) else {
-                return Err(SableError::OtherError(format!(
-                    "Internal error: failed to read from vector (len: {}, pos: {})",
-                    unique_values.len(),
-                    pos
-                )));
-            };
-            chosen.push(*val);
-            unique_values.remove(pos);
-        }
-    }
-
-    chosen.sort();
-    let chosen: VecDeque<usize> = chosen.iter().copied().collect();
-    Ok(chosen)
-}
-
-//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
-// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
-// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
-// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
-// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
-//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
-//
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn test_rng_selection() {

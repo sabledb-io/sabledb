@@ -2,6 +2,7 @@ pub mod commands;
 pub mod io;
 pub mod metadata;
 pub mod net;
+pub mod raft;
 pub mod replication;
 pub mod server;
 pub mod storage;
@@ -109,6 +110,66 @@ macro_rules! error_with_throttling {
             }
         })
     }}
+}
+
+#[macro_export]
+macro_rules! impl_to_u8_builder_for {
+    ($type_name:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            impl $crate::utils::ToU8Writer for $type_name {
+                fn to_writer(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
+                    builder.[< write_ $type_name >](*self);
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_to_u8_builder_for_atomic {
+    ($type_name:ident, $simple_type_name:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            impl $crate::utils::ToU8Writer for $type_name {
+                fn to_writer(&self, builder: &mut $crate::utils::U8ArrayBuilder) {
+                    let val = self.load(std::sync::atomic::Ordering::Relaxed);
+                    builder.[< write_ $simple_type_name >](val);
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_from_u8_reader_for {
+    ($type_name:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            impl $crate::utils::FromU8Reader for $type_name {
+                type Item = $type_name;
+                fn from_reader(reader: &mut $crate::utils::U8ArrayReader) -> Option<Self::Item> {
+                    reader.[< read_ $type_name >]()
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_from_u8_reader_for_atomic {
+    ($type_name:ident, $simple_type_name:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            impl $crate::utils::FromU8Reader for $type_name {
+                type Item = $type_name;
+                fn from_reader(reader: &mut $crate::utils::U8ArrayReader) -> Option<Self::Item> {
+                    let val = reader.[< read_ $simple_type_name >]()?;
+                    Some($type_name::new(val))
+                }
+            }
+        }
+    };
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____

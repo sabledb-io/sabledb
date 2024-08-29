@@ -8,9 +8,30 @@ use crate::{
     storage::StorageAdapter,
 };
 
-pub type ReplicatorSender = tokio::sync::mpsc::Sender<ReplicationWorkerMessage>;
-pub type ReplicatorReceiver = tokio::sync::mpsc::Receiver<ReplicationWorkerMessage>;
+use tokio::sync::mpsc::Receiver as TokioReciever;
+use tokio::sync::mpsc::Sender as TokioSender;
+
+pub type ReplicatorSender = TokioSender<ReplicationWorkerMessage>;
+pub type ReplicatorReceiver = TokioReciever<ReplicationWorkerMessage>;
 pub type WorkerHandle = tokio::runtime::Handle;
+
+#[derive(Debug, Clone)]
+enum ServerRoleChanged {
+    /// The server role has changed to Replica
+    Replica {
+        /// The primary IP address
+        primary_ip: String,
+        /// The primary **replication** port
+        primary_port: u16,
+    },
+    /// The server is now a Primary
+    Primary {
+        /// The IP on which this server accepts new replicas
+        ip: String,
+        /// The port on which this server accepts replicas
+        port: u16,
+    },
+}
 
 #[derive(Default, Debug)]
 #[allow(dead_code)]
@@ -19,7 +40,7 @@ pub enum ReplicationWorkerMessage {
     #[default]
     PrimaryMode,
     /// Connect to a remote server
-    ConnectToPrimary,
+    ConnectToPrimary((String, u16)),
     /// Shutdown the replicator thread
     Shutdown,
 }
@@ -31,7 +52,7 @@ enum ReplicatorStateResult {
     #[default]
     PrimaryMode,
     /// Connect to a remote server
-    ConnectToPrimary,
+    ConnectToPrimary((String, u16)),
     /// Shutdown the replicator thread
     Shutdown,
 }
@@ -121,10 +142,31 @@ impl Replicator {
 
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, async move {
-                    let mut replicator =
-                        Replicator::new(rx, server_options.clone(), store.clone()).await;
-                    if let Err(e) = replicator.main_loop().await {
-                        tracing::error!("replicator error. {:?}", e);
+                    let (role_changed_tx, role_changed_rx) =
+                        tokio::sync::mpsc::channel::<ServerRoleChanged>(10);
+                    // The replicator tasks:
+                    // - The replication main loop (exchanging data)
+                    // - Heartbeat task (using UDP)
+                    let server_options_cloned = server_options.clone();
+                    let replicator_handle = tokio::task::spawn_local(async move {
+                        let mut replicator =
+                            Replicator::new(rx, server_options_cloned, store.clone()).await;
+                        if let Err(e) = replicator.main_loop(role_changed_tx).await {
+                            tracing::error!("replicator error. {:?}", e);
+                        }
+                    });
+
+                    let heartbeat_handle = tokio::task::spawn_local(async move {
+                        if let Err(e) =
+                            Self::heartbeat_loop(server_options.clone(), role_changed_rx).await
+                        {
+                            tracing::error!("heartbeat_loop error. {:?}", e);
+                        }
+                    });
+
+                    tokio::select! {
+                        _ = replicator_handle => {}
+                        _ = heartbeat_handle => {}
                     }
                 });
             });
@@ -142,10 +184,89 @@ impl Replicator {
         })
     }
 
-    async fn replica_loop(&mut self) -> Result<ReplicatorStateResult, SableError> {
-        let replication_config = self.server_options.load_replication_config();
+    /// Depends on the role of the server, perform heartbeat action over UDP.
+    /// If the server is Replica -> wait for heartbeat from the primary
+    /// If the server is Primary -> send a heartbeat to our replicas
+    async fn heartbeat_loop(
+        server_options: ServerOptions,
+        mut role_changed_rx: TokioReciever<ServerRoleChanged>,
+    ) -> Result<(), SableError> {
+        let Some(role) = role_changed_rx.recv().await else {
+            return Err(SableError::OtherError(
+                "Failed to read from role_changed_rx channel!".into(),
+            ));
+        };
+        let mut heartbeat_task_handle =
+            Self::run_heartbeat_task(server_options.clone(), role).await?;
+        while let Some(role) = role_changed_rx.recv().await {
+            // cancel the current heartbeat task and start a new one based on the new role
+            heartbeat_task_handle.abort();
+            heartbeat_task_handle = Self::run_heartbeat_task(server_options.clone(), role).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Based on the new role, start the heartbeat task. Return its handle to the caller
+    async fn run_heartbeat_task(
+        _server_options: ServerOptions,
+        role: ServerRoleChanged,
+    ) -> Result<tokio::task::JoinHandle<()>, SableError> {
+        let handle = match role {
+            ServerRoleChanged::Replica {
+                primary_ip,
+                primary_port,
+            } => {
+                // The broadcast used is replication port +1
+                let primary_port = primary_port.saturating_add(1);
+                tokio::task::spawn_local(async move {
+                    tracing::info!(
+                        "Server role is: Replica. Starting heartbeat UDP receiver from Primary({}:{})",
+                        primary_ip,
+                        primary_port
+                    );
+                    // TODO: for now, just sleep
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                })
+            }
+            ServerRoleChanged::Primary { ip, port } => {
+                // The broadcast used is replication port +1
+                let port = port.saturating_add(1);
+                tokio::task::spawn_local(async move {
+                    tracing::info!(
+                        "Server role is: Primary. Starting heartbeat broadcaster ({}:{})",
+                        ip,
+                        port
+                    );
+                    // TODO: for now, just sleep
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                })
+            }
+        };
+        Ok(handle)
+    }
+
+    /// Create a new replication thread and wait for it exit.
+    /// Replication thread can exit in 2 ways only:
+    /// - The server terminated
+    /// - User issued a "replicaof no one" command which basically changes the server role to primary
+    async fn replica_loop(
+        &mut self,
+        role_changed_tx: &mut TokioSender<ServerRoleChanged>,
+        primary_addr: Option<(String, u16)>,
+    ) -> Result<ReplicatorStateResult, SableError> {
+        let mut replication_config = self.server_options.load_replication_config();
+        if let Some((primary_ip, primary_port)) = primary_addr {
+            replication_config.ip = primary_ip;
+            replication_config.port = primary_port;
+        }
+
         tracing::info!(
-            "Running replica loop using config: {:?}",
+            "Running replica loop using config: {:#?}",
             replication_config
         );
 
@@ -156,16 +277,39 @@ impl Replicator {
             .run(self.server_options.clone(), self.store.clone())
             .await?;
         ReplicationTelemetry::set_role(ServerRole::Replica);
+
+        // Notify that our role has changed
+        if let Err(e) = role_changed_tx
+            .send(ServerRoleChanged::Replica {
+                primary_ip: replication_config.ip.clone(),
+                primary_port: replication_config.port,
+            })
+            .await
+        {
+            tracing::warn!(
+                "Failed to notify role changed event (new role: Replica). {:?}",
+                e
+            );
+        }
+
         loop {
             match self.rx_channel.recv().await {
-                Some(ReplicationWorkerMessage::ConnectToPrimary) => {
+                Some(ReplicationWorkerMessage::ConnectToPrimary((primary_ip, primary_port))) => {
                     // switching primary
+                    tracing::info!(
+                        "Connecting to primary server: {}:{}",
+                        primary_ip,
+                        primary_port
+                    );
 
                     // terminate the current replication
                     let _ = tx.send(ReplClientCommand::Shutdown).await;
 
                     // start a new one
-                    return Ok(ReplicatorStateResult::ConnectToPrimary);
+                    return Ok(ReplicatorStateResult::ConnectToPrimary((
+                        primary_ip,
+                        primary_port,
+                    )));
                 }
                 Some(ReplicationWorkerMessage::PrimaryMode) => {
                     // switching into primary mode, tell our replication thread to terminate itself
@@ -183,7 +327,10 @@ impl Replicator {
     }
 
     /// Run this loop when the server is running a "primary" mode
-    async fn primary_loop(&mut self) -> Result<ReplicatorStateResult, SableError> {
+    async fn primary_loop(
+        &mut self,
+        role_changed_tx: &mut TokioSender<ServerRoleChanged>,
+    ) -> Result<ReplicatorStateResult, SableError> {
         let replication_config = self.server_options.load_replication_config();
         tracing::info!(
             "Running primary loop using config: {:?}",
@@ -191,18 +338,32 @@ impl Replicator {
         );
         let server = ReplicationServer::default();
         ReplicationTelemetry::set_role(ServerRole::Primary);
+
+        // Notify that our role has changed
+        if let Err(e) = role_changed_tx
+            .send(ServerRoleChanged::Primary {
+                ip: replication_config.ip.clone(),
+                port: replication_config.port,
+            })
+            .await
+        {
+            tracing::warn!(
+                "Failed to notify role changed event (new role: Primary). {:?}",
+                e
+            );
+        }
         loop {
             tokio::select! {
                 cmd = self.rx_channel.recv() => {
                     match cmd {
-                        Some(ReplicationWorkerMessage::ConnectToPrimary) => {
+                        Some(ReplicationWorkerMessage::ConnectToPrimary((primary_ip, primary_port))) => {
                             tracing::info!(
                                 "Switching to replica mode. Connecting to primary at {}:{}",
-                                replication_config.ip,
-                                replication_config.port,
+                                primary_ip,
+                                primary_port,
                             );
                             replication_thread_stop_all().await;
-                            return Ok(ReplicatorStateResult::ConnectToPrimary);
+                            return Ok(ReplicatorStateResult::ConnectToPrimary((primary_ip, primary_port)));
                         }
                         Some(ReplicationWorkerMessage::PrimaryMode) => {
                             tracing::info!("Already in Primary mode");
@@ -219,21 +380,27 @@ impl Replicator {
     }
 
     /// The replicator's main loop
-    async fn main_loop(&mut self) -> Result<(), SableError> {
+    async fn main_loop(
+        &mut self,
+        mut role_changed_tx: TokioSender<ServerRoleChanged>,
+    ) -> Result<(), SableError> {
         tracing::info!("Started");
 
         let replication_config = self.server_options.load_replication_config();
         let mut result = match &replication_config.role {
-            ServerRole::Primary => self.primary_loop().await?,
-            ServerRole::Replica => self.replica_loop().await?,
+            ServerRole::Primary => self.primary_loop(&mut role_changed_tx).await?,
+            ServerRole::Replica => self.replica_loop(&mut role_changed_tx, None).await?,
         };
 
         loop {
             result = match result {
-                ReplicatorStateResult::ConnectToPrimary => self.replica_loop().await?,
+                ReplicatorStateResult::ConnectToPrimary((ip, port)) => {
+                    self.replica_loop(&mut role_changed_tx, Some((ip, port)))
+                        .await?
+                }
                 ReplicatorStateResult::PrimaryMode => {
                     tracing::info!("Switching to primary mode");
-                    self.primary_loop().await?
+                    self.primary_loop(&mut role_changed_tx).await?
                 }
                 ReplicatorStateResult::Shutdown => {
                     tracing::info!("Exiting");
