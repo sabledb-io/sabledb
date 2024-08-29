@@ -28,7 +28,7 @@ pub struct GeneralSettings {
     /// Configuration files directory. Default: current process working directory
     pub config_dir: Option<PathBuf>,
     /// Log directory. If set to `None`, logs are written into `stdout`
-    /// SableDb uses an hourly rotating logs
+    /// SableDB uses an hourly rotating logs
     pub logdir: Option<PathBuf>,
 }
 

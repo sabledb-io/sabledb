@@ -7,7 +7,7 @@ use bytes::BytesMut;
 /// A Bookkeeping record that is placed in the database whenever we create a new comlpex type
 /// (Atm, a complex type can be: Hash, List, Zset)
 /// We keep the UID of the type and the type associated with it (`uid_type`)
-/// we use this record to identify a complex items overwritten by SableDb and might have left some
+/// we use this record to identify a complex items overwritten by SableDB and might have left some
 /// orphan records.
 ///
 /// for example, a Hash with 100 items, will have in the 101 records in DB: 1 item for the metadata +
@@ -15,7 +15,7 @@ use bytes::BytesMut;
 /// by insert a string record into the database (e.g. `set myhash str_value`), this operation is legal but it
 /// leaves the 100 hash items "orphans".
 ///
-/// SableDb uses a dedicated thread "Evictor" that one every N minutes, goes over the Bookkeeping records
+/// SableDB uses a dedicated thread "Evictor" that one every N minutes, goes over the Bookkeeping records
 /// and identify orphan complex items and evicts their children (in the above example, 100 hash fields records)
 #[derive(Clone, Default, PartialEq, Debug)]
 #[allow(dead_code)]

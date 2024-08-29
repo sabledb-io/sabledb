@@ -137,7 +137,7 @@ impl ServerCommands {
 
     /// `FLUSHALL [ASYNC | SYNC]`
     /// Delete all the keys of all the existing databases, not just the currently selected one. This command never fails
-    /// `SableDb` always uses the `SYNC` method
+    /// `SableDB` always uses the `SYNC` method
     async fn flushall(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,

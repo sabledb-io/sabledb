@@ -54,13 +54,13 @@ impl TransactionState {
 pub struct ClientStateFlags {}
 
 impl ClientStateFlags {
-    /// The client was killed (either by the user or by SableDb internally)
+    /// The client was killed (either by the user or by SableDB internally)
     pub const KILLED: u32 = (1 << 0);
     /// Pre transaction state. This state is a special state that indicating that
-    /// SableDb is preparing for executing a transcation for this client
+    /// SableDB is preparing for executing a transcation for this client
     pub const TXN_CALC_SLOTS: u32 = (1 << 1);
     /// Pre transaction state. This state is a special state that indicating that
-    /// SableDb is preparing for executing a transcation for this client
+    /// SableDB is preparing for executing a transcation for this client
     pub const TXN_MULTI: u32 = (1 << 2);
     /// Txn is currently in progress. When this state is detected, some operations
     /// are skipped (for example: LockManager will return noop lock, because the lock is already obtained

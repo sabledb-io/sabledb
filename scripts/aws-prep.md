@@ -6,7 +6,7 @@ sudo yum install gcc-g++ git clang -y
 ```
 
 ---
- Steps for building SableDb
+ Steps for building SableDB
 ---
 
 # install rust
@@ -31,7 +31,7 @@ echo 'export PATH=$PATH:$HOME/.cargo/bin' >> ${HOME}/.bashrc
 # Checkout the sources
 
 ```bash
-ssh-keygen -t rsa -C "AWS SableDb"
+ssh-keygen -t rsa -C "AWS SableDB"
 cat ~/.ssh/id_rsa.pub
 ```
 

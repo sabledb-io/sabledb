@@ -208,7 +208,7 @@ impl Cron {
     /// By doing this, we overrode the previous value which kept the `HASH_ID` so there is no way
     /// access `a` and `b`
     ///
-    /// SableDb keeps a special records called `Bookkeeping` which is created whenever a new complex
+    /// SableDB keeps a special records called `Bookkeeping` which is created whenever a new complex
     /// item is created. The `Bookkeeping` stores the following data:
     ///
     /// ```no_compile
