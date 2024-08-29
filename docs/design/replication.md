@@ -7,12 +7,11 @@
 On startup, `SableDb` spawns a thread (internally called `Relicator`) which is listening on the main port + `1000`.
 So if, for example, the server is configured to listen on port `6379`, the replication port is set to `7379`
 
-For every new incoming replication client, a new thread is spawned and served.
-thread-safe
+For every new incoming replication client, a new thread is spawned to server it.
 
 The replication is done using the following methodology:
 
-1. The replica is requesting from the primary a set of changes starting from a given ID
+1. The replica is requesting from the primary a set of changes starting from a given ID (initially, it starts with `0`)
 2. If the primary is able to locate the requested change ID, it builds a "change request message" and sends it over to the client (the ID accepted from the client is the starting ID for the change request)
 3. Steps 1-2 are repeated indefinitely
 4. If the primary is unable to locate the requested change ID, it replies with a "Negative ack" to the client
