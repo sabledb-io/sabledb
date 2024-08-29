@@ -42,7 +42,7 @@ fn main() -> Result<(), SableError> {
 
     let address = format!(
         "{}:{}",
-        options.general_settings.listen_ip, options.general_settings.port
+        options.general_settings.public_ip, options.general_settings.public_port
     );
     info!("TLS enabled: {:?}", options.use_tls());
 

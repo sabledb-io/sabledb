@@ -330,12 +330,8 @@ impl ServerState {
     pub async fn switch_role_to_primary(&self) -> Result<(), SableError> {
         let repl_config = ReplicationConfig {
             role: ServerRole::Primary,
-            ip: self
-                .options()
-                .general_settings
-                .replication_listen_ip
-                .to_string(),
-            port: self.options().general_settings.port as u16 + 1000,
+            ip: self.options().general_settings.private_ip.to_string(),
+            port: self.options().general_settings.public_port as u16 + 1000,
         };
 
         ReplicationConfig::write_file(

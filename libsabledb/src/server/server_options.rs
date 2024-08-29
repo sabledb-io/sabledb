@@ -7,15 +7,13 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct GeneralSettings {
+    /// Clients are connecting to this port
+    pub public_ip: String,
     /// Server listening port (defaults to 6379)
-    pub port: usize,
-    /// The IP accepting connections from clients
-    pub listen_ip: String,
-    /// When running as primary, listen on this IP. It can be different than the
-    /// `listen_ip` (This is useful when you want to open the main IP to the world, but the
-    /// replication IP is used internally inside a VPC)
-    pub replication_listen_ip: String,
-    /// Server workers count. set to 0 to let sabledb decide
+    pub public_port: usize,
+    /// Internal IP, usually used internally for communicating between SableDB nodes
+    pub private_ip: String,
+    /// Server workers count. set to 0 to let SableDB decide
     pub workers: usize,
     /// Database log level
     pub log_level: tracing::Level,
@@ -35,14 +33,14 @@ pub struct GeneralSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         GeneralSettings {
-            port: 6379,
-            listen_ip: "127.0.0.1".to_string(),
+            public_port: 6379,
+            public_ip: "127.0.0.1".to_string(),
             workers: 0,
             log_level: tracing::Level::INFO,
             cert: None,
             key: None,
             config_dir: None,
-            replication_listen_ip: "127.0.0.1".to_string(),
+            private_ip: "127.0.0.1".to_string(),
             logdir: None,
         }
     }
@@ -122,25 +120,25 @@ impl ServerOptions {
     }
 
     /// Load the replication configuration from disk
+    /// Replication port is set to the `public_port` + `1000`
     pub fn load_replication_config(&self) -> ReplicationConfig {
         if self.general_settings.config_dir.is_some() {
-            // load from config dir
+            // load from the config dir
             ReplicationConfig::from_dir(
                 self.general_settings.config_dir.as_deref(),
-                self.general_settings.replication_listen_ip.clone(),
-                self.general_settings.port as u16 + 1000,
+                self.general_settings.private_ip.clone(),
+                self.general_settings.public_port as u16 + 1000,
             )
         } else {
             // just adjust the port
             ReplicationConfig::from_dir(
                 None,
-                self.general_settings.replication_listen_ip.clone(),
-                self.general_settings.port as u16 + 1000,
+                self.general_settings.private_ip.clone(),
+                self.general_settings.public_port as u16 + 1000,
             )
         }
     }
 
-    //pub fn load_replication_configuration(&mut self,
     /// Read values from INI configuration file and return `ServerOptions` structure
     pub fn from_config(config_file: String) -> Result<Self, SableError> {
         let ini_file = Ini::load_from_file(config_file)?;
@@ -195,8 +193,9 @@ impl ServerOptions {
                     "config_dir" => {
                         options.general_settings.config_dir = Some(PathBuf::from(value))
                     }
-                    "port" => options.general_settings.port = ini_usize!(value),
-                    "listen_ip" => options.general_settings.listen_ip = value.to_string(),
+                    "public_ip" => options.general_settings.public_ip = value.to_string(),
+                    "public_port" => options.general_settings.public_port = ini_usize!(value),
+                    "private_ip" => options.general_settings.private_ip = value.to_string(),
                     "workers" => options.general_settings.workers = ini_usize!(value),
                     "log_level" => {
                         options.general_settings.log_level = match value.to_lowercase().as_str() {
