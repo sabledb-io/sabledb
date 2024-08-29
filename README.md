@@ -3,19 +3,19 @@
 
 
 
-# What is `SableDb`?
+# What is `SableDB`?
 
 <img src="/docs/images/sabledb.svg" width="200" height="200" align="right" />
 
-`SableDb` is a key-value NoSQL database that utilizes [`RocksDb`][3] as its storage engine and is compatible with the Redis protocol.
-It aims to reduce memory costs and increase capacity compared to Redis. `SableDb` features include Redis-compatible access via 
+`SableDB` is a key-value NoSQL database that utilizes [`RocksDB`][3] as its storage engine and is compatible with the Redis protocol.
+It aims to reduce memory costs and increase capacity compared to Redis. `SableDB` features include Redis-compatible access via
 any Redis client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.
 
-Oh, and it's written in `Rust` :) 
+Oh, and it's written in `Rust` :)
 
 ## Building
 
-`SableDb` is supported on all major OS: `Linux`, `macOS` and `Windows`
+`SableDB` is supported on all major OS: `Linux`, `macOS` and `Windows`
 
 ### Linux /macOS
 
@@ -28,7 +28,7 @@ cargo test --release
 
 ### Windows
 
-On Windows, we require `MSYS2` terminal for building `SableDb`.
+On Windows, we require `MSYS2` terminal for building `SableDB`.
 
 First, ensure that you have the required toolchain (beside Rust):
 
@@ -49,7 +49,7 @@ CFLAGS="-D_ISOC11_SOURCE" cargo build --release
 cargo test --release
 ```
 
-## Running `SableDb`
+## Running `SableDB`
 
 ```bash
 ./target/release/sabledb
@@ -89,7 +89,7 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 
 ## Supported features
 
-- Persistent data using RocksDb - use `SableDb` as a persistent storage using `Redis`'s API
+- Persistent data using RocksDB - use `SableDB` as a persistent storage using `Redis`'s API
 - TLS connections
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
@@ -98,13 +98,13 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 
 ## Benchmark tool - `sb`
 
-`SableDb` uses its own benchmarking tool named `sb` ("SableDb Benchmark"). `sb` supports the following commands:
+`SableDB` uses its own benchmarking tool named `sb` ("SableDB Benchmark"). `sb` supports the following commands:
 
 - `set`
 - `get`
-- `lpush` 
+- `lpush`
 - `lpop`
-- `rpush` 
+- `rpush`
 - `rpop`
 - `incr`
 - `ping`
@@ -112,7 +112,7 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 
 Run `sb --help` to get the full help message.
 
-Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDb` and `sb`...):
+Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDB` and `sb`...):
 
 ![sb progress demo](/docs/images/sb-demo.gif)
 
@@ -125,7 +125,7 @@ Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (sa
 
 **IMPORTANT**
 
-`SableDb` is under constant development, if you are missing a command, feel free to open an issue
+`SableDB` is under constant development, if you are missing a command, feel free to open an issue
 and visit this page again in couple of days
 
 ---
@@ -283,7 +283,7 @@ and visit this page again in couple of days
 
 | Command  | Supported  | Fully supported?  | Comment  |
 |---|---|---|---|
-| info | ✓ |✓ |  `SableDb` has its own INFO output format |
+| info | ✓ |✓ |  `SableDB` has its own INFO output format |
 | ping | ✓ |✓ |   |
 | replicaof | ✓ |✓ |   |
 | slaveof | ✓ |✓ |   |
@@ -347,7 +347,7 @@ Note: Each `mset` command is equivalent of `10` `set` commands
 
 ### Command `incr`
 
-The increment command is unique because it uses a "read-modify-update" in order to ensure the atomicity of the action which in a 
+The increment command is unique because it uses a "read-modify-update" in order to ensure the atomicity of the action which in a
 multi-threaded environment causes a challenge
 
 | Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
