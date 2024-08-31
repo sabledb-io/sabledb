@@ -1,4 +1,4 @@
-use crate::SableError;
+use crate::{SableError, ServerOptions};
 use ini::Ini;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -55,23 +55,31 @@ impl Default for ReplicationConfig {
 }
 
 impl ReplicationConfig {
-    const REPLICATION_CONF: &'static str = "replication.ini";
+    const REPLICATION_CONF: &'static str = "REPLICATION";
 
-    pub fn primary_config(address: String) -> Self {
+    pub fn new_replica(primary_address: String) -> Self {
         ReplicationConfig {
-            role: ServerRole::Primary,
-            address,
+            role: ServerRole::Replica,
+            address: primary_address,
         }
     }
 
-    /// Read replication configuration file from a given directory
-    pub fn from_dir(configuration_dir: Option<&Path>, default_address: String) -> Self {
-        let _guard = FILE_LOCK.read();
-        let replication_conf = Self::file_path_from_dir(configuration_dir);
+    pub fn new_primary(listen_address: String) -> Self {
+        ReplicationConfig {
+            role: ServerRole::Primary,
+            address: listen_address,
+        }
+    }
 
+    /// Construct `ReplicationConfig` from configuration file
+    pub fn load(options: &ServerOptions) -> Self {
+        let _guard = FILE_LOCK.read();
+        let replication_conf = Self::file_path_from_dir(options);
+
+        let private_address = options.general_settings.private_address.clone();
         // The replication configuration file is using an INI format
         let Ok(ini_file) = Ini::load_from_file(&replication_conf) else {
-            return ReplicationConfig::primary_config(default_address);
+            return ReplicationConfig::new_primary(private_address);
         };
 
         let Some(replication) = ini_file.section(Some("replication")) else {
@@ -79,7 +87,7 @@ impl ReplicationConfig {
                 "Replication configuration file {} does not contain a 'replication' section",
                 replication_conf.display()
             );
-            return ReplicationConfig::primary_config(default_address);
+            return ReplicationConfig::new_primary(private_address);
         };
 
         // read the role
@@ -93,38 +101,34 @@ impl ReplicationConfig {
         let address = if let Some(address) = replication.get("address") {
             address.to_string()
         } else {
-            default_address
+            private_address
         };
+
         ReplicationConfig { role, address }
     }
 
-    /// Write `repl_config` to a file overriding previous content
-    // (uses write lock)
-    pub fn write_file(
-        repl_config: &ReplicationConfig,
-        configuration_dir: Option<&Path>,
-    ) -> Result<(), SableError> {
+    /// Persist the configuration to the disk.
+    /// (uses write lock)
+    pub fn save(&self, options: &ServerOptions) -> Result<(), SableError> {
         let _guard = FILE_LOCK.write();
-        Self::write_file_internal(repl_config, configuration_dir)
+        self.write_file_internal(options)
     }
 
     /// Write `repl_config` to a file overriding previous content
     // (no locking in this version)
-    fn write_file_internal(
-        repl_config: &ReplicationConfig,
-        configuration_dir: Option<&Path>,
-    ) -> Result<(), SableError> {
-        let replication_conf = Self::file_path_from_dir(configuration_dir);
+    fn write_file_internal(&self, options: &ServerOptions) -> Result<(), SableError> {
+        let filepath = Self::file_path_from_dir(options);
         let mut ini = ini::Ini::default();
         ini.with_section(Some("replication"))
-            .set("role", format!("{}", repl_config.role))
-            .set("address", repl_config.address.clone());
-        ini.write_to_file(&replication_conf)?;
-        tracing::info!("Successfully updated file: {}", replication_conf.display());
+            .set("role", format!("{}", self.role))
+            .set("address", self.address.clone());
+        ini.write_to_file(&filepath)?;
+        tracing::info!("Successfully updated file: {}", filepath.display());
         Ok(())
     }
 
-    fn file_path_from_dir(configuration_dir: Option<&Path>) -> PathBuf {
+    fn file_path_from_dir(options: &ServerOptions) -> PathBuf {
+        let configuration_dir = options.general_settings.config_dir.as_deref();
         let mut replication_conf = match configuration_dir {
             Some(p) => p.to_path_buf(),
             None => match std::env::current_dir() {

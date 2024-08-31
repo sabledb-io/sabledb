@@ -1,3 +1,4 @@
+pub mod file;
 pub mod request_parser;
 pub mod resp_builder_v2;
 pub mod resp_response_parser_v2;

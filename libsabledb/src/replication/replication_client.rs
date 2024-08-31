@@ -1,7 +1,7 @@
 use crate::server::ServerOptions;
 use crate::{
     io::Archive,
-    replication::{StorageUpdates, StorageUpdatesIterItem},
+    replication::{cluster_manager, StorageUpdates, StorageUpdatesIterItem},
     BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
 };
 use crate::{
@@ -53,7 +53,7 @@ enum RequestChangesResult {
 #[derive(Debug, PartialEq)]
 enum JoinShardResult {
     /// Successfully joined the shard, returns the node-id
-    Ok(u64),
+    Ok,
     /// Failed to join the shard
     Err,
 }
@@ -102,7 +102,7 @@ impl ReplicationClient {
                         Ok(stream) => stream,
                     };
 
-                    // hereon: use socket with timeout
+                    // hereon: use socket with time-out
                     if let Err(e) = prepare_std_socket(&stream) {
                         error!("Failed to prepare socket. {:?}", e);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -114,8 +114,8 @@ impl ReplicationClient {
                     // a node-id (a unique number to the shard!)
                     let mut reader = TcpStreamBytesReader::new(&stream);
                     let mut writer = TcpStreamBytesWriter::new(&stream);
-                    let node_id = match Self::join_shard(&mut reader, &mut writer) {
-                        JoinShardResult::Ok(node_id) => node_id,
+                    match Self::join_shard(&mut reader, &mut writer) {
+                        JoinShardResult::Ok => {},
                         JoinShardResult::Err => {
                             let _ = stream.shutdown(std::net::Shutdown::Both);
                             break;
@@ -130,7 +130,7 @@ impl ReplicationClient {
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
-                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id, node_id);
+                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id);
                         match result {
                             RequestChangesResult::Success | RequestChangesResult::NoChanges => {
                                 // Note: if there are no changes, the primary server will stall
@@ -148,7 +148,7 @@ impl ReplicationClient {
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id, node_id).await {
+                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
                                     break;
@@ -202,19 +202,26 @@ impl ReplicationClient {
         options: &ServerOptions,
         stream: &mut std::net::TcpStream,
         request_id: &mut u64,
-        node_id: u64,
     ) -> Result<(), SableError> {
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(None);
 
         // Send a "FULL_SYNC" message
         let request =
-            ReplicationRequest::FullSync(RequestCommon::new(node_id).with_request_id(request_id));
+            ReplicationRequest::FullSync(RequestCommon::new().with_request_id(request_id));
         info!("Sending {} message to primary", request);
 
         let mut buffer = request.to_bytes();
         let mut writer = TcpStreamBytesWriter::new(stream);
+        let mut reader = TcpStreamBytesReader::new(stream);
         writer.write_message(&mut buffer)?;
+
+        // We now expect an ACK
+        let ReplicationResponse::Ok(common) = Self::read_replication_message(&mut reader)? else {
+            return Err(SableError::ProtocolError(
+                "Expected ReplicationResponse::Ok".to_string(),
+            ));
+        };
 
         // Read the response
         let mut file_len = vec![0u8; std::mem::size_of::<usize>()];
@@ -253,8 +260,20 @@ impl ReplicationClient {
         info!("Database successfully restored from backup");
 
         let sequence_file = options.open_params.db_path.join(SEQUENCES_FILE);
+        let mut last_txn_id = 0u64;
         if let Some(seq) = Self::read_next_sequence(sequence_file) {
             ReplicationTelemetry::set_last_change(seq);
+            last_txn_id = seq;
+        }
+
+        // Update the cluster manager
+        let node_info = cluster_manager::NodeInfo::new(options)
+            .with_last_txn_id(last_txn_id)
+            .with_role_replica()
+            .with_primary_node_id(common.node_id().to_string());
+
+        if let Err(e) = cluster_manager::put_node_info(options, &node_info) {
+            tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
 
         let _ = std::fs::remove_file(&output_file_name);
@@ -286,7 +305,7 @@ impl ReplicationClient {
 
     /// Request to join the shard, on success, return the node-id
     fn join_shard(reader: &mut impl BytesReader, writer: &mut impl BytesWriter) -> JoinShardResult {
-        let join_request = ReplicationRequest::JoinShard(RequestCommon::new(0));
+        let join_request = ReplicationRequest::JoinShard(RequestCommon::new());
         let mut buffer = join_request.to_bytes();
         if let Err(e) = writer.write_message(&mut buffer) {
             error!("Failed to send replication request. {:?}", e);
@@ -303,8 +322,8 @@ impl ReplicationClient {
                 match msg {
                     ReplicationResponse::Ok(common) => {
                         // fall through
-                        info!("JoinShard Ok. NodeId: {}", common.node_id());
-                        JoinShardResult::Ok(common.node_id())
+                        info!("JoinShard Ok. Primary Node ID: {}", common.node_id());
+                        JoinShardResult::Ok
                     }
                     ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
@@ -332,7 +351,6 @@ impl ReplicationClient {
         writer: &mut impl BytesWriter,
         rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
         request_id: &mut u64,
-        node_id: u64,
     ) -> RequestChangesResult {
         // Before we start, check for termination request
         match Self::check_command_channel(rx) {
@@ -352,7 +370,7 @@ impl ReplicationClient {
         };
 
         let request = ReplicationRequest::GetUpdatesSince((
-            RequestCommon::new(node_id).with_request_id(request_id),
+            RequestCommon::new().with_request_id(request_id),
             sequence_number,
         ));
 
@@ -561,7 +579,7 @@ mod tests {
         let mut writer = SimpleBytesWriter::default();
         let mut reader = StorageUpdatesBytesReader::default();
 
-        let req = RequestCommon::new(42 /* node id */);
+        let req = RequestCommon::new();
 
         // At first we expect to get a "NotOk" response with "NoFullSyncDone" set as the reason
         reader.add_response(
@@ -583,7 +601,6 @@ mod tests {
             &mut writer,
             &mut rx,
             &mut request_id,
-            42,
         );
 
         // request_changes should return a "FullSync" result
@@ -607,7 +624,7 @@ mod tests {
         let mut reader = StorageUpdatesBytesReader::default();
 
         let mut request_id = 1u64;
-        let req = RequestCommon::new(42 /* node id */).with_request_id(&mut request_id);
+        let req = RequestCommon::new().with_request_id(&mut request_id);
 
         // The replica is expected to send a "FullSync" message and the expected response should be
         // "Ok"
@@ -632,7 +649,6 @@ mod tests {
             &mut writer,
             &mut rx,
             &mut request_id,
-            42,
         );
 
         // Ensure that all record exist in the replication db

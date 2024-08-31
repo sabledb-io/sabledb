@@ -120,18 +120,8 @@ impl ServerOptions {
     }
 
     /// Load the replication configuration from disk
-    /// Replication port is set to the `public_port` + `1000`
     pub fn load_replication_config(&self) -> ReplicationConfig {
-        if self.general_settings.config_dir.is_some() {
-            // load from the config dir
-            ReplicationConfig::from_dir(
-                self.general_settings.config_dir.as_deref(),
-                self.general_settings.private_address.clone(),
-            )
-        } else {
-            // just adjust the port
-            ReplicationConfig::from_dir(None, self.general_settings.private_address.clone())
-        }
+        ReplicationConfig::load(self)
     }
 
     /// Read values from INI configuration file and return `ServerOptions` structure

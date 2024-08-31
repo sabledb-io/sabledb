@@ -44,7 +44,7 @@ RUN mkdir -p              \
 RUN echo '\
 [general]\n\
 logdir = "/var/lib/sabledb/log"\n\
-listen_ip = "0.0.0.0"\n\
+public_address = "0.0.0.0:6379"\n\
 db_path = "/var/lib/sabledb/data/sabledb.db"\n\
 config_dir = "/var/lib/sabledb/conf"'\
 >> /etc/sabledb/server.ini

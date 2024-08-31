@@ -142,7 +142,9 @@ impl ServerState {
 
     pub fn set_server_options(mut self, opts: ServerOptions) -> Self {
         self.opts = opts;
-        match self.opts.load_replication_config().role {
+        let repl_config = self.opts.load_replication_config();
+        let _ = repl_config.save(&self.opts);
+        match repl_config.role {
             ServerRole::Primary => self.set_primary(),
             ServerRole::Replica => self.set_replica(),
         }
@@ -306,16 +308,8 @@ impl ServerState {
     pub async fn connect_to_primary(&self, address: String, port: u16) -> Result<(), SableError> {
         if let Some(repliction_context) = &self.replicator_context {
             // Update the configuration file first
-            let repl_config = ReplicationConfig {
-                role: ServerRole::Replica,
-                address: format!("{}:{}", address, port),
-            };
-
-            // Update the replication.ini first (the values in this file are used to determine the primary to connect to)
-            ReplicationConfig::write_file(
-                &repl_config,
-                self.options().general_settings.config_dir.as_deref(),
-            )?;
+            let repl_config = ReplicationConfig::new_replica(format!("{}:{}", address, port));
+            repl_config.save(self.options())?;
 
             repliction_context
                 .send(ReplicationWorkerMessage::ConnectToPrimary((address, port)))
@@ -327,15 +321,10 @@ impl ServerState {
 
     // Change the role of this instance to primary
     pub async fn switch_role_to_primary(&self) -> Result<(), SableError> {
-        let repl_config = ReplicationConfig {
-            role: ServerRole::Primary,
-            address: self.options().general_settings.private_address.clone(),
-        };
+        let repl_config =
+            ReplicationConfig::new_replica(self.options().general_settings.private_address.clone());
+        repl_config.save(self.options())?;
 
-        ReplicationConfig::write_file(
-            &repl_config,
-            self.options().general_settings.config_dir.as_deref(),
-        )?;
         if let Some(repliction_context) = &self.replicator_context {
             repliction_context
                 .send(ReplicationWorkerMessage::PrimaryMode)
@@ -356,7 +345,7 @@ impl ServerState {
         }
     }
 
-    // Sending command to the evictor thread usign async API
+    // Sending command to the evictor thread using async API
     pub async fn send_evictor(&self, message: CronMessage) -> Result<(), SableError> {
         if let Some(evictor_context) = &self.evictor_context {
             tracing::debug!("Sending {:?} command (async) to evictor", message);
@@ -365,7 +354,7 @@ impl ServerState {
         Ok(())
     }
 
-    // Sending command to the evictor thread usign non async API
+    // Sending command to the evictor thread using non async API
     pub fn send_evictor_sync(&self, message: CronMessage) -> Result<(), SableError> {
         if let Some(evictor_context) = &self.evictor_context {
             tracing::debug!("Sending {:?} command (sync) to evictor", message);

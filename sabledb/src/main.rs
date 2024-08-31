@@ -1,4 +1,6 @@
-use libsabledb::{SableError, Server, ServerOptions, Transport, WorkerManager, WorkerMessage};
+use libsabledb::{
+    NodeId, SableError, Server, ServerOptions, Transport, WorkerManager, WorkerMessage,
+};
 use std::net::TcpListener;
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -41,6 +43,10 @@ fn main() -> Result<(), SableError> {
     let workers_count = WorkerManager::default_workers_count(options.general_settings.workers);
 
     info!("TLS enabled: {:?}", options.use_tls());
+
+    // Allocate / load NodeID for this instance
+    NodeId::initialise(&options);
+    info!("NodeID is set to: {}", NodeId::current());
 
     let address = options.general_settings.public_address.clone();
     let server = Arc::new(Server::new(options, store.clone(), workers_count)?);

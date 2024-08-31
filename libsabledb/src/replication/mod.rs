@@ -5,8 +5,11 @@ mod replication_server;
 mod replication_traits;
 mod replicator;
 mod storage_updates;
+mod cluster_manager;
 
 pub use crate::SableError;
+
+pub use cluster_manager::NodeInfo;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::{ReplicationConfig, ServerRole};

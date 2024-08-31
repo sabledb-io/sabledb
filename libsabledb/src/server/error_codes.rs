@@ -32,6 +32,8 @@ pub enum SableError {
     RocksDbError(#[from] rocksdb::Error),
     #[error("Error. {0}")]
     OtherError(String),
+    #[error("ProtocolError. {0}")]
+    ProtocolError(String),
     #[error("Invalid argument error. {0}")]
     InvalidArgument(String),
     #[error("Already exists")]
@@ -56,6 +58,8 @@ pub enum SableError {
     ClientInvalidState,
     #[error("Corrupted database. {0}")]
     Corrupted(String),
+    #[error("RedisError. {0}")]
+    RedisError(#[from] redis::RedisError),
 }
 
 #[allow(dead_code)]

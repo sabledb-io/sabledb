@@ -1,4 +1,4 @@
-use crate::{FromU8Reader, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
+use crate::{FromU8Reader, NodeId, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 /// Message types (requests)
@@ -22,7 +22,7 @@ pub struct RequestCommon {
     req_id: u64,
 
     /// The ID of the requesting node
-    node_id: u64,
+    node_id: String,
 }
 
 impl std::fmt::Display for RequestCommon {
@@ -43,14 +43,17 @@ impl FromU8Reader for RequestCommon {
     fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
         Some(RequestCommon {
             req_id: u64::from_reader(reader)?,
-            node_id: u64::from_reader(reader)?,
+            node_id: String::from_reader(reader)?,
         })
     }
 }
 
 impl RequestCommon {
-    pub fn new(node_id: u64) -> Self {
-        RequestCommon { req_id: 0, node_id }
+    pub fn new() -> Self {
+        RequestCommon {
+            req_id: 0,
+            node_id: NodeId::current(),
+        }
     }
 
     pub fn with_request_id(mut self, req_id: &mut u64) -> Self {
@@ -64,12 +67,8 @@ impl RequestCommon {
         self.req_id
     }
 
-    pub fn node_id(&self) -> u64 {
-        self.node_id
-    }
-
-    pub fn set_node_id(&mut self, node_id: u64) {
-        self.node_id = node_id;
+    pub fn node_id(&self) -> &String {
+        &self.node_id
     }
 }
 
@@ -77,17 +76,17 @@ impl RequestCommon {
 pub struct ResponseCommon {
     /// The request ID that generated this response
     req_id: u64,
-    /// The originating node ID
-    node_id: u64,
-    /// Contains the reason for Nack response
+    /// Contains the reason for NACK response
     reason: ResponseReason,
+    /// The responding node ID
+    node_id: String,
 }
 
 impl ResponseCommon {
     pub fn new(request: &RequestCommon) -> Self {
         ResponseCommon {
             req_id: request.request_id(),
-            node_id: request.node_id(),
+            node_id: NodeId::current(),
             reason: ResponseReason::Invalid,
         }
     }
@@ -105,8 +104,14 @@ impl ResponseCommon {
         self.req_id
     }
 
-    pub fn node_id(&self) -> u64 {
-        self.node_id
+    pub fn node_id(&self) -> &String {
+        &self.node_id
+    }
+}
+
+impl Default for RequestCommon {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -114,12 +119,12 @@ impl FromU8Reader for ResponseCommon {
     type Item = ResponseCommon;
     fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
         let req_id = u64::from_reader(reader)?;
-        let node_id = u64::from_reader(reader)?;
         let reason = ResponseReason::from_u8(u8::from_reader(reader)?)?;
+        let node_id = String::from_reader(reader)?;
         Some(ResponseCommon {
             req_id,
-            node_id,
             reason,
+            node_id,
         })
     }
 }
@@ -127,14 +132,18 @@ impl FromU8Reader for ResponseCommon {
 impl ToU8Writer for ResponseCommon {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
         self.req_id.to_writer(builder);
-        self.node_id.to_writer(builder);
         self.reason.to_u8().to_writer(builder);
+        self.node_id.to_writer(builder);
     }
 }
 
 impl std::fmt::Display for ResponseCommon {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "RequestId: {}, Reason: {}", self.req_id, self.reason)
+        write!(
+            f,
+            "RequestId: {}, Reason: {}. NodeId: {}",
+            self.req_id, self.reason, self.node_id
+        )
     }
 }
 

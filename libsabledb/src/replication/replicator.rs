@@ -181,7 +181,7 @@ impl Replicator {
         }
 
         tracing::info!(
-            "Running replica loop using config: {:#?}",
+            "Running replica loop using config: {:?}",
             replication_config
         );
 

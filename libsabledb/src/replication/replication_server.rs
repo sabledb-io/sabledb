@@ -199,18 +199,11 @@ impl ReplicationServer {
         debug!("Received replication request {:?}", req);
 
         match req {
-            ReplicationRequest::JoinShard(mut common) => {
-                debug!("Received request JoinShard(Id:{})", common.request_id());
-                let node_id = RAFT.allocate_node_id();
-                let peer_addr = stream.peer_addr().expect("peer_addr");
-                let node = RaftNode::new(peer_addr.ip().to_string().as_str(), peer_addr.port());
-                node.set_non_voter();
-                node.set_node_id(node_id);
-                let _ = RAFT.add_node(node);
-                common.set_node_id(node_id);
+            ReplicationRequest::JoinShard(common) => {
+                debug!("Received request JoinShard({})", common);
                 info!(
-                    "New replica joined the shard: {:?}, NodeId:{}",
-                    peer_addr, node_id
+                    "New replica joined with NodeID ({}) requested to join the shard",
+                    common.node_id()
                 );
 
                 let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
@@ -225,7 +218,14 @@ impl ReplicationServer {
                 return true;
             }
             ReplicationRequest::FullSync(common) => {
-                debug!("Received request FullSync(Id:{})", common.request_id());
+                debug!("Received request {}", common);
+                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
+
+                // Response with an ACK followed by the file
+                debug!("Sending replication response: {}", response_ok);
+                if !Self::write_response(&mut writer, &response_ok) {
+                    return false;
+                }
                 let changes_count =
                     match Self::send_checkpoint(store, options, replica_addr, stream) {
                         Err(e) => {
@@ -261,13 +261,7 @@ impl ReplicationServer {
                     );
 
                     debug!("Sending replication response: {}", response_not_ok);
-                    let mut response_not_ok_buffer = response_not_ok.to_bytes();
-                    if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
-                        error!("Failed to send 'GetChangesErr' control message. {:?}", e);
-                        // cant recover here, close the connection
-                        return false;
-                    }
-                    return true;
+                    return Self::write_response(&mut writer, &response_not_ok);
                 }
 
                 // Get the changes from the database. If no changes available
