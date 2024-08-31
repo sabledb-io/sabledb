@@ -157,6 +157,47 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
     Ok(())
 }
 
+/// Associate node identified by `replica_node_id` with the current node
+pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
+    connect(options)?;
+    let mut conn = CM_CONN.write().expect("poisoned mutex");
+    let Some(client) = &mut conn.client else {
+        return Ok(());
+    };
+    let cur_node_id = NodeId::current();
+    let mut conn = client.get_connection()?;
+    tracing::debug!(
+        "Associating node({}) as replica for ({})",
+        replica_node_id,
+        cur_node_id,
+    );
+    let key = format!("{}_replicas", cur_node_id);
+    conn.sadd(key, replica_node_id)?;
+    tracing::debug!("Success");
+    Ok(())
+}
+
+#[allow(dead_code)]
+/// Remove replica identified by `replica_node_id` from the current node
+pub fn remove_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
+    connect(options)?;
+    let mut conn = CM_CONN.write().expect("poisoned mutex");
+    let Some(client) = &mut conn.client else {
+        return Ok(());
+    };
+    let cur_node_id = NodeId::current();
+    let mut conn = client.get_connection()?;
+    tracing::debug!(
+        "Disassociating node({}) from primary ({})",
+        replica_node_id,
+        cur_node_id,
+    );
+    let key = format!("{}_replicas", cur_node_id);
+    conn.srem(key, replica_node_id)?;
+    tracing::debug!("Success");
+    Ok(())
+}
+
 /// Return true if 1000 milliseconds passed since the last time we updated the cluster manager database
 fn can_update_heartbeat() -> bool {
     let current_time =

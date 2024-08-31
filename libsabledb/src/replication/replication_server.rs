@@ -1,4 +1,4 @@
-use crate::replication::prepare_std_socket;
+use crate::replication::{cluster_manager, prepare_std_socket};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 
@@ -230,7 +230,7 @@ impl ReplicationServer {
                     match Self::send_checkpoint(store, options, replica_addr, stream) {
                         Err(e) => {
                             info!(
-                                "Failed sending db chceckpoint to replica {}. {:?}",
+                                "Failed sending db checkpoint to replica {}. {:?}",
                                 replica_addr, e
                             );
                             return false;
@@ -243,6 +243,10 @@ impl ReplicationServer {
                     distance_from_primary: 0,
                 };
                 ReplicationTelemetry::update_replica_info(replica_addr.to_string(), replinfo);
+                if let Err(e) = cluster_manager::add_replica(options, common.node_id().to_string())
+                {
+                    tracing::warn!("Cluster manager error: could not add replica. {:?}", e);
+                }
             }
             ReplicationRequest::GetUpdatesSince((common, seq)) => {
                 debug!(
@@ -305,6 +309,12 @@ impl ReplicationServer {
                         break Some(storage_updates);
                     }
                 };
+
+                // Associate common.node_id() as replica for the current node
+                if let Err(e) = cluster_manager::add_replica(options, common.node_id().to_string())
+                {
+                    tracing::warn!("Cluster manager error: could not add replica. {:?}", e);
+                }
 
                 let Some(storage_updates) = storage_updates else {
                     // No changes available to send
