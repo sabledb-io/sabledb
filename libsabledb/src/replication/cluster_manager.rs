@@ -52,16 +52,11 @@ impl NodeInfo {
         let props: Vec<(String, String)> = self
             .properties
             .iter()
-            .map(|(field_name, field_value)| {
-                (
-                    format!("{}:{}", cur_node_id, field_name),
-                    field_value.to_string(),
-                )
-            })
+            .map(|(field_name, field_value)| (field_name.to_string(), field_value.to_string()))
             .collect();
         tracing::info!("Writing node object in cluster manager: {:?}", props);
         let mut conn = conn.get_connection()?;
-        conn.mset(&props)?;
+        conn.hset_multiple(cur_node_id, &props)?;
         tracing::info!("Success");
         update_heartbeat_reported_ts();
         Ok(())
@@ -148,11 +143,15 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
     };
 
     let cur_node_id = NodeId::current();
-    let key = format!("{}:{}", cur_node_id, PROP_LAST_UPDATED);
     let curts = TimeUtils::epoch_micros().unwrap_or_default();
-    tracing::debug!("Updating cluster manager property: '{} => {}'", key, curts);
+    tracing::debug!(
+        "Updating cluster manager property: '{}:({} => {})'",
+        cur_node_id,
+        PROP_LAST_UPDATED,
+        curts
+    );
     let mut conn = client.get_connection()?;
-    conn.set(key, curts)?;
+    conn.hset(cur_node_id, PROP_LAST_UPDATED, curts)?;
     update_heartbeat_reported_ts();
     tracing::debug!("Success");
     Ok(())
