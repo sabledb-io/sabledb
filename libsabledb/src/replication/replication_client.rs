@@ -1,7 +1,9 @@
 use crate::server::ServerOptions;
 use crate::{
     io::Archive,
-    replication::{cluster_manager, StorageUpdates, StorageUpdatesIterItem},
+    replication::{
+        cluster_manager, cluster_manager::NodeInfo, StorageUpdates, StorageUpdatesIterItem,
+    },
     BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
 };
 use crate::{
@@ -135,6 +137,9 @@ impl ReplicationClient {
                             RequestChangesResult::Success | RequestChangesResult::NoChanges => {
                                 // Note: if there are no changes, the primary server will stall
                                 // the response
+                                if let Err(e) = cluster_manager::put_last_updated(&options) {
+                                    tracing::warn!("Error while updating node 'last_updated' property. {:?}", e);
+                                }
                             }
                             RequestChangesResult::Reconnect => {
                                 info!("Closing connection with primary: {:?}", stream);
@@ -266,8 +271,8 @@ impl ReplicationClient {
             last_txn_id = seq;
         }
 
-        // Update the cluster manager
-        let node_info = cluster_manager::NodeInfo::new(options)
+        // Update the cluster manager with the current info
+        let node_info = NodeInfo::current(options)
             .with_last_txn_id(last_txn_id)
             .with_role_replica()
             .with_primary_node_id(common.node_id().to_string());
@@ -383,7 +388,7 @@ impl ReplicationClient {
         debug!("Successfully sent requesst: {} to primary", request);
 
         // We expect now an "Ok" or "NotOk" response
-        match Self::read_replication_message(reader) {
+        let common = match Self::read_replication_message(reader) {
             Err(e) => {
                 error!("Error reading replication message. {:?}", e);
                 return RequestChangesResult::Reconnect;
@@ -392,7 +397,8 @@ impl ReplicationClient {
                 match msg {
                     ReplicationResponse::Ok(common) => {
                         // fall through
-                        debug!("Got Ok for replication request: {}", common.request_id());
+                        debug!("Got response: {}", common);
+                        common
                     }
                     ReplicationResponse::NotOk(common)
                         if common.reason().eq(&ResponseReason::NoChangesAvailable) =>
@@ -408,7 +414,7 @@ impl ReplicationClient {
                     }
                 }
             }
-        }
+        };
 
         // Read the storage changes
         let buffer = loop {
@@ -482,6 +488,17 @@ impl ReplicationClient {
             changes_count.to_formatted_string(&Locale::en),
             sequence_number.to_formatted_string(&Locale::en)
         );
+
+        // Update the current node info in the cluster manager database
+        let node_info = NodeInfo::current(options)
+            .with_last_txn_id(sequence_number)
+            .with_role_replica()
+            .with_primary_node_id(common.node_id().to_string());
+
+        if let Err(e) = cluster_manager::put_node_info(options, &node_info) {
+            tracing::warn!("Error while updating cluster manager. {:?}", e);
+        }
+
         Self::write_next_sequence(sequence_file, sequence_number)
     }
 

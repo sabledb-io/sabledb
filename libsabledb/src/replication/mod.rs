@@ -1,3 +1,4 @@
+mod cluster_manager;
 mod replication_client;
 mod replication_config;
 mod replication_messages;
@@ -5,7 +6,6 @@ mod replication_server;
 mod replication_traits;
 mod replicator;
 mod storage_updates;
-mod cluster_manager;
 
 pub use crate::SableError;
 

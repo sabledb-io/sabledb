@@ -4,84 +4,90 @@ use crate::{
     NodeId, SableError, ServerOptions,
 };
 use redis::Commands;
+use std::collections::BTreeMap;
 use std::sync::RwLock;
-use struct_iterable::Iterable;
+
 lazy_static::lazy_static! {
     static ref CM_CONN: RwLock<Connection> = RwLock::<Connection>::default();
 }
 
-/// Convert Any type into String
-macro_rules! any_to_string {
-    ($val:expr) => {
-        if let Some(string) = $val.downcast_ref::<String>() {
-            string.clone()
-        } else if let Some(number) = $val.downcast_ref::<u64>() {
-            format!("{}", number)
-        } else if let Some(role) = $val.downcast_ref::<ServerRole>() {
-            format!("{}", role)
-        } else {
-            String::new()
-        }
-    };
+thread_local! {
+    pub static LAST_UPDATED_TS: std::cell::RefCell<u64> = const { std::cell::RefCell::new(0u64) };
 }
 
-#[derive(Default, Iterable)]
+const PROP_NODE_ID: &str = "node_id";
+const PROP_NODE_ADDRESS: &str = "node_address";
+const PROP_ROLE: &str = "role";
+const PROP_LAST_UPDATED: &str = "last_updated";
+const PROP_LAST_TXN_ID: &str = "last_txn_id";
+const PROP_PRIMARY_NODE_ID: &str = "primary_node_id";
+
+#[derive(Default)]
 pub struct NodeInfo {
-    node_id: String,
-    node_address: String,
-    role: ServerRole,
-    last_updated: u64,
-    last_txn_id: u64,
-    /// When role is a Replica, this holds the primary node-id
-    primary_node_id: String,
+    properties: BTreeMap<&'static str, String>,
 }
 
 impl NodeInfo {
-    pub fn new(options: &ServerOptions) -> Self {
+    pub fn current(options: &ServerOptions) -> Self {
         let repl_info = ReplicationConfig::load(options);
-        NodeInfo {
-            node_id: NodeId::current(),
-            node_address: options.general_settings.private_address.clone(),
-            role: repl_info.role.clone(),
-            last_updated: TimeUtils::epoch_micros().unwrap_or_default(),
-            ..Default::default()
-        }
+        let mut properties = BTreeMap::<&str, String>::new();
+        properties.insert(PROP_NODE_ID, NodeId::current());
+        properties.insert(
+            PROP_NODE_ADDRESS,
+            options.general_settings.private_address.clone(),
+        );
+        properties.insert(PROP_ROLE, format!("{}", repl_info.role));
+        properties.insert(
+            PROP_LAST_UPDATED,
+            format!("{}", TimeUtils::epoch_micros().unwrap_or_default()),
+        );
+        properties.insert(PROP_LAST_TXN_ID, "0".to_string());
+        properties.insert(PROP_PRIMARY_NODE_ID, String::default());
+        NodeInfo { properties }
     }
 
     /// Write this object to the cluster manager database
     pub fn put(&self, conn: &mut redis::Client) -> Result<(), SableError> {
+        let cur_node_id = NodeId::current();
         let props: Vec<(String, String)> = self
+            .properties
             .iter()
             .map(|(field_name, field_value)| {
-                let val = any_to_string!(field_value);
                 (
-                    format!("{}:{}", self.node_id, field_name),
-                    format!("{:?}", val),
+                    format!("{}:{}", cur_node_id, field_name),
+                    field_value.to_string(),
                 )
             })
             .collect();
         tracing::info!("Writing node object in cluster manager: {:?}", props);
+        let mut conn = conn.get_connection()?;
         conn.mset(&props)?;
+        tracing::info!("Success");
+        update_heartbeat_reported_ts();
         Ok(())
     }
 
     pub fn with_last_txn_id(mut self, last_txn_id: u64) -> Self {
-        self.last_txn_id = last_txn_id;
+        self.properties
+            .insert(PROP_LAST_TXN_ID, format!("{}", last_txn_id));
         self
     }
 
     pub fn with_role_replica(mut self) -> Self {
-        self.role = ServerRole::Replica;
+        self.properties
+            .insert(PROP_ROLE, format!("{}", ServerRole::Replica));
         self
     }
 
     pub fn with_role_primary(mut self) -> Self {
-        self.role = ServerRole::Primary;
+        self.properties
+            .insert(PROP_ROLE, format!("{}", ServerRole::Primary));
         self
     }
 
     pub fn with_primary_node_id(mut self, primary_node_id: String) -> Self {
-        self.primary_node_id = primary_node_id;
+        self.properties
+            .insert(PROP_PRIMARY_NODE_ID, primary_node_id);
         self
     }
 }
@@ -127,4 +133,51 @@ pub fn put_node_info(options: &ServerOptions, node_info: &NodeInfo) -> Result<()
         return Ok(());
     };
     node_info.put(client)
+}
+
+/// Udpate the "last updated" field for this node in the cluster manager database
+pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
+    if !can_update_heartbeat() {
+        return Ok(());
+    }
+
+    connect(options)?;
+    let mut conn = CM_CONN.write().expect("poisoned mutex");
+    let Some(client) = &mut conn.client else {
+        return Ok(());
+    };
+
+    let cur_node_id = NodeId::current();
+    let key = format!("{}:{}", cur_node_id, PROP_LAST_UPDATED);
+    let curts = TimeUtils::epoch_micros().unwrap_or_default();
+    tracing::debug!("Updating cluster manager property: '{} => {}'", key, curts);
+    let mut conn = client.get_connection()?;
+    conn.set(key, curts)?;
+    update_heartbeat_reported_ts();
+    tracing::debug!("Success");
+    Ok(())
+}
+
+/// Return true if 1000 milliseconds passed since the last time we updated the cluster manager database
+fn can_update_heartbeat() -> bool {
+    let current_time =
+        crate::utils::current_time(crate::utils::CurrentTimeResolution::Milliseconds);
+    LAST_UPDATED_TS.with(|last_ts| {
+        let last_logged_ts = *last_ts.borrow();
+        if current_time - last_logged_ts >= 1000 {
+            *last_ts.borrow_mut() = current_time;
+            true
+        } else {
+            false
+        }
+    })
+}
+
+/// Return true if 1000 milliseconds passed since the last time we updated the cluster manager database
+fn update_heartbeat_reported_ts() {
+    let current_time =
+        crate::utils::current_time(crate::utils::CurrentTimeResolution::Milliseconds);
+    LAST_UPDATED_TS.with(|last_ts| {
+        *last_ts.borrow_mut() = current_time;
+    })
 }
