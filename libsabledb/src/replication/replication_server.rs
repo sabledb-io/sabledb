@@ -42,7 +42,7 @@ pub async fn replication_thread_stop_all() {
         if running_threads == 0 {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
     STOP_FLAG.store(false, Ordering::Relaxed);
     info!("All replication threads have stopped");
@@ -60,6 +60,7 @@ fn replication_thread_decr() {
 
 /// Is the shutdown flag set?
 fn replication_thread_is_going_down() -> bool {
+    debug!("Checking for STOP_FLAG flag");
     STOP_FLAG.load(Ordering::Relaxed)
 }
 
@@ -150,6 +151,18 @@ impl ReplicationServer {
         let _ = std::fs::remove_file(&tar_file);
         let _ = std::fs::remove_dir_all(&backup_db_path);
         Ok(changes_count)
+    }
+
+    /// Write `response` to `writer`. Return `true` on success, `false` otherwise
+    fn write_response(writer: &mut impl BytesWriter, response: &ReplicationResponse) -> bool {
+        let mut response_mut = response.to_bytes();
+        if let Err(e) = writer.write_message(&mut response_mut) {
+            error!("Failed to send response: '{}'. {:?}", response, e);
+            false
+        } else {
+            debug!("Successfully send message '{}'", response);
+            true
+        }
     }
 
     /// The main replication request -> reply flow is happening here.
@@ -259,6 +272,7 @@ impl ReplicationServer {
 
                 // Get the changes from the database. If no changes available
                 // hold the request until we have some changes to send over
+                let mut retries = 5usize;
                 let storage_updates = loop {
                     let storage_updates = match store.storage_updates_since(
                         seq,
@@ -275,24 +289,18 @@ impl ReplicationServer {
                                 ResponseCommon::new(&common)
                                     .with_reason(ResponseReason::CreatingUpdatesSinceError),
                             );
-
-                            let mut response_not_ok_buffer = response_not_ok.to_bytes();
-                            if let Err(e) = writer.write_message(&mut response_not_ok_buffer) {
-                                error!(
-                                    "Failed to send '{}' control message. {:?}",
-                                    response_not_ok, e
-                                );
-                                // cant recover here, close the connection
-                                return false;
-                            }
-                            info!("Sent {} message to replica", response_not_ok);
-                            // return true here so we wont close the connection
-                            return true;
+                            return Self::write_response(&mut writer, &response_not_ok);
                         }
                         Ok(changes_since) => changes_since,
                     };
 
                     if storage_updates.is_empty() {
+                        // No changes, stall the request
+                        retries = retries.saturating_sub(1);
+                        if retries == 0 {
+                            break None;
+                        }
+
                         // Nothing to send, suspend ourselves for a bit
                         // until we have something to send
                         std::thread::sleep(std::time::Duration::from_millis(
@@ -300,17 +308,24 @@ impl ReplicationServer {
                         ));
                         continue;
                     } else {
-                        break storage_updates;
+                        break Some(storage_updates);
                     }
+                };
+
+                let Some(storage_updates) = storage_updates else {
+                    // No changes available to send
+                    let response_not_ok = ReplicationResponse::NotOk(
+                        ResponseCommon::new(&common)
+                            .with_reason(ResponseReason::NoChangesAvailable),
+                    );
+                    return Self::write_response(&mut writer, &response_not_ok);
                 };
 
                 info!("Sending replication update: {}", storage_updates);
 
                 // Send a `ReplicationResponse::Ok` message, followed by the data
                 let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
-                let mut response_ok_buffer = response_ok.to_bytes();
-                if let Err(e) = writer.write_message(&mut response_ok_buffer) {
-                    error!("Failed to send 'Ok' control message. {:?}", e);
+                if !Self::write_response(&mut writer, &response_ok) {
                     return false;
                 }
 
@@ -349,12 +364,13 @@ impl ReplicationServer {
         store: StorageAdapter,
     ) -> Result<(), SableError> {
         let repl_config = options.load_replication_config();
-        let address = format!("{}:{}", repl_config.ip, repl_config.port);
-
-        let listener = TcpListener::bind(address.clone())
+        let listener = TcpListener::bind(repl_config.address.clone())
             .await
-            .unwrap_or_else(|_| panic!("failed to bind address {}", address));
-        info!("Replication server started on address: {}", address);
+            .unwrap_or_else(|_| panic!("failed to bind address {}", repl_config.address));
+        info!(
+            "Replication server started on address: {}",
+            repl_config.address
+        );
         loop {
             let (socket, addr) = listener.accept().await?;
             info!("Accepted new connection from replica: {:?}", addr);

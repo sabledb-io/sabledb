@@ -8,11 +8,11 @@ use std::path::PathBuf;
 #[derive(Clone, Debug)]
 pub struct GeneralSettings {
     /// Clients are connecting to this port
-    pub public_ip: String,
-    /// Server listening port (defaults to 6379)
-    pub public_port: usize,
+    pub public_address: String,
     /// Internal IP, usually used internally for communicating between SableDB nodes
-    pub private_ip: String,
+    pub private_address: String,
+    /// Cluster address used for managing the replication / cluster
+    pub cluster_address: Option<String>,
     /// Server workers count. set to 0 to let SableDB decide
     pub workers: usize,
     /// Database log level
@@ -33,15 +33,15 @@ pub struct GeneralSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         GeneralSettings {
-            public_port: 6379,
-            public_ip: "127.0.0.1".to_string(),
+            public_address: "127.0.0.1:6379".to_string(),
             workers: 0,
             log_level: tracing::Level::INFO,
             cert: None,
             key: None,
             config_dir: None,
-            private_ip: "127.0.0.1".to_string(),
+            private_address: "127.0.0.1:7379".to_string(),
             logdir: None,
+            cluster_address: None,
         }
     }
 }
@@ -64,7 +64,7 @@ impl Default for ReplicationLimits {
         ReplicationLimits {
             single_update_buffer_size: 50 << 20, // 50mb
             num_updates_per_message: 10_000,
-            check_for_updates_interval_ms: 5,
+            check_for_updates_interval_ms: 100,
         }
     }
 }
@@ -126,16 +126,11 @@ impl ServerOptions {
             // load from the config dir
             ReplicationConfig::from_dir(
                 self.general_settings.config_dir.as_deref(),
-                self.general_settings.private_ip.clone(),
-                self.general_settings.public_port as u16 + 1000,
+                self.general_settings.private_address.clone(),
             )
         } else {
             // just adjust the port
-            ReplicationConfig::from_dir(
-                None,
-                self.general_settings.private_ip.clone(),
-                self.general_settings.public_port as u16 + 1000,
-            )
+            ReplicationConfig::from_dir(None, self.general_settings.private_address.clone())
         }
     }
 
@@ -193,9 +188,13 @@ impl ServerOptions {
                     "config_dir" => {
                         options.general_settings.config_dir = Some(PathBuf::from(value))
                     }
-                    "public_ip" => options.general_settings.public_ip = value.to_string(),
-                    "public_port" => options.general_settings.public_port = ini_usize!(value),
-                    "private_ip" => options.general_settings.private_ip = value.to_string(),
+                    "public_address" => options.general_settings.public_address = value.to_string(),
+                    "private_address" => {
+                        options.general_settings.private_address = value.to_string()
+                    }
+                    "cluster_address" => {
+                        options.general_settings.cluster_address = Some(value.to_string())
+                    }
                     "workers" => options.general_settings.workers = ini_usize!(value),
                     "log_level" => {
                         options.general_settings.log_level = match value.to_lowercase().as_str() {

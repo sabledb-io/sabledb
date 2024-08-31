@@ -39,23 +39,17 @@ pub struct ReplicationConfig {
     /// Server role ("primary", "replica")
     pub role: ServerRole,
     /// If the role is `ServerRole::Replica`, this property holds
-    /// the IP of the primary server.
+    /// the private address of the primary server.
     /// If the role is `Server::Primary`, this property holds the
-    /// the IP on which this server accepts new replication clients
-    pub ip: String,
-    /// When the role is `ServerRole::Replica`, this property holds
-    /// the IP of the primary server
-    /// If the role is `Server::Primary`, this property holds the
-    /// the port on which this server accepts new replication clients
-    pub port: u16,
+    /// the private address on which this server accepts new replication clients
+    pub address: String,
 }
 
 impl Default for ReplicationConfig {
     fn default() -> Self {
         ReplicationConfig {
             role: ServerRole::Primary,
-            ip: "127.0.0.1".to_string(),
-            port: 7379,
+            address: "127.0.0.1:7379".to_string(),
         }
     }
 }
@@ -63,26 +57,21 @@ impl Default for ReplicationConfig {
 impl ReplicationConfig {
     const REPLICATION_CONF: &'static str = "replication.ini";
 
-    pub fn primary_config(ip: String, port: u16) -> Self {
+    pub fn primary_config(address: String) -> Self {
         ReplicationConfig {
             role: ServerRole::Primary,
-            ip,
-            port,
+            address,
         }
     }
 
     /// Read replication configuration file from a given directory
-    pub fn from_dir(
-        configuration_dir: Option<&Path>,
-        default_listen_ip: String,
-        default_port: u16,
-    ) -> Self {
+    pub fn from_dir(configuration_dir: Option<&Path>, default_address: String) -> Self {
         let _guard = FILE_LOCK.read();
         let replication_conf = Self::file_path_from_dir(configuration_dir);
 
         // The replication configuration file is using an INI format
         let Ok(ini_file) = Ini::load_from_file(&replication_conf) else {
-            return ReplicationConfig::primary_config(default_listen_ip, default_port);
+            return ReplicationConfig::primary_config(default_address);
         };
 
         let Some(replication) = ini_file.section(Some("replication")) else {
@@ -90,18 +79,7 @@ impl ReplicationConfig {
                 "Replication configuration file {} does not contain a 'replication' section",
                 replication_conf.display()
             );
-            return ReplicationConfig::primary_config(default_listen_ip, default_port);
-        };
-
-        // parse the port number
-        let port = if let Some(port) = replication.get("port") {
-            let Ok(port) = port.parse::<u16>() else {
-                tracing::warn!("Failed to parse port number. '{}'", port);
-                return ReplicationConfig::primary_config(default_listen_ip, default_port);
-            };
-            port
-        } else {
-            default_port
+            return ReplicationConfig::primary_config(default_address);
         };
 
         // read the role
@@ -115,14 +93,9 @@ impl ReplicationConfig {
         let address = if let Some(address) = replication.get("address") {
             address.to_string()
         } else {
-            "127.0.0.1".to_string()
+            default_address
         };
-
-        ReplicationConfig {
-            role,
-            ip: address,
-            port,
-        }
+        ReplicationConfig { role, address }
     }
 
     /// Write `repl_config` to a file overriding previous content
@@ -145,8 +118,7 @@ impl ReplicationConfig {
         let mut ini = ini::Ini::default();
         ini.with_section(Some("replication"))
             .set("role", format!("{}", repl_config.role))
-            .set("address", repl_config.ip.clone())
-            .set("port", format!("{}", repl_config.port));
+            .set("address", repl_config.address.clone());
         ini.write_to_file(&replication_conf)?;
         tracing::info!("Successfully updated file: {}", replication_conf.display());
         Ok(())

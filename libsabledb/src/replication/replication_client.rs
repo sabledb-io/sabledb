@@ -7,7 +7,7 @@ use crate::{
 use crate::{
     replication::{
         prepare_std_socket, BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse,
-        RequestCommon, TcpStreamBytesReader, TcpStreamBytesWriter,
+        RequestCommon, ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     storage::SEQUENCES_FILE,
     ReplicationTelemetry,
@@ -46,6 +46,8 @@ enum RequestChangesResult {
     Success,
     /// Request a full sync from the primary
     FullSync,
+    /// Server replied that there are no changes available
+    NoChanges,
 }
 
 #[derive(Debug, PartialEq)]
@@ -59,7 +61,6 @@ enum JoinShardResult {
 #[derive(Default)]
 pub struct ReplicationClient {}
 
-#[allow(dead_code)]
 impl ReplicationClient {
     /// Run replication client on a dedicated thread and return a channel for communicating with it
     pub async fn run(
@@ -131,7 +132,7 @@ impl ReplicationClient {
                         let result =
                             Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id, node_id);
                         match result {
-                            RequestChangesResult::Success => {
+                            RequestChangesResult::Success | RequestChangesResult::NoChanges => {
                                 // Note: if there are no changes, the primary server will stall
                                 // the response
                             }
@@ -156,6 +157,7 @@ impl ReplicationClient {
                         }
                     }
                 }
+                info!("Replication thread now exiting");
             });
         });
 
@@ -166,12 +168,14 @@ impl ReplicationClient {
 
     fn connect_to_primary(options: &ServerOptions) -> Result<TcpStream, SableError> {
         let repl_config = options.load_replication_config();
-        let address = format!("{}:{}", repl_config.ip, repl_config.port);
-        info!("Connecting to primary at: {}", address);
+        info!("Connecting to primary at: {}", repl_config.address);
 
-        let addr = address.parse::<SocketAddr>()?;
+        let addr = repl_config.address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect(addr)?;
-        info!("Successfully connected to primary at: {}", address);
+        info!(
+            "Successfully connected to primary at: {}",
+            repl_config.address
+        );
         Ok(stream)
     }
 
@@ -217,7 +221,6 @@ impl ReplicationClient {
         stream.read_exact(&mut file_len)?;
 
         // split the buffer into chunks and read
-        const CHUNK_SIZE: usize = 10 << 20; // 10MB
         let count = crate::BytesMutUtils::to_usize(&bytes::BytesMut::from(file_len.as_slice()));
 
         info!(
@@ -347,10 +350,6 @@ impl ReplicationClient {
         let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
-        info!(
-            "Next sequence: {}",
-            sequence_number.to_formatted_string(&Locale::en)
-        );
 
         let request = ReplicationRequest::GetUpdatesSince((
             RequestCommon::new(node_id).with_request_id(request_id),
@@ -376,6 +375,12 @@ impl ReplicationClient {
                     ReplicationResponse::Ok(common) => {
                         // fall through
                         debug!("Got Ok for replication request: {}", common.request_id());
+                    }
+                    ReplicationResponse::NotOk(common)
+                        if common.reason().eq(&ResponseReason::NoChangesAvailable) =>
+                    {
+                        // The server stalled the request as long as it could, but no changes were available
+                        return RequestChangesResult::NoChanges;
                     }
                     ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server

@@ -40,12 +40,9 @@ fn main() -> Result<(), SableError> {
     info!("Server configuration:\n{:#?}", options);
     let workers_count = WorkerManager::default_workers_count(options.general_settings.workers);
 
-    let address = format!(
-        "{}:{}",
-        options.general_settings.public_ip, options.general_settings.public_port
-    );
     info!("TLS enabled: {:?}", options.use_tls());
 
+    let address = options.general_settings.public_address.clone();
     let server = Arc::new(Server::new(options, store.clone(), workers_count)?);
     info!("Successfully created {} workers", workers_count);
 

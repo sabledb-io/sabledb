@@ -14,6 +14,7 @@ const NACK: u8 = 101; // Negative Acknowledged
 const NOTOK_REASON_UNKNOWN: u8 = 0;
 const NOTOK_REASON_FULL_SYNC_NOT_DONE: u8 = 1;
 const NOTOK_REASON_UPDATES_SINCE_CREATE_ERR: u8 = 2;
+const NOTOK_REASON_NO_CHANGES: u8 = 3;
 
 #[derive(Debug, Clone)]
 pub struct RequestCommon {
@@ -151,13 +152,15 @@ pub enum ReplicationResponse {
     NotOk(ResponseCommon),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResponseReason {
     Invalid,
     /// Replication requested for "changes" without doing fullsync first
     NoFullSyncDone,
     /// Failed to construct an "Updates Since" changes block
     CreatingUpdatesSinceError,
+    /// No changes available
+    NoChangesAvailable,
 }
 
 impl Default for ResponseReason {
@@ -172,6 +175,7 @@ impl std::fmt::Display for ResponseReason {
             Self::Invalid => write!(f, "Invalid"),
             Self::NoFullSyncDone => write!(f, "NoFullSyncDone"),
             Self::CreatingUpdatesSinceError => write!(f, "CreatingUpdatesSinceError"),
+            Self::NoChangesAvailable => write!(f, "NoChangesAvailable"),
         }
     }
 }
@@ -182,6 +186,7 @@ impl ResponseReason {
             Self::Invalid => NOTOK_REASON_UNKNOWN,
             Self::NoFullSyncDone => NOTOK_REASON_FULL_SYNC_NOT_DONE,
             Self::CreatingUpdatesSinceError => NOTOK_REASON_UPDATES_SINCE_CREATE_ERR,
+            Self::NoChangesAvailable => NOTOK_REASON_NO_CHANGES,
         }
     }
 
@@ -192,6 +197,7 @@ impl ResponseReason {
             NOTOK_REASON_UPDATES_SINCE_CREATE_ERR => {
                 Some(ResponseReason::CreatingUpdatesSinceError)
             }
+            NOTOK_REASON_NO_CHANGES => Some(ResponseReason::NoChangesAvailable),
             _ => None,
         }
     }

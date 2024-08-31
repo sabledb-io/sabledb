@@ -308,8 +308,7 @@ impl ServerState {
             // Update the configuration file first
             let repl_config = ReplicationConfig {
                 role: ServerRole::Replica,
-                ip: address.clone(),
-                port,
+                address: format!("{}:{}", address, port),
             };
 
             // Update the replication.ini first (the values in this file are used to determine the primary to connect to)
@@ -330,8 +329,7 @@ impl ServerState {
     pub async fn switch_role_to_primary(&self) -> Result<(), SableError> {
         let repl_config = ReplicationConfig {
             role: ServerRole::Primary,
-            ip: self.options().general_settings.private_ip.to_string(),
-            port: self.options().general_settings.public_port as u16 + 1000,
+            address: self.options().general_settings.private_address.clone(),
         };
 
         ReplicationConfig::write_file(
