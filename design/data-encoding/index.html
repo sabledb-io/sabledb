@@ -559,9 +559,9 @@
 
 
 <h1 id="overview">Overview</h1>
-<p><code>SableDb</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code> 
+<p><code>SableDb</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code>
 as its mature, maintained and widely used in the industry by giant companies.</p>
-<p>Because the <code>RocksDb</code> is key-value storage and Redis data structures can be more complex, an additional 
+<p>Because the <code>RocksDb</code> is key-value storage and Redis data structures can be more complex, an additional
 data encoding is required.</p>
 <p>This chapter covers how <code>SableDb</code> encodes the data for the various data types (e.g. <code>String</code>, <code>Hash</code>, <code>Set</code> etc)</p>
 <div class="admonition note">
@@ -616,10 +616,10 @@ Each <code>String</code> record in the <code>SableDb</code> consists of a single
 is stored in a separate entry.</p>
 <div class="highlight"><pre><span></span><code>List metadata:
 
-   A    B       C        D            
-+-----+---- +--------+------------+ 
-| 1u8 | DB# |  Slot# |  list name |  
-+-----+---- +--------+------------+    
+   A    B       C        D
++-----+---- +--------+------------+
+| 1u8 | DB# |  Slot# |  list name |
++-----+---- +--------+------------+
                              E        F        G        H      I       J
                         +-----+------------+--------- +------+------+-------+
                    =&gt;   | 1u8 | Expirtaion | List UID | head | tail |  size |
@@ -652,16 +652,16 @@ using the following encoding:</p>
 <li><code>O</code> the UID of the next item in the list ( <code>0</code> means that this item is the last item)</li>
 <li><code>P</code> the list value</li>
 </ul>
-<p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to 
+<p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to
 the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
 the requested list items are visited)</p>
 <h2 id="the-hash-data-type">The <code>Hash</code> data type</h2>
 <p>Hash items are encoded using the following:</p>
 <div class="highlight"><pre><span></span><code>Hash metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Hash name | =&gt; | 2u8 | Expirtaion | Set UID |  size |  
+| 1u8 | DB# |  Slot# | Hash name | =&gt; | 2u8 | Expirtaion | Set UID |  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Hash item:
@@ -682,14 +682,14 @@ Hash item:
 <p>The sorted set ( <code>Z*</code> commands) is encoded using the following:</p>
 <div class="highlight"><pre><span></span><code>Sorted set metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | ZSet name | =&gt; | 3u8 | Expirtaion | ZSet UID|  size |  
+| 1u8 | DB# |  Slot# | ZSet name | =&gt; | 3u8 | Expirtaion | ZSet UID|  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 ZSet item 1 (Index: &quot;Find by member&quot;):
 
-   K        L              M           O      
+   K        L              M           O
 +-----+--------------+---------+    +-------+
 | 4u8 | ZSet ID(u64) |  member | =&gt; | score |
 +-----+--------------+---------+    +-------+
@@ -739,9 +739,9 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 <p>Set items are encoded using the following:</p>
 <div class="highlight"><pre><span></span><code>Set metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Set name  | =&gt; | 4u8 | Expirtaion | Set UID |  size |  
+| 1u8 | DB# |  Slot# | Set name  | =&gt; | 4u8 | Expirtaion | Set UID |  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Set item:
@@ -760,13 +760,13 @@ Set item:
 </ul>
 <h2 id="bookkeeping-records">Bookkeeping records</h2>
 <p>Every composite item (<code>Hash</code>, <code>Sorted Set</code>, <code>List</code> or <code>Set</code>) created by <code>SableDb</code>, also creates a record in the <code>bookkeeping</code> "table".
-A bookkeeping records keeps track of the composite item unique ID + its type (which is needed by the <a href="/design/eviction/#composite-item-has-been-overwritten">data eviction job</a>)</p>
+A bookkeeping records keeps track of the composite item unique ID + its type (which is needed by the <a href="/sabledb/design/eviction/#composite-item-has-been-overwritten">data eviction job</a>)</p>
 <p>The <code>bookkeeping</code> record is encoded as follows:</p>
 <div class="highlight"><pre><span></span><code>Bookkeeping:
 
    A    B       C        D                E
 +-----+----+--------+-----------+    +----------+
-| 0u8 | UID|  DB#   | UID type  | =&gt; | user key |  
+| 0u8 | UID|  DB#   | UID type  | =&gt; | user key |
 +-----+----+--------+-----------+    +----------+
 </code></pre></div>
 <ul>

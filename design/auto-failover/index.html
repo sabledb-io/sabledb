@@ -587,12 +587,12 @@ it can be added to this <code>SET</code>.</p>
 <p>In order to detect whether the primary node is still alive, <code>SableDB</code> uses <a href="https://raft.github.io/">the Raft algorithm</a> while using the centralised database
 as its communication layer and the <code>last_txn_id</code> as the log entry</p>
 <p>Each replica node regularly checks the <code>last_updated</code> field of the primary node the interval on which a replica node checks differs from node to
-node - this is to minimise the risk of attempting to start multiple failover processes (but this can still happen and is solved by the <a href="/design/auto-failover/#a-note-about-locking">lock</a> described blow)</p>
+node - this is to minimise the risk of attempting to start multiple failover processes (but this can still happen and is solved by the <a href="/sabledb/design/auto-failover/#a-note-about-locking">lock</a> described blow)</p>
 <p>The failover process starts if the primary's <code>last_updated</code> was not updated after the allowed time. If the value exceeds, then
 the replica node does the following:</p>
 <h3 id="the-replica-that-initiated-the-failover">The replica that initiated the failover</h3>
 <ul>
-<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a <a href="/design/auto-failover/#a-note-about-locking">unique lock record</a></li>
+<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a <a href="/sabledb/design/auto-failover/#a-note-about-locking">unique lock record</a></li>
 <li>The node that started the failover decides on the new primary. It does that by picking the one with the highest <code>last_txn_id</code> property</li>
 <li>Dispatches a command to the new replica instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
 <li>Dispatch commands to all of the remaining replicas instructing them to perform a <code>REPLICAOF &lt;NEW_PRIMARY_IP&gt; &lt;NEW_PRIMARY_PORT&gt;</code></li>
@@ -611,8 +611,8 @@ This is achieved by using the below command:</p>
 <h3 id="a-note-about-locking">A note about locking</h3>
 <p><code>SableDB</code> uses the command <code>SET &lt;PRIMARY_ID&gt;_FAILOVER &lt;Unique-Value&gt; NX EX 60</code> to create a unique lock.
 By doing so, it ensures that only one locking record exists. If it succeeded in creating the lock record,
-it becomes <a href="/design/auto-failover/#the-replica-that-initiated-the-failover">the node that orchestrates the replacement</a></p>
-<p>If it fails (i.e. the record already exist) - it switches to read commands from the queue as described <a href="/design/auto-failover/#all-other-replicas">here</a></p>
+it becomes <a href="/sabledb/design/auto-failover/#the-replica-that-initiated-the-failover">the node that orchestrates the replacement</a></p>
+<p>If it fails (i.e. the record already exist) - it switches to read commands from the queue as described <a href="/sabledb/design/auto-failover/#all-other-replicas">here</a></p>
 <p>The only client allowed to delete the lock is the client created it, hence the <code>&lt;unique_value&gt;</code>. If that client crashed
 we have the <code>EX 60</code> as a backup plan (the lock will be expire)</p>
 
