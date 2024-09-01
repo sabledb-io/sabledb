@@ -1,25 +1,25 @@
 Shard management:
 
 ## Primary:
-- Update primary info the cluster database in a constant interval ("heartbeat")
-- Update the replicas in the SET after each successful operation ( `GET_CHANGES`, `FULL_SYNC` etc)
+- [ ] Update primary info the cluster database in a constant interval ("heartbeat")
+- [x] Update the replicas in the SET after each successful operation ( `GET_CHANGES`, `FULL_SYNC` etc)
 
 ## Replica:
-- Add random check internal per replica for checking whether the primary is alive or not
-- When calling `REPLICAOF NO ONE` make sure to:
-    - Update the cluster database with the new role
-    - Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
+- [ ] Add random check internal per replica for checking whether the primary is alive or not
+- [ ] When calling `REPLICAOF NO ONE` make sure to:
+    - [ ] Update the cluster database with the new role
+    - [ ] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
 
 ## Auto-Failover
 When a replica detects that its primary did not update its "last_updated" field in over than N seconds
 it should trigger an auto-faileover process:
 
-- Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
-- Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
-- Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPO`P) with the correct `REPLICAOF` command to execute
-- Delete the `<old_primary>` HASH key from the database
-- Delete the `<old_primary>_replicas` SET key from the database
-- Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
+- [ ] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
+- [ ] Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
+- [ ] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPO`P) with the correct `REPLICAOF` command to execute
+- [ ] Delete the `<old_primary>` HASH key from the database
+- [ ] Delete the `<old_primary>_replicas` SET key from the database
+- [ ] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
 
 **A note about locking:**
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed
