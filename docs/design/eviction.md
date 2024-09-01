@@ -18,10 +18,10 @@ the item is deleted and a `null` value is returned to the caller.
 To explain the problem here, consider the following data is stored in `SableDb` (using `Hash` data type):
 
 ```
-"OverwatchTanks" => 
-    { 
-        {"tank_1" => "Reinhardt"}, 
-        {"tank_2" => "Orisa"}, 
+"OverwatchTanks" =>
+    {
+        {"tank_1" => "Reinhardt"},
+        {"tank_2" => "Orisa"},
         {"tank_3" => "Roadhog"}
     }
 ```
@@ -42,6 +42,6 @@ The cron job knows the original type by checking the [`bookkeeping record`][2]
 
 When one of these commands is called, `SableDb` uses `RocksDb` [`delete_range`][3] method.
 
-[1]: /design/data-encoding/#the-hash-data-type
-[2]: /design/data-encoding/#bookkeeping-records
+[1]: /sabledb/design/data-encoding/#the-hash-data-type
+[2]: /sabledb/design/data-encoding/#bookkeeping-records
 [3]: https://rocksdb.org/blog/2018/11/21/delete-range.html

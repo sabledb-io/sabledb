@@ -80,6 +80,6 @@ The only client allowed to delete the lock is the client created it, hence the `
 we have the `EX 60` as a backup plan (the lock will be expire)
 
  [1]: https://raft.github.io/
- [2]: /design/auto-failover/#all-other-replicas
- [3]: /design/auto-failover/#the-replica-that-initiated-the-failover
- [4]: /design/auto-failover/#a-note-about-locking
+ [2]: /sabledb/design/auto-failover/#all-other-replicas
+ [3]: /sabledb/design/auto-failover/#the-replica-that-initiated-the-failover
+ [4]: /sabledb/design/auto-failover/#a-note-about-locking

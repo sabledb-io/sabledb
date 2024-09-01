@@ -1,9 +1,9 @@
 # Overview
 
-`SableDb` uses a Key / Value database for its underlying data storage. We chose to use `RocksDb` 
+`SableDb` uses a Key / Value database for its underlying data storage. We chose to use `RocksDb`
 as its mature, maintained and widely used in the industry by giant companies.
 
-Because the `RocksDb` is key-value storage and Redis data structures can be more complex, an additional 
+Because the `RocksDb` is key-value storage and Redis data structures can be more complex, an additional
 data encoding is required.
 
 This chapter covers how `SableDb` encodes the data for the various data types (e.g. `String`, `Hash`, `Set` etc)
@@ -70,10 +70,10 @@ is stored in a separate entry.
 ```
 List metadata:
 
-   A    B       C        D            
-+-----+---- +--------+------------+ 
-| 1u8 | DB# |  Slot# |  list name |  
-+-----+---- +--------+------------+    
+   A    B       C        D
++-----+---- +--------+------------+
+| 1u8 | DB# |  Slot# |  list name |
++-----+---- +--------+------------+
                              E        F        G        H      I       J
                         +-----+------------+--------- +------+------+-------+
                    =>   | 1u8 | Expirtaion | List UID | head | tail |  size |
@@ -108,7 +108,7 @@ using the following encoding:
 - `O` the UID of the next item in the list ( `0` means that this item is the last item)
 - `P` the list value
 
-The above encoding allows `SableDb` to iterate over all list items by creating a `RocksDb` iterator and move it to 
+The above encoding allows `SableDb` to iterate over all list items by creating a `RocksDb` iterator and move it to
 the prefix `[ 2 | <list-id>]` (`2` indicates that only list items should be scanned, and `list-id` makes sure that only
 the requested list items are visited)
 
@@ -119,9 +119,9 @@ Hash items are encoded using the following:
 ```
 Hash metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Hash name | => | 2u8 | Expirtaion | Set UID |  size |  
+| 1u8 | DB# |  Slot# | Hash name | => | 2u8 | Expirtaion | Set UID |  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Hash item:
@@ -146,14 +146,14 @@ The sorted set ( `Z*` commands) is encoded using the following:
 ```
 Sorted set metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | ZSet name | => | 3u8 | Expirtaion | ZSet UID|  size |  
+| 1u8 | DB# |  Slot# | ZSet name | => | 3u8 | Expirtaion | ZSet UID|  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 ZSet item 1 (Index: "Find by member"):
 
-   K        L              M           O      
+   K        L              M           O
 +-----+--------------+---------+    +-------+
 | 4u8 | ZSet ID(u64) |  member | => | score |
 +-----+--------------+---------+    +-------+
@@ -213,9 +213,9 @@ Set items are encoded using the following:
 ```
 Set metadata:
 
-   A    B       C        D                E        F        G         H    
+   A    B       C        D                E        F        G         H
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
-| 1u8 | DB# |  Slot# | Set name  | => | 4u8 | Expirtaion | Set UID |  size |  
+| 1u8 | DB# |  Slot# | Set name  | => | 4u8 | Expirtaion | Set UID |  size |
 +-----+---- +--------+-----------+    +-----+------------+---------+-------+
 
 Set item:
@@ -247,7 +247,7 @@ Bookkeeping:
 
    A    B       C        D                E
 +-----+----+--------+-----------+    +----------+
-| 0u8 | UID|  DB#   | UID type  | => | user key |  
+| 0u8 | UID|  DB#   | UID type  | => | user key |
 +-----+----+--------+-----------+    +----------+
 ```
 
@@ -258,5 +258,4 @@ Bookkeeping:
 - `E` the user key associated with the UID (e.g. the hash name)
 
  [1]: https://redis.io/docs/latest/commands/zcount/
- [2]: /design/eviction/#composite-item-has-been-overwritten
- 
+ [2]: /sabledb/design/eviction/#composite-item-has-been-overwritten
