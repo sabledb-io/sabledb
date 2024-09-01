@@ -23,11 +23,11 @@ const PROP_LAST_TXN_ID: &str = "last_txn_id";
 const PROP_PRIMARY_NODE_ID: &str = "primary_node_id";
 
 #[derive(Default)]
-pub struct NodeInfo {
+pub struct NodeProperties {
     properties: BTreeMap<&'static str, String>,
 }
 
-impl NodeInfo {
+impl NodeProperties {
     pub fn current(options: &ServerOptions) -> Self {
         let repl_info = ReplicationConfig::load(options);
         let mut properties = BTreeMap::<&str, String>::new();
@@ -43,7 +43,7 @@ impl NodeInfo {
         );
         properties.insert(PROP_LAST_TXN_ID, "0".to_string());
         properties.insert(PROP_PRIMARY_NODE_ID, String::default());
-        NodeInfo { properties }
+        NodeProperties { properties }
     }
 
     /// Write this object to the cluster manager database
@@ -54,10 +54,10 @@ impl NodeInfo {
             .iter()
             .map(|(field_name, field_value)| (field_name.to_string(), field_value.to_string()))
             .collect();
-        tracing::info!("Writing node object in cluster manager: {:?}", props);
+        tracing::debug!("Writing node object in cluster manager: {:?}", props);
         let mut conn = conn.get_connection()?;
         conn.hset_multiple(cur_node_id, &props)?;
-        tracing::info!("Success");
+        tracing::debug!("Success");
         update_heartbeat_reported_ts();
         Ok(())
     }
@@ -121,7 +121,11 @@ fn connect(options: &ServerOptions) -> Result<(), SableError> {
 }
 
 /// Update this node with the server manager database. If no database is configured, do nothing
-pub fn put_node_info(options: &ServerOptions, node_info: &NodeInfo) -> Result<(), SableError> {
+/// If an entry for the same node already exists, it is overridden (the key is the node-id)
+pub fn put_node_properties(
+    options: &ServerOptions,
+    node_info: &NodeProperties,
+) -> Result<(), SableError> {
     connect(options)?;
     let mut conn = CM_CONN.write().expect("poisoned mutex");
     let Some(client) = &mut conn.client else {
@@ -130,7 +134,7 @@ pub fn put_node_info(options: &ServerOptions, node_info: &NodeInfo) -> Result<()
     node_info.put(client)
 }
 
-/// Udpate the "last updated" field for this node in the cluster manager database
+/// Update the "last updated" field for this node in the cluster manager database
 pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
     if !can_update_heartbeat() {
         return Ok(());

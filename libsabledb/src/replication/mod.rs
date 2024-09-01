@@ -9,7 +9,7 @@ mod storage_updates;
 
 pub use crate::SableError;
 
-pub use cluster_manager::NodeInfo;
+pub use cluster_manager::NodeProperties;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::{ReplicationConfig, ServerRole};

@@ -1,17 +1,21 @@
 Shard management:
 
 ## Primary:
-- [ ] Update primary info the cluster database in a constant interval ("heartbeat")
-- [x] Update the replicas in the SET after each successful operation ( `GET_CHANGES`, `FULL_SYNC` etc)
+
+- [x] Update primary info the cluster database in a constant interval (this is the equivalent of a `heartbeat` operation)
+- [x] Update the replicas in the SET ( `<primary_node_id>_replicas` ) after each successful operation / timeout ( `GET_CHANGES`, `FULL_SYNC` etc)
 
 ## Replica:
-- [ ] Add random check internal per replica for checking whether the primary is alive or not
+
+- [x] Update the node info after each successful operation (mainly the fields: `last_txn_id` + `last_updated`)
+- [ ] Add random check interval per replica for checking whether the primary is alive or not
 - [ ] When calling `REPLICAOF NO ONE` make sure to:
     - [ ] Update the cluster database with the new role
     - [ ] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
 
 ## Auto-Failover
-When a replica detects that its primary did not update its "last_updated" field in over than N seconds
+
+When a replica detects that its primary did not update its `last_updated` field in over than `N` seconds (where `N` is a random number for each replica),
 it should trigger an auto-faileover process:
 
 - [ ] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`

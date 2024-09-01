@@ -64,7 +64,7 @@ impl Default for ReplicationLimits {
         ReplicationLimits {
             single_update_buffer_size: 50 << 20, // 50mb
             num_updates_per_message: 10_000,
-            check_for_updates_interval_ms: 100,
+            check_for_updates_interval_ms: 50,
         }
     }
 }

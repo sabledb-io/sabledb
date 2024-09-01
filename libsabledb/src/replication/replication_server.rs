@@ -1,8 +1,7 @@
-use crate::replication::{cluster_manager, prepare_std_socket};
+use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 
-use crate::utils;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
@@ -13,6 +12,7 @@ use crate::{
     },
     SableError, StorageAdapter,
 };
+use crate::{utils, NodeId};
 
 use num_format::{Locale, ToFormattedString};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -165,6 +165,36 @@ impl ReplicationServer {
         }
     }
 
+    /// Update the shard database with the following:
+    /// - Report this Primary info
+    /// - If `replica_id` is not `None`, re-associate it with this primary node
+    fn update_shard_info(
+        options: &ServerOptions,
+        store: &StorageAdapter,
+        replica_id: Option<String>,
+    ) {
+        // Update the current node info in the cluster manager database
+        let node_info = NodeProperties::current(options)
+            .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
+            .with_role_primary();
+
+        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+            tracing::warn!("Error while updating cluster manager. {:?}", e);
+        }
+
+        if let Some(replica_id) = replica_id {
+            let current_node_id = NodeId::current();
+            if let Err(e) = cluster_manager::add_replica(options, replica_id.clone()) {
+                tracing::warn!(
+                    "Error while associating replica {} with primary {}. {:?}",
+                    replica_id,
+                    current_node_id,
+                    e
+                );
+            }
+        }
+    }
+
     /// The main replication request -> reply flow is happening here.
     /// This function reads a single replication request and responds with the proper response.
     fn handle_single_request(
@@ -207,15 +237,10 @@ impl ReplicationServer {
                 );
 
                 let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
-
-                debug!("Sending replication response: {}", response_ok);
-                let mut response_ok_buffer = response_ok.to_bytes();
-                if let Err(e) = writer.write_message(&mut response_ok_buffer) {
-                    error!("Failed to send 'Ok' control message. {:?}", e);
-                    // cant recover here, close the connection
+                if !Self::write_response(&mut writer, &response_ok) {
                     return false;
                 }
-                return true;
+                Self::update_shard_info(options, store, None);
             }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request {}", common);
@@ -243,10 +268,7 @@ impl ReplicationServer {
                     distance_from_primary: 0,
                 };
                 ReplicationTelemetry::update_replica_info(replica_addr.to_string(), replinfo);
-                if let Err(e) = cluster_manager::add_replica(options, common.node_id().to_string())
-                {
-                    tracing::warn!("Cluster manager error: could not add replica. {:?}", e);
-                }
+                Self::update_shard_info(options, store, Some(common.node_id().to_string()));
             }
             ReplicationRequest::GetUpdatesSince((common, seq)) => {
                 debug!(
@@ -311,10 +333,7 @@ impl ReplicationServer {
                 };
 
                 // Associate common.node_id() as replica for the current node
-                if let Err(e) = cluster_manager::add_replica(options, common.node_id().to_string())
-                {
-                    tracing::warn!("Cluster manager error: could not add replica. {:?}", e);
-                }
+                Self::update_shard_info(options, store, Some(common.node_id().to_string()));
 
                 let Some(storage_updates) = storage_updates else {
                     // No changes available to send

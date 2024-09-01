@@ -2,7 +2,7 @@ use crate::server::ServerOptions;
 use crate::{
     io::Archive,
     replication::{
-        cluster_manager, cluster_manager::NodeInfo, StorageUpdates, StorageUpdatesIterItem,
+        cluster_manager, cluster_manager::NodeProperties, StorageUpdates, StorageUpdatesIterItem,
     },
     BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
 };
@@ -272,12 +272,12 @@ impl ReplicationClient {
         }
 
         // Update the cluster manager with the current info
-        let node_info = NodeInfo::current(options)
+        let node_info = NodeProperties::current(options)
             .with_last_txn_id(last_txn_id)
             .with_role_replica()
             .with_primary_node_id(common.node_id().to_string());
 
-        if let Err(e) = cluster_manager::put_node_info(options, &node_info) {
+        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
             tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
 
@@ -490,12 +490,12 @@ impl ReplicationClient {
         );
 
         // Update the current node info in the cluster manager database
-        let node_info = NodeInfo::current(options)
+        let node_info = NodeProperties::current(options)
             .with_last_txn_id(sequence_number)
             .with_role_replica()
             .with_primary_node_id(common.node_id().to_string());
 
-        if let Err(e) = cluster_manager::put_node_info(options, &node_info) {
+        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
             tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
 
