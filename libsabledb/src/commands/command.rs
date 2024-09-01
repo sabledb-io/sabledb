@@ -106,3 +106,14 @@ impl RedisCommand {
         Some(num)
     }
 }
+
+impl FromStr for RedisCommand {
+    type Err = SableError;
+
+    /// Construct `RedisCommand` from string literal
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let args: Vec<&str> = s.split(' ').collect();
+        let args = args.iter().map(|s| BytesMut::from(*s)).collect();
+        Self::new(args)
+    }
+}

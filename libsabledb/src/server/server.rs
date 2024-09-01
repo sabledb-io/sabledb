@@ -3,10 +3,11 @@ use crate::server::{
     WorkerManager, WorkerMessage, WorkerSender,
 };
 use crate::{
+    commands::ClientNextAction,
     replication::{
         ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
     },
-    Cron, CronContext, CronMessage, StorageAdapter,
+    Cron, CronContext, CronMessage, RedisCommand, StorageAdapter,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -20,6 +21,10 @@ use std::sync::{
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio::sync::RwLock as TokioRwLock;
+
+lazy_static::lazy_static! {
+    static ref SERVER_STATE: StdRwLock<Arc<ServerState>> = StdRwLock::new(Arc::new(ServerState::default()));
+}
 
 #[derive(Default)]
 struct BlockedClients {
@@ -101,9 +106,7 @@ pub struct ServerState {
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
 }
 
-#[allow(dead_code)]
 pub struct Server {
-    state: Arc<ServerState>,
     worker_manager: WorkerManager,
 }
 
@@ -379,18 +382,38 @@ impl Server {
                 .set_evictor_context(evictor_content),
         );
 
+        *SERVER_STATE.write().expect("global server state lock") = state.clone();
+
         let worker_manager = WorkerManager::new(workers_count, store.clone(), state.clone())?;
-        Ok(Server {
-            state,
-            worker_manager,
-        })
+        Ok(Server { worker_manager })
     }
 
     pub fn get_worker(&self) -> &WorkerContext {
         self.worker_manager.pick()
     }
 
-    pub fn state(&self) -> Arc<ServerState> {
-        self.state.clone()
+    pub fn state() -> Arc<ServerState> {
+        SERVER_STATE.read().expect("").clone()
+    }
+
+    /// Execute an internal command and returns its output as a raw RESP string.
+    /// Note that blocking commands are not allowed.
+    pub async fn process_internal_command(
+        command: Rc<RedisCommand>,
+        store: &StorageAdapter,
+    ) -> Result<BytesMut, SableError> {
+        let state = Self::state();
+        let mut sink = crate::io::FileResponseSink::new().await?;
+        let client = Client::new(state, store.clone(), None);
+        match Client::handle_command(client.inner(), command.clone(), &mut sink.fp).await? {
+            ClientNextAction::NoAction => {
+                Ok(BytesMut::from(sink.read_all_as_string().await?.as_bytes()))
+            }
+            ClientNextAction::TerminateConnection => Err(SableError::ConnectionClosed),
+            ClientNextAction::SendResponse(buf) => Ok(buf),
+            ClientNextAction::Wait((_, _, _)) => Err(SableError::OtherError(
+                "Internal blocking commands are not allowed".into(),
+            )),
+        }
     }
 }

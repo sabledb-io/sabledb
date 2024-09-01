@@ -14,6 +14,8 @@ use crate::{
     storage::SEQUENCES_FILE,
     ReplicationTelemetry,
 };
+#[allow(unused_imports)]
+use std::str::FromStr;
 
 use num_format::{Locale, ToFormattedString};
 use std::io::Read;
