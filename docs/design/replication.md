@@ -1,50 +1,50 @@
 ## Overview
 
-`SableDb` supports a `1` : `N` replication (single primary -> multiple replicas) configuration.
+`SableDB` supports a `1` : `N` replication (single primary -> multiple replicas) configuration.
 
 ### Replication Client / Server model
 
-On startup, `SableDb` spawns a thread (internally called `Relicator`) which is listening on the main port + `1000`.
+On startup, `SableDB` spawns a thread (internally called `Relicator`) which is listening on the main port + `1000`.
 So if, for example, the server is configured to listen on port `6379`, the replication port is set to `7379`
 
-For every new incoming replication client, a new thread is spawned to server it.
+For every new incoming replication client, a new thread is spawned to serve it.
 
 The replication is done using the following methodology:
 
 1. The replica is requesting from the primary a set of changes starting from a given ID (initially, it starts with `0`)
-2. If the primary is able to locate the requested change ID, it builds a "change request message" and sends it over to the client (the ID accepted from the client is the starting ID for the change request)
-3. Steps 1-2 are repeated indefinitely
-4. If the primary is unable to locate the requested change ID, it replies with a "Negative ack" to the client
-5. The client sends a "Full Sync" request to the server
-6. The primary creates a checkpoint from the database and sends it over to the replica + it sends the last change committed to the checkpoint (this will be the "Next ID" to fetch)
-7. From hereon, steps 1-2 are repeated
+2. If this is the first request sent from the Replica -> Primary, the primary replies with an error and set the reason to `FullSyncNotDone`
+3. The replica replies with a `FullSync` request to which the primary sends the complete data store
+4. From this point on, the replica sends the `GetChanges` request and applies them locally. Any error that might occur on the any side (Replica or Primary) triggers a `FullSync` request
+5. Step 4 is repeated indefinitely, on any error - the shard falls back to `FullSync`
 
 !!!Note
-    Its worth mentioning that the primary server is **stateless** i.e. it does not keep track of its replicas. It is up to the 
+    Its worth mentioning that the primary server is **stateless** i.e. it does not keep track of its replicas. It is up to the
     replica server to pull data from the primary and to keep track of the next change sequence ID to pull.
 
 !!!Note
-    In case there are no changes to send to the replica, the primary delays the response until something is available
+    In case there are no changes to send to the replica, the primary delays the as dictated by the configuration file
 
 
-Internally, `SableDb` utilizes `RocksDb` APIs: [`create_checkpoint`][1] and [`get_updates_since`][2]
+### In depth overview of the `GetChanges` & `FullSync` requests
 
-In addition to the above APIs, `SableDb` maintains a file named `changes.seq` inside the database folder of the replica server
+Internally, `SableDB` utilizes `RocksDB` APIs: [`create_checkpoint`][1] and [`get_updates_since`][2]
+
+In addition to the above APIs, `SableDB` maintains a file named `changes.seq` inside the database folder of the replica server
 which holds the next transaction ID that should be pulled from the primary.
 
-In any case of error, the replica switches to `FULLSYNC` request.
+In any case of error, the replica switches to `FullSync` request.
 
 The below sequence of events describes the data flow between the replica and the primary:
 
 ![changes sync](../images/happy-flow-sync.svg)
 
-When a `FULLSYNC` is needed, the flow changes to this:
+When a `FullSync` is needed, the flow changes to this:
 
 ![fullsync](../images/fullsync.svg)
 
 ### Replication client
 
-In addition to the above, the replication instance of `SableDb` is running in `read-only` mode. i.e. it does not allow
+In addition to the above, the replication instance of `SableDB` is running in `read-only` mode. i.e. it does not allow
 execution of any command marked as `Write`
 
 [1]: https://github.com/facebook/rocksdb/wiki/Checkpoints
