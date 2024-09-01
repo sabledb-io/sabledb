@@ -311,9 +311,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#general" class="md-nav__link">
+  <a href="#terminology" class="md-nav__link">
     <span class="md-ellipsis">
-      General
+      Terminology
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      All Nodes
     </span>
   </a>
   
@@ -331,7 +340,7 @@
         <li class="md-nav__item">
   <a href="#replica" class="md-nav__link">
     <span class="md-ellipsis">
-      Replica:
+      Replica
     </span>
   </a>
   
@@ -454,9 +463,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#general" class="md-nav__link">
+  <a href="#terminology" class="md-nav__link">
     <span class="md-ellipsis">
-      General
+      Terminology
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      All Nodes
     </span>
   </a>
   
@@ -474,7 +492,7 @@
         <li class="md-nav__item">
   <a href="#replica" class="md-nav__link">
     <span class="md-ellipsis">
-      Replica:
+      Replica
     </span>
   </a>
   
@@ -541,12 +559,13 @@
 
 
 <h1 id="automatic-shard-management">Automatic Shard Management</h1>
-<h2 id="general">General</h2>
-<p><code>Shard</code> - a hierarchical arrangement of nodes, within the shard, one node functions as the read/write Primary node.
-while all the other nodes in the shard read-only replicas of the primary node</p>
+<h2 id="terminology">Terminology</h2>
+<p><code>Shard</code> - a hierarchical arrangement of nodes. Within a shard, one node functions as the read/write Primary node.
+While all the nodes are a read-only replicas of the primary node.</p>
 <p><code>SableDB</code> uses a centralised database to manage an auto-failover process and tracking nodes of the same shard.
 The centralised database itself is an instance of <code>SableDB</code>.</p>
-<p>Each node in the shard, updates a record every N seconds to the centralised database where it keeps the following entries:</p>
+<h2 id="all-nodes">All Nodes</h2>
+<p>Every node in the shard, updates a record of type <code>HASH</code> every <code>N</code> seconds in the centralised database where it keeps the following hash fields:</p>
 <ul>
 <li><code>node_id</code> this is a globally unique ID assigned to each node when it first started and it persists throughout restarts</li>
 <li><code>node_address</code> the node <strong>privata address</strong> on which other nodes can connect to it</li>
@@ -555,47 +574,47 @@ The centralised database itself is an instance of <code>SableDB</code>.</p>
 <li><code>last_txn_id</code> contains the last transaction ID applied to the local data set. In an ideal world, this number is the same across all instances of the shard. The higher the number, the more up-to-date the node is</li>
 <li><code>primary_node_id</code> if the <code>role</code> field is set to <code>replica</code>, this field contains the <code>node_id</code> of the shard primary node.</li>
 </ul>
+<p>The key used for this <code>HASH</code> record, is the node-id</p>
 <h2 id="primary">Primary</h2>
-<p>In addition for updating its own record, the primary also maintains an entry of type <code>SET</code> which holds <code>node_id</code> of all
-nodes members of the shard.</p>
-<p>This SET is constantly updated whenever the primary interact with replica node. The first time a node is added to this SET
-by the primary node is only after a successful FullSync.</p>
-<p>The entry is identified by the key <code>&lt;primary_id&gt;_replicas</code> where <code>&lt;primary_id&gt;</code> is the primary node unique id.</p>
-<h2 id="replica">Replica:</h2>
-<p>Similar to the primary node, the replica updates its information in a regular intervals.</p>
+<p>In addition for updating its own record, the primary node maintains an entry of type <code>SET</code> which holds the <code>node_id</code>s of all
+the shard node members.</p>
+<p>This <code>SET</code> is constantly updated whenever the primary interacts with a replica node. Only after the replica node successfully completes a FullSyc,
+it can be added to this <code>SET</code>.</p>
+<p>This <code>SET</code> entry is identified by the key <code>&lt;primary_id&gt;_replicas</code> where <code>&lt;primary_id&gt;</code> is the primary node unique id.</p>
+<h2 id="replica">Replica</h2>
+<p>Similar to the primary node, the replica updates its information in a regular intervals</p>
 <h2 id="auto-failover">Auto-Failover</h2>
-<p>In order to detect if the primary node is still alive, <code>SableDB</code> uses [the Raft algorithm][1] while using the centralised database
+<p>In order to detect whether the primary node is still alive, <code>SableDB</code> uses <a href="https://raft.github.io/">the Raft algorithm</a> while using the centralised database
 as its communication layer and the <code>last_txn_id</code> as the log entry</p>
-<p>Each replica node checks regularly the <code>last_updated</code> field of the primary node. The interval on which a replica node checks
-whether its primary is not responsive, differs from node to node - this is to avoid situations where the failover process is attempted
-by multiple nodes (it can still happen, but with a lower chance).</p>
-<p>The failover process starts if the primary's <code>last_updated</code> exceeds the value allowed by the checking node. If the value exceeds, then
+<p>Each replica node regularly checks the <code>last_updated</code> field of the primary node the interval on which a replica node checks differs from node to
+node - this is to minimise the risk of attempting to start multiple failover processes (but this can still happen and is solved by the <a href="/design/auto-failover/#a-note-about-locking">lock</a> described blow)</p>
+<p>The failover process starts if the primary's <code>last_updated</code> was not updated after the allowed time. If the value exceeds, then
 the replica node does the following:</p>
 <h3 id="the-replica-that-initiated-the-failover">The replica that initiated the failover</h3>
 <ul>
-<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a unique lock record</li>
-<li>The node that started the failover checks which replica should take over, it does that by picking the one with the highest <code>last_txn_id</code> property</li>
-<li>Dispatch a command to the new replica instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
-<li>Dispatch a command to all of the remaining replicas instructing them to perform a <code>REPLICAOF &lt;NEW_PRIMARY_IP&gt; &lt;NEW_PRIMARY_PORT&gt;</code></li>
+<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a <a href="/design/auto-failover/#a-note-about-locking">unique lock record</a></li>
+<li>The node that started the failover decides on the new primary. It does that by picking the one with the highest <code>last_txn_id</code> property</li>
+<li>Dispatches a command to the new replica instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
+<li>Dispatch commands to all of the remaining replicas instructing them to perform a <code>REPLICAOF &lt;NEW_PRIMARY_IP&gt; &lt;NEW_PRIMARY_PORT&gt;</code></li>
 <li>Delete the old primary records from the database (if this node comes back online again later, it will re-create them)</li>
 </ul>
 <h3 id="all-other-replicas">All other replicas</h3>
-<p>Each replica node always checks for the shard's lock record. If it exists, each replica switches to waiting for commands from the
-replica to orchestrates the failover. It does that by calling:</p>
+<p>Each replica node always checks for the shard's lock record. If it exists, each replica switches to waiting mode on a dedicated queue.
+This is achieved by using the below command:</p>
 <div class="highlight"><pre><span></span><code>BLPOP &lt;NODE_ID&gt;_queue 5
 </code></pre></div>
+<p>As mentioned above, there are 2 type of commands:</p>
+<ul>
+<li>Apply <code>REPLICAOF</code> to connect to the new primary</li>
+<li>Apply <code>REPLICAOF NO ONE</code> to become the new primary</li>
+</ul>
 <h3 id="a-note-about-locking">A note about locking</h3>
 <p><code>SableDB</code> uses the command <code>SET &lt;PRIMARY_ID&gt;_FAILOVER &lt;Unique-Value&gt; NX EX 60</code> to create a unique lock.
 By doing so, it ensures that only one locking record exists. If it succeeded in creating the lock record,
-it becomes [the node that orchestrates the replacement][3]</p>
-<p>If it fails (i.e. the record already exist) - it switches to read commands from the queue as described [here][2]</p>
+it becomes <a href="/design/auto-failover/#the-replica-that-initiated-the-failover">the node that orchestrates the replacement</a></p>
+<p>If it fails (i.e. the record already exist) - it switches to read commands from the queue as described <a href="/design/auto-failover/#all-other-replicas">here</a></p>
 <p>The only client allowed to delete the lock is the client created it, hence the <code>&lt;unique_value&gt;</code>. If that client crashed
-we have the <code>EX 60</code> as a backup plan</p>
-<p>Commands are sent over to this queue by the orchestrator replica.</p>
-<div class="highlight"><pre><span></span><code>[1]: https://raft.github.io/
-[2]: /design/auto-failover/#all-other-replicas
-[3]: /design/auto-failover/#the-replica-that-initiated-the-failover
-</code></pre></div>
+we have the <code>EX 60</code> as a backup plan (the lock will be expire)</p>
 
 
 
