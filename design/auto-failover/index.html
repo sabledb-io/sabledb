@@ -8,11 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://sabledb.io/design/eviction/">
+        <link rel="canonical" href="https://sabledb.io/design/auto-failover/">
       
       
-        <link rel="prev" href="../data-encoding/">
+        <link rel="prev" href="../replication/">
       
+      
+        <link rel="next" href="../data-encoding/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -20,7 +22,7 @@
     
     
       
-        <title>Data eviction - SableDb</title>
+        <title>Auto Failover - SableDb</title>
       
     
     
@@ -70,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#data-eviction" class="md-skip">
+        <a href="#automatic-shard-management" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Data eviction
+              Auto Failover
             
           </span>
         </div>
@@ -260,10 +262,30 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../auto-failover/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Auto Failover
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -272,6 +294,95 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#general" class="md-nav__link">
+    <span class="md-ellipsis">
+      General
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#primary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replica" class="md-nav__link">
+    <span class="md-ellipsis">
+      Replica:
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-failover" class="md-nav__link">
+    <span class="md-ellipsis">
+      Auto-Failover
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auto-Failover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-replica-that-initiated-the-failover" class="md-nav__link">
+    <span class="md-ellipsis">
+      The replica that initiated the failover
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#all-other-replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      All other replicas
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-note-about-locking" class="md-nav__link">
+    <span class="md-ellipsis">
+      A note about locking
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -300,30 +411,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Data eviction
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../eviction/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -332,53 +423,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#expired-items" class="md-nav__link">
-    <span class="md-ellipsis">
-      Expired items
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
-    <span class="md-ellipsis">
-      Composite item has been overwritten
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
-    <span class="md-ellipsis">
-      User triggered clean-up (FLUSHALL or FLUSHDB)
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -410,29 +454,71 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#expired-items" class="md-nav__link">
+  <a href="#general" class="md-nav__link">
     <span class="md-ellipsis">
-      Expired items
+      General
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
+  <a href="#primary" class="md-nav__link">
     <span class="md-ellipsis">
-      Composite item has been overwritten
+      Primary
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
+  <a href="#replica" class="md-nav__link">
     <span class="md-ellipsis">
-      User triggered clean-up (FLUSHALL or FLUSHDB)
+      Replica:
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-failover" class="md-nav__link">
+    <span class="md-ellipsis">
+      Auto-Failover
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auto-Failover">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-replica-that-initiated-the-failover" class="md-nav__link">
+    <span class="md-ellipsis">
+      The replica that initiated the failover
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#all-other-replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      All other replicas
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-note-about-locking" class="md-nav__link">
+    <span class="md-ellipsis">
+      A note about locking
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -454,36 +540,62 @@
   
 
 
-<h1 id="data-eviction">Data eviction</h1>
-<p>This chapter covers the data eviction as it being handled by <code>SableDb</code>.</p>
-<p>There are 3 cases where items needs to be purged:</p>
+<h1 id="automatic-shard-management">Automatic Shard Management</h1>
+<h2 id="general">General</h2>
+<p><code>Shard</code> - a hierarchical arrangement of nodes, within the shard, one node functions as the read/write Primary node.
+while all the other nodes in the shard read-only replicas of the primary node</p>
+<p><code>SableDB</code> uses a centralised database to manage an auto-failover process and tracking nodes of the same shard.
+The centralised database itself is an instance of <code>SableDB</code>.</p>
+<p>Each node in the shard, updates a record every N seconds to the centralised database where it keeps the following entries:</p>
 <ul>
-<li>Item is expired</li>
-<li>A composite item was overwritten by another type (e.g. user called <code>SET MYHASH SOMEVALUE</code> on an item <code>MYHASH</code> which was previously a <code>Hash</code>)</li>
-<li>User called <code>FLUSHDB</code> or <code>FLUSHALL</code></li>
+<li><code>node_id</code> this is a globally unique ID assigned to each node when it first started and it persists throughout restarts</li>
+<li><code>node_address</code> the node <strong>privata address</strong> on which other nodes can connect to it</li>
+<li><code>role</code> the node role (can be one <code>replica</code> or <code>primary</code>)</li>
+<li><code>last_updated</code> the last time that this node updated its information, this field is a UNIX timestamp since Jan 1st, 1970 in microseconds. This field is also used as the "heartbeat" of node</li>
+<li><code>last_txn_id</code> contains the last transaction ID applied to the local data set. In an ideal world, this number is the same across all instances of the shard. The higher the number, the more up-to-date the node is</li>
+<li><code>primary_node_id</code> if the <code>role</code> field is set to <code>replica</code>, this field contains the <code>node_id</code> of the shard primary node.</li>
 </ul>
-<h2 id="expired-items">Expired items</h2>
-<p>Since the main storage used by <code>SableDb</code> is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
-the item is deleted and a <code>null</code> value is returned to the caller.</p>
-<h2 id="composite-item-has-been-overwritten">Composite item has been overwritten</h2>
-<p>To explain the problem here, consider the following data is stored in <code>SableDb</code> (using <code>Hash</code> data type):</p>
-<div class="highlight"><pre><span></span><code>&quot;OverwatchTanks&quot; =&gt; 
-    { 
-        {&quot;tank_1&quot; =&gt; &quot;Reinhardt&quot;}, 
-        {&quot;tank_2&quot; =&gt; &quot;Orisa&quot;}, 
-        {&quot;tank_3&quot; =&gt; &quot;Roadhog&quot;}
-    }
+<h2 id="primary">Primary</h2>
+<p>In addition for updating its own record, the primary also maintains an entry of type <code>SET</code> which holds <code>node_id</code> of all
+nodes members of the shard.</p>
+<p>This SET is constantly updated whenever the primary interact with replica node. The first time a node is added to this SET
+by the primary node is only after a successful FullSync.</p>
+<p>The entry is identified by the key <code>&lt;primary_id&gt;_replicas</code> where <code>&lt;primary_id&gt;</code> is the primary node unique id.</p>
+<h2 id="replica">Replica:</h2>
+<p>Similar to the primary node, the replica updates its information in a regular intervals.</p>
+<h2 id="auto-failover">Auto-Failover</h2>
+<p>In order to detect if the primary node is still alive, <code>SableDB</code> uses [the Raft algorithm][1] while using the centralised database
+as its communication layer and the <code>last_txn_id</code> as the log entry</p>
+<p>Each replica node checks regularly the <code>last_updated</code> field of the primary node. The interval on which a replica node checks
+whether its primary is not responsive, differs from node to node - this is to avoid situations where the failover process is attempted
+by multiple nodes (it can still happen, but with a lower chance).</p>
+<p>The failover process starts if the primary's <code>last_updated</code> exceeds the value allowed by the checking node. If the value exceeds, then
+the replica node does the following:</p>
+<h3 id="the-replica-that-initiated-the-failover">The replica that initiated the failover</h3>
+<ul>
+<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a unique lock record</li>
+<li>The node that started the failover checks which replica should take over, it does that by picking the one with the highest <code>last_txn_id</code> property</li>
+<li>Dispatch a command to the new replica instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
+<li>Dispatch a command to all of the remaining replicas instructing them to perform a <code>REPLICAOF &lt;NEW_PRIMARY_IP&gt; &lt;NEW_PRIMARY_PORT&gt;</code></li>
+<li>Delete the old primary records from the database (if this node comes back online again later, it will re-create them)</li>
+</ul>
+<h3 id="all-other-replicas">All other replicas</h3>
+<p>Each replica node always checks for the shard's lock record. If it exists, each replica switches to waiting for commands from the
+replica to orchestrates the failover. It does that by calling:</p>
+<div class="highlight"><pre><span></span><code>BLPOP &lt;NODE_ID&gt;_queue 5
 </code></pre></div>
-<p>In the above example, we have a hash identified by the key <code>OverwatchTanks</code>. Now, imagine a user that executes the following command:</p>
-<p><code>set OverwatchTanks bla</code> - this effectively changes the type of the key <code>OverwatchTanks</code> and set it into a <code>String</code>.
-However, as explained in <a href="/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDb</code> records.
-So by calling the <code>set</code> command, the <code>hash</code> fields <code>tank_1</code>, <code>tank_2</code> and <code>tank_3</code> are now "orphaned" (i.e. the user can not access them)</p>
-<p><code>SableDb</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
-In the above example: the type of the key <code>OverwatchTanks</code> is a <code>String</code> while it should have been <code>Hash</code>. When such a discrepancy is detected,
-the cron task deletes the orphan records from the database.</p>
-<p>The cron job knows the original type by checking the <a href="/design/data-encoding/#bookkeeping-records"><code>bookkeeping record</code></a></p>
-<h2 id="user-triggered-clean-up-flushall-or-flushdb">User triggered clean-up (<code>FLUSHALL</code> or <code>FLUSHDB</code>)</h2>
-<p>When one of these commands is called, <code>SableDb</code> uses <code>RocksDb</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
+<h3 id="a-note-about-locking">A note about locking</h3>
+<p><code>SableDB</code> uses the command <code>SET &lt;PRIMARY_ID&gt;_FAILOVER &lt;Unique-Value&gt; NX EX 60</code> to create a unique lock.
+By doing so, it ensures that only one locking record exists. If it succeeded in creating the lock record,
+it becomes [the node that orchestrates the replacement][3]</p>
+<p>If it fails (i.e. the record already exist) - it switches to read commands from the queue as described [here][2]</p>
+<p>The only client allowed to delete the lock is the client created it, hence the <code>&lt;unique_value&gt;</code>. If that client crashed
+we have the <code>EX 60</code> as a backup plan</p>
+<p>Commands are sent over to this queue by the orchestrator replica.</p>
+<div class="highlight"><pre><span></span><code>[1]: https://raft.github.io/
+[2]: /design/auto-failover/#all-other-replicas
+[3]: /design/auto-failover/#the-replica-that-initiated-the-failover
+</code></pre></div>
 
 
 
