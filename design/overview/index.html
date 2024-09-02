@@ -539,7 +539,7 @@
 <p>The networking layer of SableDB uses a lock free design. i.e. once a connection is assigned to a worker thread
 it does not interact with any other threads or shared data structures.</p>
 <p>Having said that, there is one obvious "point" that requires locking: the storage.
-The current implementation of <code>SableDB</code> uses <code>RocksDb</code> as its storage engine
+The current implementation of <code>SableDB</code> uses <code>RocksDB</code> as its storage engine
 (but it can, in principal, work with other storage engines like <a href="https://sled.rs/"><code>Sled</code></a>), even though
 the the storage itself is thread-safe, <code>SableDB</code> still needs to provide atomicity for multiple database access (consider the <code>ValKey</code>'s
 <code>getset</code> command which requires to perform both <code>get</code> and <code>set</code> in a single operation) - <code>SableDB</code> achieves this by using a shard locking (more details on this later).</p>

@@ -476,14 +476,14 @@ the item is deleted and a <code>null</code> value is returned to the caller.</p>
 </code></pre></div>
 <p>In the above example, we have a hash identified by the key <code>OverwatchTanks</code>. Now, imagine a user that executes the following command:</p>
 <p><code>set OverwatchTanks bla</code> - this effectively changes the type of the key <code>OverwatchTanks</code> and set it into a <code>String</code>.
-However, as explained in <a href="/sabledb/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDb</code> records.
+However, as explained in <a href="/sabledb/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDB</code> records.
 So by calling the <code>set</code> command, the <code>hash</code> fields <code>tank_1</code>, <code>tank_2</code> and <code>tank_3</code> are now "orphaned" (i.e. the user can not access them)</p>
 <p><code>SableDB</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
 In the above example: the type of the key <code>OverwatchTanks</code> is a <code>String</code> while it should have been <code>Hash</code>. When such a discrepancy is detected,
 the cron task deletes the orphan records from the database.</p>
 <p>The cron job knows the original type by checking the <a href="/sabledb/design/data-encoding/#bookkeeping-records"><code>bookkeeping record</code></a></p>
 <h2 id="user-triggered-clean-up-flushall-or-flushdb">User triggered clean-up (<code>FLUSHALL</code> or <code>FLUSHDB</code>)</h2>
-<p>When one of these commands is called, <code>SableDB</code> uses <code>RocksDb</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
+<p>When one of these commands is called, <code>SableDB</code> uses <code>RocksDB</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
 
 
 

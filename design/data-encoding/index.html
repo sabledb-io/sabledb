@@ -559,23 +559,23 @@
 
 
 <h1 id="overview">Overview</h1>
-<p><code>SableDB</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code>
+<p><code>SableDB</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDB</code>
 as its mature, maintained and widely used in the industry by giant companies.</p>
-<p>Because the <code>RocksDb</code> is key-value storage and Redis data structures can be more complex, an additional
+<p>Because the <code>RocksDB</code> is key-value storage and Redis data structures can be more complex, an additional
 data encoding is required.</p>
 <p>This chapter covers how <code>SableDB</code> encodes the data for the various data types (e.g. <code>String</code>, <code>Hash</code>, <code>Set</code> etc)</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Numbers are encoded using Big Endians to preserve lexicographic ordering</p>
 </div>
-<p><code>SableDB</code> takes advantage of the following <code>RocksDb</code> traits:</p>
+<p><code>SableDB</code> takes advantage of the following <code>RocksDB</code> traits:</p>
 <ul>
-<li><code>RocksDb</code> keys are stored lexicographically (this is why <code>SableDB</code> uses big-endiands)</li>
-<li><code>RocksDb</code> provides prefix iterators which allows <code>SableDB</code> to place iterator on the first item that matches a prefix</li>
+<li><code>RocksDB</code> keys are stored lexicographically (this is why <code>SableDB</code> uses big-endiands)</li>
+<li><code>RocksDB</code> provides prefix iterators which allows <code>SableDB</code> to place iterator on the first item that matches a prefix</li>
 </ul>
 <h2 id="the-string-data-type">The <code>String</code> data type</h2>
 <p>The most basic data type in <code>SableDB</code> is the <code>String</code> data type. <code>String</code>s in <code>SableDB</code> are always binary safe
-Each <code>String</code> record in the <code>SableDB</code> consists of a single entry in <code>RocksDb</code>:</p>
+Each <code>String</code> record in the <code>SableDB</code> consists of a single entry in <code>RocksDB</code>:</p>
 <div class="highlight"><pre><span></span><code>   A    B      C      D                E        F       G     H
 +-----+-----+-------+----------+    +-----+------------+----+-------+
 | 1u8 | DB# | Slot# | user key | =&gt; | 0u8 | Expirtaion | ID | value |
@@ -605,7 +605,7 @@ Each <code>String</code> record in the <code>SableDB</code> consists of a single
 <li>The slot number</li>
 <li>The user string key (i.e. <code>mykey</code>)</li>
 </ul>
-<p>This is the key that is passed to <code>RocksDb</code> for reading
+<p>This is the key that is passed to <code>RocksDB</code> for reading
 - If the key exists in the database:
     - If the type (field <code>E</code>) is <code>!= 0</code> - i.e. the entry is not a <code>String</code>, <code>SableDB</code> returns a <code>-WRONGTYPE</code> error
     - If value is expired -&gt; <code>SableDB</code> returns <code>null</code> and deletes the record from the database
@@ -652,7 +652,7 @@ using the following encoding:</p>
 <li><code>O</code> the UID of the next item in the list ( <code>0</code> means that this item is the last item)</li>
 <li><code>P</code> the list value</li>
 </ul>
-<p>The above encoding allows <code>SableDB</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to
+<p>The above encoding allows <code>SableDB</code> to iterate over all list items by creating a <code>RocksDB</code> iterator and move it to
 the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
 the requested list items are visited)</p>
 <h2 id="the-hash-data-type">The <code>Hash</code> data type</h2>
