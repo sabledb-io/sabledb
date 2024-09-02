@@ -1,34 +1,34 @@
 ## Overview
 
-This chapter covers the overall design choices made when building `SableDb`.
+This chapter covers the overall design choices made when building `SableDB`.
 
-The networking layer of SableDb uses a lock free design. i.e. once a connection is assigned to a worker thread
+The networking layer of SableDB uses a lock free design. i.e. once a connection is assigned to a worker thread
 it does not interact with any other threads or shared data structures.
 
-Having said that, there is one obvious "point" that requires locking: the storage. 
-The current implementation of `SableDb` uses `RocksDb` as its storage engine 
+Having said that, there is one obvious "point" that requires locking: the storage.
+The current implementation of `SableDB` uses `RocksDb` as its storage engine
 (but it can, in principal, work with other storage engines like [`Sled`][1]), even though
-the the storage itself is thread-safe, `SableDb` still needs to provide atomicity for multiple database access (consider the `ValKey`'s
-`getset` command which requires to perform both `get` and `set` in a single operation) - `SableDb` achieves this by using a shard locking (more details on this later).
+the the storage itself is thread-safe, `SableDB` still needs to provide atomicity for multiple database access (consider the `ValKey`'s
+`getset` command which requires to perform both `get` and `set` in a single operation) - `SableDB` achieves this by using a shard locking (more details on this later).
 
-By default, `SableDb` listens on port `6379` for incoming connections. A newly arrived connection is then assigned
-to a worker thread (using simple round-robin method). The worker thread spawns a [local task][2] 
+By default, `SableDB` listens on port `6379` for incoming connections. A newly arrived connection is then assigned
+to a worker thread (using simple round-robin method). The worker thread spawns a [local task][2]
 (A task, is tokio's implementation for [green threads][3])
-which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two: 
+which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two:
 
 - Reader end
 - Writer end
 
 Each end of the stream is then passed into a newly spawned [local task][2] for handling
 
-Below is a diagram shows the main components within `SableDb`:
+Below is a diagram shows the main components within `SableDB`:
 
 ![main-components](../images/main-components.svg)
 
 ## Acceptor thread
 
-The main thread of `SableDb` - after spawning the worker threads - is used as the TCP acceptor thread.
-Unless specified otherwise, `SableDb` listens on port 6379. Every incoming connection is moved to a thread
+The main thread of `SableDB` - after spawning the worker threads - is used as the TCP acceptor thread.
+Unless specified otherwise, `SableDB` listens on port 6379. Every incoming connection is moved to a thread
 for later handling so the acceptor can accept new connections
 
 ## TLS handshake
@@ -54,7 +54,7 @@ The reader task is responsible for:
 The writer task input are the commands read and constructed by the reader task.
 
 Once a command is received, the writer task invokes the proper handler for that command (if the command it not supported
-an error message is sent back to the client). 
+an error message is sent back to the client).
 
 The command handler, can return one of 2 possible actions:
 
@@ -69,7 +69,7 @@ The decision whether to reply directly or propagate the response to the caller t
 The idea is to prevent huge memory spikes where possible.
 
 For example, the `hgetall` command might generate a huge output (depends on the number of fields in the hash and their size)
-so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building 
+so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building
 a complete response in memory (which can take Gigabytes of RAM) and only then write it to the client.
 
 ### Block the client
