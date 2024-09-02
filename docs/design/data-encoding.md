@@ -1,9 +1,9 @@
 # Overview
 
-`SableDB` uses a Key / Value database for its underlying data storage. We chose to use `RocksDb`
+`SableDB` uses a Key / Value database for its underlying data storage. We chose to use `RocksDB`
 as its mature, maintained and widely used in the industry by giant companies.
 
-Because the `RocksDb` is key-value storage and Redis data structures can be more complex, an additional
+Because the `RocksDB` is key-value storage and Redis data structures can be more complex, an additional
 data encoding is required.
 
 This chapter covers how `SableDB` encodes the data for the various data types (e.g. `String`, `Hash`, `Set` etc)
@@ -11,15 +11,15 @@ This chapter covers how `SableDB` encodes the data for the various data types (e
 !!!Note
     Numbers are encoded using Big Endians to preserve lexicographic ordering
 
-`SableDB` takes advantage of the following `RocksDb` traits:
+`SableDB` takes advantage of the following `RocksDB` traits:
 
-- `RocksDb` keys are stored lexicographically (this is why `SableDB` uses big-endiands)
-- `RocksDb` provides prefix iterators which allows `SableDB` to place iterator on the first item that matches a prefix
+- `RocksDB` keys are stored lexicographically (this is why `SableDB` uses big-endiands)
+- `RocksDB` provides prefix iterators which allows `SableDB` to place iterator on the first item that matches a prefix
 
 ## The `String` data type
 
 The most basic data type in `SableDB` is the `String` data type. `String`s in `SableDB` are always binary safe
-Each `String` record in the `SableDB` consists of a single entry in `RocksDb`:
+Each `String` record in the `SableDB` consists of a single entry in `RocksDB`:
 
 ```
    A    B      C      D                E        F       G     H
@@ -55,7 +55,7 @@ get mykey
 - The slot number
 - The user string key (i.e. `mykey`)
 
-This is the key that is passed to `RocksDb` for reading
+This is the key that is passed to `RocksDB` for reading
 - If the key exists in the database:
     - If the type (field `E`) is `!= 0` - i.e. the entry is not a `String`, `SableDB` returns a `-WRONGTYPE` error
     - If value is expired -> `SableDB` returns `null` and deletes the record from the database
@@ -108,7 +108,7 @@ using the following encoding:
 - `O` the UID of the next item in the list ( `0` means that this item is the last item)
 - `P` the list value
 
-The above encoding allows `SableDB` to iterate over all list items by creating a `RocksDb` iterator and move it to
+The above encoding allows `SableDB` to iterate over all list items by creating a `RocksDB` iterator and move it to
 the prefix `[ 2 | <list-id>]` (`2` indicates that only list items should be scanned, and `list-id` makes sure that only
 the requested list items are visited)
 

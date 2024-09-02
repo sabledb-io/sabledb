@@ -29,7 +29,7 @@ To explain the problem here, consider the following data is stored in `SableDB` 
 In the above example, we have a hash identified by the key `OverwatchTanks`. Now, imagine a user that executes the following command:
 
 `set OverwatchTanks bla` - this effectively changes the type of the key `OverwatchTanks` and set it into a `String`.
-However, as explained in [`the encoding data chapter`][1], we know that each hash field is stored in its own `RocksDb` records.
+However, as explained in [`the encoding data chapter`][1], we know that each hash field is stored in its own `RocksDB` records.
 So by calling the `set` command, the `hash` fields `tank_1`, `tank_2` and `tank_3` are now "orphaned" (i.e. the user can not access them)
 
 `SableDB` solves this problem by running an cron task that compares the type of the a composite item against its actual value.
@@ -40,7 +40,7 @@ The cron job knows the original type by checking the [`bookkeeping record`][2]
 
 ## User triggered clean-up (`FLUSHALL` or `FLUSHDB`)
 
-When one of these commands is called, `SableDB` uses `RocksDb` [`delete_range`][3] method.
+When one of these commands is called, `SableDB` uses `RocksDB` [`delete_range`][3] method.
 
 [1]: /sabledb/design/data-encoding/#the-hash-data-type
 [2]: /sabledb/design/data-encoding/#bookkeeping-records
