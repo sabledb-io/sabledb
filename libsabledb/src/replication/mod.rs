@@ -1,4 +1,4 @@
-mod cluster_manager;
+pub mod cluster_manager;
 mod replication_client;
 mod replication_config;
 mod replication_messages;

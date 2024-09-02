@@ -1,5 +1,6 @@
 use libsabledb::{
-    utils::IpPort, SableError, Server, ServerOptions, Transport, WorkerManager, WorkerMessage,
+    replication::cluster_manager, utils::IpPort, SableError, Server, ServerOptions, Transport,
+    WorkerManager, WorkerMessage,
 };
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -74,6 +75,9 @@ fn main() -> Result<(), SableError> {
         info!("Restoring server replica mode (Primary: {:?})", addr);
         Server::state().connect_to_primary_sync(addr.ip.clone(), addr.port)?;
     }
+
+    // Initialise the cluster manager
+    cluster_manager::initialise(&options_cloned);
 
     let _ = ctrlc::set_handler(move || {
         info!("Received Ctrl-C");

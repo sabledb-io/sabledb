@@ -1,14 +1,30 @@
 use crate::{replication::ServerRole, utils::TimeUtils, SableError, Server, ServerOptions};
+use num_format::{Locale, ToFormattedString};
+use rand::Rng;
 use redis::Commands;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 lazy_static::lazy_static! {
     static ref CM_CONN: RwLock<Connection> = RwLock::<Connection>::default();
+    static ref LAST_UPDATED_TS: AtomicU64 = AtomicU64::default();
+    static ref LAST_HTBT_CHECKED_TS: AtomicU64 = AtomicU64::default();
+    static ref CHECK_PRIMARY_ALIVE_INTERVAL: AtomicU64 = AtomicU64::default();
+    static ref NOT_RESPONDING_COUNTER: AtomicU64 = AtomicU64::default();
 }
 
-thread_local! {
-    pub static LAST_UPDATED_TS: std::cell::RefCell<u64> = const { std::cell::RefCell::new(0u64) };
+macro_rules! check_us_passed_since {
+    ($counter:expr, $interval_us:expr) => {{
+        let current_time = $crate::TimeUtils::epoch_micros().unwrap_or_default();
+        let last_logged_ts = $counter.load(Ordering::Relaxed);
+        if current_time - last_logged_ts >= $interval_us {
+            $counter.store(current_time, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }};
 }
 
 const PROP_NODE_ID: &str = "node_id";
@@ -118,6 +134,18 @@ fn connect(options: &ServerOptions) -> Result<(), SableError> {
     conn.open(options)
 }
 
+/// Initialise the cluster manager API
+pub fn initialise(_options: &ServerOptions) {
+    let mut rng = rand::thread_rng();
+    let us = rng.gen_range(5000000..10_000000);
+    CHECK_PRIMARY_ALIVE_INTERVAL.store(us, Ordering::Relaxed);
+    tracing::info!(
+        "Check primary interval is set to {} microseconds",
+        us.to_formatted_string(&Locale::en)
+    );
+    NOT_RESPONDING_COUNTER.store(0, Ordering::Relaxed);
+}
+
 /// Update this node with the server manager database. If no database is configured, do nothing
 /// If an entry for the same node already exists, it is overridden (the key is the node-id)
 pub fn put_node_properties(
@@ -134,7 +162,7 @@ pub fn put_node_properties(
 
 /// Update the "last updated" field for this node in the cluster manager database
 pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
-    if !can_update_heartbeat() {
+    if !check_us_passed_since!(LAST_UPDATED_TS, 1_000_000) {
         return Ok(());
     }
 
@@ -200,26 +228,88 @@ pub fn remove_replica(options: &ServerOptions, replica_node_id: String) -> Resul
     Ok(())
 }
 
-/// Return true if 1000 milliseconds passed since the last time we updated the cluster manager database
-fn can_update_heartbeat() -> bool {
-    let current_time =
-        crate::utils::current_time(crate::utils::CurrentTimeResolution::Milliseconds);
-    LAST_UPDATED_TS.with(|last_ts| {
-        let last_logged_ts = *last_ts.borrow();
-        if current_time - last_logged_ts >= 1000 {
-            *last_ts.borrow_mut() = current_time;
-            true
-        } else {
-            false
+/// Check and perform failover is needed
+pub fn fail_over_if_needed(options: &ServerOptions) -> Result<(), SableError> {
+    if check_is_alive(options)? {
+        return Ok(());
+    }
+
+    // TODO: do failover here
+    Ok(())
+}
+
+///===------------------------------
+/// Private API calls
+///===------------------------------
+
+/// Check that the primary is alive
+fn check_is_alive(options: &ServerOptions) -> Result<bool, SableError> {
+    if !check_us_passed_since!(LAST_HTBT_CHECKED_TS, 1_500_000) {
+        return Ok(true);
+    }
+
+    // Only replica should run this test
+    if !Server::state().persistent_state().is_replica() {
+        return Ok(true);
+    }
+
+    connect(options)?;
+    let mut conn = CM_CONN.write().expect("poisoned mutex");
+    let Some(client) = &mut conn.client else {
+        return Ok(true);
+    };
+
+    let primary_node_id = Server::state().persistent_state().primary_node_id();
+    if primary_node_id.is_empty() {
+        tracing::debug!("Replica has no primary node defined");
+        return Ok(true);
+    }
+    let mut conn = client.get_connection()?;
+
+    let res = conn.hget(&primary_node_id, PROP_LAST_UPDATED)?;
+    let primary_heartbeat_ts = match res {
+        redis::Value::BulkString(val) => {
+            let Ok(val) = String::from_utf8_lossy(&val).parse::<u64>() else {
+                tracing::warn!("Failed to parse last_updated field to u64");
+                return Ok(true);
+            };
+            val
         }
-    })
+        _ => {
+            tracing::warn!("Expected BulkString value");
+            return Ok(true);
+        }
+    };
+
+    let curr_ts = TimeUtils::epoch_micros().unwrap_or(0);
+    if curr_ts.saturating_sub(primary_heartbeat_ts)
+        > CHECK_PRIMARY_ALIVE_INTERVAL.load(Ordering::Relaxed)
+    {
+        // Primary is not responding!
+        if NOT_RESPONDING_COUNTER.load(Ordering::Relaxed) >= 3 {
+            tracing::info!("Primary {primary_node_id} is not available");
+            return Ok(false);
+        } else {
+            // increase the error counter
+            tracing::debug!(
+                "Primary {primary_node_id} is not responding. Retry counter={}",
+                NOT_RESPONDING_COUNTER.load(Ordering::Relaxed)
+            );
+            NOT_RESPONDING_COUNTER.fetch_add(1, Ordering::Relaxed);
+        }
+    } else {
+        if NOT_RESPONDING_COUNTER.load(Ordering::Relaxed) >= 3 {
+            tracing::info!("Primary {primary_node_id} is alive again!");
+        }
+        // clear the error counter
+        NOT_RESPONDING_COUNTER.store(0, Ordering::Relaxed);
+    }
+    Ok(true)
 }
 
 /// Return true if 1000 milliseconds passed since the last time we updated the cluster manager database
 fn update_heartbeat_reported_ts() {
     let current_time =
-        crate::utils::current_time(crate::utils::CurrentTimeResolution::Milliseconds);
-    LAST_UPDATED_TS.with(|last_ts| {
-        *last_ts.borrow_mut() = current_time;
-    })
+        crate::utils::current_time(crate::utils::CurrentTimeResolution::Microseconds);
+    LAST_UPDATED_TS.store(current_time, Ordering::Relaxed);
 }
