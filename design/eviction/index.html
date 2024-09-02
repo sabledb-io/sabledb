@@ -20,7 +20,7 @@
     
     
       
-        <title>Data eviction - SableDb</title>
+        <title>Data eviction - SableDB</title>
       
     
     
@@ -86,7 +86,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="SableDb" class="md-header__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-header__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
@@ -100,7 +100,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            SableDb
+            SableDB
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -193,13 +193,13 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="SableDb" class="md-nav__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-nav__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
 
     </a>
-    SableDb
+    SableDB
   </label>
   
     <div class="md-nav__source">
@@ -455,7 +455,7 @@
 
 
 <h1 id="data-eviction">Data eviction</h1>
-<p>This chapter covers the data eviction as it being handled by <code>SableDb</code>.</p>
+<p>This chapter covers the data eviction as it being handled by <code>SableDB</code>.</p>
 <p>There are 3 cases where items needs to be purged:</p>
 <ul>
 <li>Item is expired</li>
@@ -463,10 +463,10 @@
 <li>User called <code>FLUSHDB</code> or <code>FLUSHALL</code></li>
 </ul>
 <h2 id="expired-items">Expired items</h2>
-<p>Since the main storage used by <code>SableDb</code> is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
+<p>Since the main storage used by <code>SableDB</code> is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
 the item is deleted and a <code>null</code> value is returned to the caller.</p>
 <h2 id="composite-item-has-been-overwritten">Composite item has been overwritten</h2>
-<p>To explain the problem here, consider the following data is stored in <code>SableDb</code> (using <code>Hash</code> data type):</p>
+<p>To explain the problem here, consider the following data is stored in <code>SableDB</code> (using <code>Hash</code> data type):</p>
 <div class="highlight"><pre><span></span><code>&quot;OverwatchTanks&quot; =&gt;
     {
         {&quot;tank_1&quot; =&gt; &quot;Reinhardt&quot;},
@@ -478,12 +478,12 @@ the item is deleted and a <code>null</code> value is returned to the caller.</p>
 <p><code>set OverwatchTanks bla</code> - this effectively changes the type of the key <code>OverwatchTanks</code> and set it into a <code>String</code>.
 However, as explained in <a href="/sabledb/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDb</code> records.
 So by calling the <code>set</code> command, the <code>hash</code> fields <code>tank_1</code>, <code>tank_2</code> and <code>tank_3</code> are now "orphaned" (i.e. the user can not access them)</p>
-<p><code>SableDb</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
+<p><code>SableDB</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
 In the above example: the type of the key <code>OverwatchTanks</code> is a <code>String</code> while it should have been <code>Hash</code>. When such a discrepancy is detected,
 the cron task deletes the orphan records from the database.</p>
 <p>The cron job knows the original type by checking the <a href="/sabledb/design/data-encoding/#bookkeeping-records"><code>bookkeeping record</code></a></p>
 <h2 id="user-triggered-clean-up-flushall-or-flushdb">User triggered clean-up (<code>FLUSHALL</code> or <code>FLUSHDB</code>)</h2>
-<p>When one of these commands is called, <code>SableDb</code> uses <code>RocksDb</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
+<p>When one of these commands is called, <code>SableDB</code> uses <code>RocksDb</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
 
 
 

@@ -2,32 +2,32 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://sabledb.io/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://sabledb.io/design/auto-failover/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://sabledb.io/design/data-encoding/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://sabledb.io/design/eviction/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://sabledb.io/design/overview/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
          <loc>https://sabledb.io/design/replication/</loc>
-         <lastmod>2024-09-01</lastmod>
+         <lastmod>2024-09-02</lastmod>
          <changefreq>daily</changefreq>
     </url>
 </urlset>

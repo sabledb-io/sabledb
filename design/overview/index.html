@@ -20,7 +20,7 @@
     
     
       
-        <title>High Level Design - SableDb</title>
+        <title>High Level Design - SableDB</title>
       
     
     
@@ -86,7 +86,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="SableDb" class="md-header__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-header__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
@@ -100,7 +100,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            SableDb
+            SableDB
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -193,13 +193,13 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="SableDb" class="md-nav__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-nav__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
 
     </a>
-    SableDb
+    SableDB
   </label>
   
     <div class="md-nav__source">
@@ -535,28 +535,28 @@
   <h1>High Level Design</h1>
 
 <h2 id="overview">Overview</h2>
-<p>This chapter covers the overall design choices made when building <code>SableDb</code>.</p>
-<p>The networking layer of SableDb uses a lock free design. i.e. once a connection is assigned to a worker thread
+<p>This chapter covers the overall design choices made when building <code>SableDB</code>.</p>
+<p>The networking layer of SableDB uses a lock free design. i.e. once a connection is assigned to a worker thread
 it does not interact with any other threads or shared data structures.</p>
-<p>Having said that, there is one obvious "point" that requires locking: the storage. 
-The current implementation of <code>SableDb</code> uses <code>RocksDb</code> as its storage engine 
+<p>Having said that, there is one obvious "point" that requires locking: the storage.
+The current implementation of <code>SableDB</code> uses <code>RocksDb</code> as its storage engine
 (but it can, in principal, work with other storage engines like <a href="https://sled.rs/"><code>Sled</code></a>), even though
-the the storage itself is thread-safe, <code>SableDb</code> still needs to provide atomicity for multiple database access (consider the <code>ValKey</code>'s
-<code>getset</code> command which requires to perform both <code>get</code> and <code>set</code> in a single operation) - <code>SableDb</code> achieves this by using a shard locking (more details on this later).</p>
-<p>By default, <code>SableDb</code> listens on port <code>6379</code> for incoming connections. A newly arrived connection is then assigned
-to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> 
+the the storage itself is thread-safe, <code>SableDB</code> still needs to provide atomicity for multiple database access (consider the <code>ValKey</code>'s
+<code>getset</code> command which requires to perform both <code>get</code> and <code>set</code> in a single operation) - <code>SableDB</code> achieves this by using a shard locking (more details on this later).</p>
+<p>By default, <code>SableDB</code> listens on port <code>6379</code> for incoming connections. A newly arrived connection is then assigned
+to a worker thread (using simple round-robin method). The worker thread spawns a <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a>
 (A task, is tokio's implementation for <a href="https://en.wikipedia.org/wiki/Green_thread">green threads</a>)
-which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two: </p>
+which performs the TLS handshake (if dictated by the configuration) and then splits the connection stream into two:</p>
 <ul>
 <li>Reader end</li>
 <li>Writer end</li>
 </ul>
 <p>Each end of the stream is then passed into a newly spawned <a href="https://tokio.rs/tokio/tutorial/spawning#tasks">local task</a> for handling</p>
-<p>Below is a diagram shows the main components within <code>SableDb</code>:</p>
+<p>Below is a diagram shows the main components within <code>SableDB</code>:</p>
 <p><img alt="main-components" src="../../images/main-components.svg" /></p>
 <h2 id="acceptor-thread">Acceptor thread</h2>
-<p>The main thread of <code>SableDb</code> - after spawning the worker threads - is used as the TCP acceptor thread.
-Unless specified otherwise, <code>SableDb</code> listens on port 6379. Every incoming connection is moved to a thread
+<p>The main thread of <code>SableDB</code> - after spawning the worker threads - is used as the TCP acceptor thread.
+Unless specified otherwise, <code>SableDB</code> listens on port 6379. Every incoming connection is moved to a thread
 for later handling so the acceptor can accept new connections</p>
 <h2 id="tls-handshake">TLS handshake</h2>
 <p>The worker thread moves the newly incoming connection to a task which does the following:</p>
@@ -576,7 +576,7 @@ A tokio channel is then established between the two tasks for passing data from 
 <h2 id="the-writer-task">The writer task</h2>
 <p>The writer task input are the commands read and constructed by the reader task.</p>
 <p>Once a command is received, the writer task invokes the proper handler for that command (if the command it not supported
-an error message is sent back to the client). </p>
+an error message is sent back to the client).</p>
 <p>The command handler, can return one of 2 possible actions:</p>
 <h3 id="send-a-response-to-the-client">Send a response to the client</h3>
 <p>There are 2 ways that the writer task can send back a response to the client:</p>
@@ -587,7 +587,7 @@ an error message is sent back to the client). </p>
 <p>The decision whether to reply directly or propagate the response to the caller task is done on per command basis.
 The idea is to prevent huge memory spikes where possible.</p>
 <p>For example, the <code>hgetall</code> command might generate a huge output (depends on the number of fields in the hash and their size)
-so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building 
+so it is probably better to write the response directly to the socket (using a controlled fixed chunks) rather than building
 a complete response in memory (which can take Gigabytes of RAM) and only then write it to the client.</p>
 <h3 id="block-the-client">Block the client</h3>
 <p>When a client executes a blocking call on a resource that is not yet available, the writer task is suspended until:</p>

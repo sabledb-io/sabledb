@@ -22,7 +22,7 @@
     
     
       
-        <title>Data encoding - SableDb</title>
+        <title>Data encoding - SableDB</title>
       
     
     
@@ -88,7 +88,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="SableDb" class="md-header__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-header__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
@@ -102,7 +102,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            SableDb
+            SableDB
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -195,13 +195,13 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="SableDb" class="md-nav__button md-logo" aria-label="SableDb" data-md-component="logo">
+    <a href="../.." title="SableDB" class="md-nav__button md-logo" aria-label="SableDB" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
 
     </a>
-    SableDb
+    SableDB
   </label>
   
     <div class="md-nav__source">
@@ -559,23 +559,23 @@
 
 
 <h1 id="overview">Overview</h1>
-<p><code>SableDb</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code>
+<p><code>SableDB</code> uses a Key / Value database for its underlying data storage. We chose to use <code>RocksDb</code>
 as its mature, maintained and widely used in the industry by giant companies.</p>
 <p>Because the <code>RocksDb</code> is key-value storage and Redis data structures can be more complex, an additional
 data encoding is required.</p>
-<p>This chapter covers how <code>SableDb</code> encodes the data for the various data types (e.g. <code>String</code>, <code>Hash</code>, <code>Set</code> etc)</p>
+<p>This chapter covers how <code>SableDB</code> encodes the data for the various data types (e.g. <code>String</code>, <code>Hash</code>, <code>Set</code> etc)</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Numbers are encoded using Big Endians to preserve lexicographic ordering</p>
 </div>
-<p><code>SableDb</code> takes advantage of the following <code>RocksDb</code> traits:</p>
+<p><code>SableDB</code> takes advantage of the following <code>RocksDb</code> traits:</p>
 <ul>
-<li><code>RocksDb</code> keys are stored lexicographically (this is why <code>SableDb</code> uses big-endiands)</li>
-<li><code>RocksDb</code> provides prefix iterators which allows <code>SableDb</code> to place iterator on the first item that matches a prefix</li>
+<li><code>RocksDb</code> keys are stored lexicographically (this is why <code>SableDB</code> uses big-endiands)</li>
+<li><code>RocksDb</code> provides prefix iterators which allows <code>SableDB</code> to place iterator on the first item that matches a prefix</li>
 </ul>
 <h2 id="the-string-data-type">The <code>String</code> data type</h2>
-<p>The most basic data type in <code>SableDb</code> is the <code>String</code> data type. <code>String</code>s in <code>SableDb</code> are always binary safe
-Each <code>String</code> record in the <code>SableDb</code> consists of a single entry in <code>RocksDb</code>:</p>
+<p>The most basic data type in <code>SableDB</code> is the <code>String</code> data type. <code>String</code>s in <code>SableDB</code> are always binary safe
+Each <code>String</code> record in the <code>SableDB</code> consists of a single entry in <code>RocksDb</code>:</p>
 <div class="highlight"><pre><span></span><code>   A    B      C      D                E        F       G     H
 +-----+-----+-------+----------+    +-----+------------+----+-------+
 | 1u8 | DB# | Slot# | user key | =&gt; | 0u8 | Expirtaion | ID | value |
@@ -584,7 +584,7 @@ Each <code>String</code> record in the <code>SableDb</code> consists of a single
 <p>The key for a <code>String</code> record is encoded as follows:</p>
 <ul>
 <li><code>A</code> the first byte ( <code>u8</code> ) is always set to <code>1</code> - this indicates that this is a data entry (there are other type of keys in the database)</li>
-<li><code>B</code> the database ID is encoded as <code>u16</code> (this implies that <code>SableDb</code> supports up to <code>64K</code> databases)</li>
+<li><code>B</code> the database ID is encoded as <code>u16</code> (this implies that <code>SableDB</code> supports up to <code>64K</code> databases)</li>
 <li><code>C</code> the slot number</li>
 <li><code>D</code> the actual key value (e.g. <code>set mykey myvalue</code>  -&gt; <code>mykey</code> is set here)</li>
 </ul>
@@ -595,10 +595,10 @@ Each <code>String</code> record in the <code>SableDb</code> consists of a single
 <li><code>G</code> unique ID (relevant for complex types like <code>Hash</code>), for <code>String</code> this is always <code>0</code></li>
 <li><code>H</code> the user value</li>
 </ul>
-<p>Using the above encoding, we can now understand how <code>SableDb</code> reads from the database. Lets have a look a the command:</p>
+<p>Using the above encoding, we can now understand how <code>SableDB</code> reads from the database. Lets have a look a the command:</p>
 <div class="highlight"><pre><span></span><code>get mykey
 </code></pre></div>
-<p><code>SableDb</code> encodes a key from the user key (<code>mykey</code>) by prepending the following:</p>
+<p><code>SableDB</code> encodes a key from the user key (<code>mykey</code>) by prepending the following:</p>
 <ul>
 <li><code>1</code>u8 - to indicate that this is the data record</li>
 <li>The active database number (defaults to <code>0</code>)</li>
@@ -607,12 +607,12 @@ Each <code>String</code> record in the <code>SableDb</code> consists of a single
 </ul>
 <p>This is the key that is passed to <code>RocksDb</code> for reading
 - If the key exists in the database:
-    - If the type (field <code>E</code>) is <code>!= 0</code> - i.e. the entry is not a <code>String</code>, <code>SableDb</code> returns a <code>-WRONGTYPE</code> error
-    - If value is expired -&gt; <code>SableDb</code> returns <code>null</code> and deletes the record from the database
-    - Otherwise, <code>SableDb</code> returns the <code>H</code> part of the value (the actual user data)
+    - If the type (field <code>E</code>) is <code>!= 0</code> - i.e. the entry is not a <code>String</code>, <code>SableDB</code> returns a <code>-WRONGTYPE</code> error
+    - If value is expired -&gt; <code>SableDB</code> returns <code>null</code> and deletes the record from the database
+    - Otherwise, <code>SableDB</code> returns the <code>H</code> part of the value (the actual user data)
 - Else (no such key) return <code>null</code></p>
 <h2 id="the-list-data-type">The <code>List</code> data type</h2>
-<p>A <code>List</code> is a composite data type. <code>SableDb</code> stores the metadata of the list using a dedicated record and each list element
+<p>A <code>List</code> is a composite data type. <code>SableDB</code> stores the metadata of the list using a dedicated record and each list element
 is stored in a separate entry.</p>
 <div class="highlight"><pre><span></span><code>List metadata:
 
@@ -642,7 +642,7 @@ List item:
 <li><code>I</code> the UID of the list tail item (<code>u64</code>)</li>
 <li><code>J</code> the list length</li>
 </ul>
-<p>In addition to the list metadata (<code>SableDb</code> keeps a single metadata item per list) we add a list item per new list item
+<p>In addition to the list metadata (<code>SableDB</code> keeps a single metadata item per list) we add a list item per new list item
 using the following encoding:</p>
 <ul>
 <li><code>K</code> the first bit which is always set to <code>2</code> ("List Item")</li>
@@ -652,7 +652,7 @@ using the following encoding:</p>
 <li><code>O</code> the UID of the next item in the list ( <code>0</code> means that this item is the last item)</li>
 <li><code>P</code> the list value</li>
 </ul>
-<p>The above encoding allows <code>SableDb</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to
+<p>The above encoding allows <code>SableDB</code> to iterate over all list items by creating a <code>RocksDb</code> iterator and move it to
 the prefix <code>[ 2 | &lt;list-id&gt;]</code> (<code>2</code> indicates that only list items should be scanned, and <code>list-id</code> makes sure that only
 the requested list items are visited)</p>
 <h2 id="the-hash-data-type">The <code>Hash</code> data type</h2>
@@ -712,7 +712,7 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 </ul>
 <p>Each zset item are kept using 2 records:</p>
 <h3 id="index-find-by-member">Index: "Find by member"</h3>
-<p>The first record allows <code>SableDb</code> to find a member score (the key is the member value)</p>
+<p>The first record allows <code>SableDB</code> to find a member score (the key is the member value)</p>
 <ul>
 <li><code>K</code> the first bit which is always set to <code>4</code> ("ZSet member Item")</li>
 <li><code>L</code> the zset ID for which this item belongs to</li>
@@ -720,7 +720,7 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 <li><code>O</code> this member score value</li>
 </ul>
 <h3 id="index-find-by-score">Index: "Find by score"</h3>
-<p>The second record, allows <code>SableDb</code> to find member by score (we use the score as the key)</p>
+<p>The second record, allows <code>SableDB</code> to find member by score (we use the score as the key)</p>
 <ul>
 <li><code>P</code> the first bit is always set to <code>5</code> ("Zset score item")</li>
 <li><code>Q</code> the zset ID for which this item belongs to</li>
@@ -728,10 +728,10 @@ ZSet item 2 (Index: &quot;Find by score&quot;):
 <li><code>S</code> the member</li>
 <li><code>T</code> not used</li>
 </ul>
-<p>The above encoding records provides all the indexing required by <code>SableDb</code> to implement the sorted set commands.</p>
+<p>The above encoding records provides all the indexing required by <code>SableDB</code> to implement the sorted set commands.</p>
 <p>For example, in order to implement the command <a href="https://redis.io/docs/latest/commands/zcount/"><code>ZCOUNT</code></a> (Returns the number of elements in the sorted set at key with a score between min and max):</p>
 <ul>
-<li><code>SableDb</code> first loads the metadata using the zset key in order to obtain its unique ID</li>
+<li><code>SableDB</code> first loads the metadata using the zset key in order to obtain its unique ID</li>
 <li>Creates an iterator using the prefix <code>[5 | ZSET UID | MIN_SCORE]</code> (Index: "Find by score")</li>
 <li>Start iterating until it either finds the first entry that does not belong to the zset, or it finds the <code>MAX_SCORE</code> value</li>
 </ul>
@@ -759,7 +759,7 @@ Set item:
 <li><code>S</code> null (not used)</li>
 </ul>
 <h2 id="bookkeeping-records">Bookkeeping records</h2>
-<p>Every composite item (<code>Hash</code>, <code>Sorted Set</code>, <code>List</code> or <code>Set</code>) created by <code>SableDb</code>, also creates a record in the <code>bookkeeping</code> "table".
+<p>Every composite item (<code>Hash</code>, <code>Sorted Set</code>, <code>List</code> or <code>Set</code>) created by <code>SableDB</code>, also creates a record in the <code>bookkeeping</code> "table".
 A bookkeeping records keeps track of the composite item unique ID + its type (which is needed by the <a href="/sabledb/design/eviction/#composite-item-has-been-overwritten">data eviction job</a>)</p>
 <p>The <code>bookkeeping</code> record is encoded as follows:</p>
 <div class="highlight"><pre><span></span><code>Bookkeeping:
