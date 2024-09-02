@@ -2,7 +2,6 @@ pub mod commands;
 pub mod io;
 pub mod metadata;
 pub mod net;
-pub mod raft;
 pub mod replication;
 pub mod server;
 pub mod storage;

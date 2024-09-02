@@ -210,11 +210,11 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
         }
         Value::SimpleString(ref s) => {
             print_sequence(seq);
-            println_value(format!(r#""{}""#, s));
+            println_value(s);
         }
         Value::BulkString(ref s) => {
             print_sequence(seq);
-            println_value(format!(r#""{}""#, String::from_utf8_lossy(s)));
+            println_value(String::from_utf8_lossy(s));
         }
         Value::Map(ref m) => {
             print_sequence(seq);
@@ -248,10 +248,10 @@ fn print_response_pretty(value: &Value, indent: usize, seq: Option<usize>) {
         }
         Value::VerbatimString { format: _, text } => {
             print_sequence(seq);
-            println_value(format!(r#""{}""#, text));
+            println_value(text);
         }
         Value::ServerError(e) => {
-            println_value(format!(r#""{:?}""#, e));
+            println_value(format!("{:?}", e));
         }
     }
 }

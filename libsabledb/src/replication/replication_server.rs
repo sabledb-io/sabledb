@@ -6,7 +6,6 @@ use crate::utils;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
-    raft::{Raft, RaftNode, RaftNodeFlags},
     replication::{
         BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse, ResponseCommon,
         ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
@@ -30,7 +29,6 @@ pub struct ReplicationServer {}
 lazy_static::lazy_static! {
     static ref REPLICATION_THREADS: AtomicUsize = AtomicUsize::new(0);
     static ref STOP_FLAG: AtomicBool = AtomicBool::new(false);
-    static ref RAFT: Raft = Raft::default();
 }
 
 /// Notify the replication threads to stop and wait for them to terminate
