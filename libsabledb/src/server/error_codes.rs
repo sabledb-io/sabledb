@@ -60,6 +60,8 @@ pub enum SableError {
     Corrupted(String),
     #[error("RedisError. {0}")]
     RedisError(#[from] redis::RedisError),
+    #[error("Parsing error. {0}")]
+    ParseError(String),
 }
 
 #[allow(dead_code)]

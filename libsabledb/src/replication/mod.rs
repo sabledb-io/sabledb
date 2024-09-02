@@ -12,7 +12,7 @@ pub use crate::SableError;
 pub use cluster_manager::NodeProperties;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
-pub use replication_config::{ReplicationConfig, ServerRole};
+pub use replication_config::ServerRole;
 pub use replication_messages::{
     ReplicationRequest, ReplicationResponse, RequestCommon, ResponseCommon, ResponseReason,
 };

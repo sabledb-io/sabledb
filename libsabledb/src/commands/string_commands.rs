@@ -1566,13 +1566,18 @@ mod test {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_write_on_replica() {
         // create a WRITE command and try to execute it against replica server
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
-            client.inner().server_inner_state().set_replica();
+            client
+                .inner()
+                .server_inner_state()
+                .persistent_state()
+                .set_role(crate::replication::ServerRole::Replica);
             let cmd = Rc::new(RedisCommand::for_test(vec![
                 "set",
                 "test_write_on_replica",

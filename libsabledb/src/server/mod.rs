@@ -2,7 +2,7 @@ mod client;
 mod client_state;
 mod cron_thread;
 mod error_codes;
-mod node_id;
+mod node_state;
 #[allow(clippy::module_inception)]
 mod server;
 mod server_options;
@@ -17,7 +17,7 @@ pub use client::*;
 pub use client_state::*;
 pub use cron_thread::*;
 pub use error_codes::*;
-pub use node_id::*;
+pub use node_state::*;
 pub use server::*;
 pub use server_options::*;
 pub use telemetry::*;

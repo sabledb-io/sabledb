@@ -1,7 +1,8 @@
 use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
-use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
+use crate::{server::ServerOptions, Server};
 
+use crate::utils;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
@@ -12,7 +13,6 @@ use crate::{
     },
     SableError, StorageAdapter,
 };
-use crate::{utils, NodeId};
 
 use num_format::{Locale, ToFormattedString};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -183,7 +183,7 @@ impl ReplicationServer {
         }
 
         if let Some(replica_id) = replica_id {
-            let current_node_id = NodeId::current();
+            let current_node_id = Server::state().persistent_state().id();
             if let Err(e) = cluster_manager::add_replica(options, replica_id.clone()) {
                 tracing::warn!(
                     "Error while associating replica {} with primary {}. {:?}",
@@ -386,13 +386,17 @@ impl ReplicationServer {
         options: ServerOptions,
         store: StorageAdapter,
     ) -> Result<(), SableError> {
-        let repl_config = options.load_replication_config();
-        let listener = TcpListener::bind(repl_config.address.clone())
+        let listener = TcpListener::bind(options.general_settings.private_address.clone())
             .await
-            .unwrap_or_else(|_| panic!("failed to bind address {}", repl_config.address));
+            .unwrap_or_else(|_| {
+                panic!(
+                    "failed to bind address {}",
+                    &options.general_settings.private_address
+                )
+            });
         info!(
             "Replication server started on address: {}",
-            repl_config.address
+            &options.general_settings.private_address
         );
         loop {
             let (socket, addr) = listener.accept().await?;

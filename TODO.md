@@ -9,6 +9,7 @@ Shard management:
 
 - [x] Update the node info after each successful operation (mainly the fields: `last_txn_id` + `last_updated`)
 - [ ] Add random check interval per replica for checking whether the primary is alive or not
+- [ ] When losing connection with the primary, remove itself from the `<primary_node_id>_replicas` entry
 - [ ] When calling `REPLICAOF NO ONE` make sure to:
     - [ ] Update the cluster database with the new role
     - [ ] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)

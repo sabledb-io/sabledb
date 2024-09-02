@@ -1,4 +1,4 @@
-use crate::{replication::ServerRole, storage::StorageMetadata};
+use crate::{replication::ServerRole, storage::StorageMetadata, Server};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,7 +16,6 @@ lazy_static::lazy_static! {
 
 #[derive(Clone, Default, Debug)]
 pub struct ReplicationTelemetry {
-    pub role: ServerRole,
     pub last_change_sequence_number: u64,
     pub replica_telemetry: ReplicaTelemetry,
     pub primary_telemetry: PrimaryTelemetry,
@@ -34,26 +33,13 @@ pub struct PrimaryTelemetry {
 }
 
 impl ReplicationTelemetry {
-    /// Replication: set this instance role
-    pub fn set_role(role: ServerRole) {
-        REPLICATION_INFO.write().expect("poisoned mutex").role = role;
-    }
-
-    /// Return the current node's role
-    pub fn role() -> ServerRole {
-        REPLICATION_INFO
-            .read()
-            .expect("poisoned mutex")
-            .role
-            .clone()
-    }
-
     /// Replication: update the last change in the database
     pub fn set_last_change(seq_num: u64) {
         let mut d = REPLICATION_INFO.write().expect("poisoned mutex");
         d.last_change_sequence_number = seq_num;
 
-        match d.role {
+        let role = Server::state().persistent_state().role();
+        match role {
             ServerRole::Primary => {
                 for info in &mut d.primary_telemetry.replicas.values_mut() {
                     info.distance_from_primary =
@@ -93,14 +79,20 @@ impl std::fmt::Display for ReplicationTelemetry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut lines = Vec::<String>::new();
 
+        let node_role = Server::state().persistent_state().role();
         lines.push("# Replication".to_string());
-        lines.push(format!("role: {:?}", self.role));
+        lines.push(format!("role: {}", node_role));
+        lines.push(format!(
+            "node_id: {}",
+            Server::state().persistent_state().id()
+        ));
 
         lines.push(format!(
             "last_db_update_sequence_number: {}",
             self.last_change_sequence_number
         ));
-        match self.role {
+
+        match node_role {
             ServerRole::Primary => {
                 lines.push(format!(
                     "connected_replicas: {}",
@@ -111,7 +103,12 @@ impl std::fmt::Display for ReplicationTelemetry {
                     lines.push(format!("replica: {}, {:?}", replica_id, info));
                 }
             }
-            ServerRole::Replica => {}
+            ServerRole::Replica => {
+                lines.push(format!(
+                    "primary_node_id: {}",
+                    Server::state().persistent_state().primary_node_id()
+                ));
+            }
         }
         let as_str = lines.join("\n");
         write!(f, "{}", as_str)

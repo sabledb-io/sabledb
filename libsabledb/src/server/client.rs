@@ -358,8 +358,11 @@ impl Client {
     ) -> PreHandleCommandResult {
         if !client_state.active() {
             PreHandleCommandResult::ClientKilled
-        } else if client_state.server_inner_state().is_replica()
-            && command.metadata().is_write_command()
+        } else if command.metadata().is_write_command()
+            && client_state
+                .server_inner_state()
+                .persistent_state()
+                .is_replica()
         {
             PreHandleCommandResult::WriteInReadOnlyReplica
         } else if client_state.is_txn_state_multi() {

@@ -1,5 +1,5 @@
 use libsabledb::{
-    NodeId, SableError, Server, ServerOptions, Transport, WorkerManager, WorkerMessage,
+    utils::IpPort, SableError, Server, ServerOptions, Transport, WorkerManager, WorkerMessage,
 };
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -45,9 +45,7 @@ fn main() -> Result<(), SableError> {
     info!("TLS enabled: {:?}", options.use_tls());
 
     // Allocate / load NodeID for this instance
-    NodeId::initialise(&options);
-    info!("NodeID is set to: {}", NodeId::current());
-
+    let options_cloned = options.clone();
     let address = options.general_settings.public_address.clone();
     let server = Arc::new(Server::new(options, store.clone(), workers_count)?);
     info!("Successfully created {} workers", workers_count);
@@ -57,7 +55,26 @@ fn main() -> Result<(), SableError> {
         .unwrap_or_else(|_| panic!("failed to bind address {}", address));
     info!("Server started on port address: {}", address);
 
+    // load the persistent state of this server from the disk
     let server_state_clone = Server::state();
+    server_state_clone
+        .persistent_state()
+        .initialise(&options_cloned);
+    info!(
+        "NodeID is set to: {}",
+        server_state_clone.persistent_state().id()
+    );
+
+    // If this node is a replica, trigger a "REPLICAOF" command
+    if server_state_clone.persistent_state().is_replica() {
+        let addr: IpPort = server_state_clone
+            .persistent_state()
+            .primary_address()
+            .parse()?;
+        info!("Restoring server replica mode (Primary: {:?})", addr);
+        Server::state().connect_to_primary_sync(addr.ip.clone(), addr.port)?;
+    }
+
     let _ = ctrlc::set_handler(move || {
         info!("Received Ctrl-C");
         server_state_clone.shutdown();

@@ -1,4 +1,4 @@
-pub mod file;
+pub mod file_utils;
 pub mod request_parser;
 pub mod resp_builder_v2;
 pub mod resp_response_parser_v2;
@@ -631,6 +631,29 @@ pub fn choose_multiple_values(
     chosen.sort();
     let chosen: VecDeque<usize> = chosen.iter().copied().collect();
     Ok(chosen)
+}
+
+#[derive(Debug)]
+pub struct IpPort {
+    pub ip: String,
+    pub port: u16,
+}
+
+impl FromStr for IpPort {
+    type Err = SableError;
+
+    /// Parse IP:PORT -> IpPort
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(SableError::ParseError("Expected format IP:PORT".into()));
+        }
+        let port = u16::from_str(parts[1]).map_err(|e| SableError::ParseError(e.to_string()))?;
+        Ok(IpPort {
+            ip: parts[0].to_string(),
+            port,
+        })
+    }
 }
 
 pub trait ToBytes {

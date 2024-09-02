@@ -1,4 +1,4 @@
-use crate::{FromU8Reader, NodeId, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
+use crate::{FromU8Reader, Server, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 
 /// Message types (requests)
@@ -52,7 +52,7 @@ impl RequestCommon {
     pub fn new() -> Self {
         RequestCommon {
             req_id: 0,
-            node_id: NodeId::current(),
+            node_id: Server::state().persistent_state().id(),
         }
     }
 
@@ -86,7 +86,7 @@ impl ResponseCommon {
     pub fn new(request: &RequestCommon) -> Self {
         ResponseCommon {
             req_id: request.request_id(),
-            node_id: NodeId::current(),
+            node_id: Server::state().persistent_state().id(),
             reason: ResponseReason::Invalid,
         }
     }

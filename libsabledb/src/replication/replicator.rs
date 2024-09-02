@@ -1,11 +1,11 @@
 use crate::replication::ReplicationServer;
-use crate::server::ReplicationTelemetry;
 
 #[allow(unused_imports)]
 use crate::{
     replication::{replication_thread_stop_all, ReplClientCommand, ReplicationClient, ServerRole},
     server::{Client, SableError, ServerOptions, Telemetry, WorkerContext},
     storage::StorageAdapter,
+    Server,
 };
 
 use tokio::sync::mpsc::Receiver as TokioReciever;
@@ -171,18 +171,10 @@ impl Replicator {
     /// Replication thread can exit in 2 ways only:
     /// - The server terminated
     /// - User issued a "replicaof no one" command which basically changes the server role to primary
-    async fn replica_loop(
-        &mut self,
-        primary_addr: Option<(String, u16)>,
-    ) -> Result<ReplicatorStateResult, SableError> {
-        let mut replication_config = self.server_options.load_replication_config();
-        if let Some((primary_ip, primary_port)) = primary_addr {
-            replication_config.address = format!("{}:{}", primary_ip, primary_port);
-        }
-
+    async fn replica_loop(&mut self) -> Result<ReplicatorStateResult, SableError> {
         tracing::info!(
-            "Running replica loop using config: {:?}",
-            replication_config
+            "Connecting to primary at: {}",
+            Server::state().persistent_state().primary_address()
         );
 
         let replication_client = ReplicationClient::default();
@@ -191,7 +183,6 @@ impl Replicator {
         let tx = replication_client
             .run(self.server_options.clone(), self.store.clone())
             .await?;
-        ReplicationTelemetry::set_role(ServerRole::Replica);
 
         loop {
             match self.rx_channel.recv().await {
@@ -229,13 +220,11 @@ impl Replicator {
 
     /// Run this loop when the server is running a "primary" mode
     async fn primary_loop(&mut self) -> Result<ReplicatorStateResult, SableError> {
-        let replication_config = self.server_options.load_replication_config();
-        tracing::info!(
-            "Running primary loop using config: {:?}",
-            replication_config
-        );
+        tracing::info!("Running primary loop");
         let server = ReplicationServer::default();
-        ReplicationTelemetry::set_role(ServerRole::Primary);
+
+        // Change the node state to primary and clear any primary node ID
+        Server::state().persistent_state().set_primary_node_id(None);
 
         loop {
             tokio::select! {
@@ -268,16 +257,19 @@ impl Replicator {
     async fn main_loop(&mut self) -> Result<(), SableError> {
         tracing::info!("Started");
 
-        let replication_config = self.server_options.load_replication_config();
-        let mut result = match &replication_config.role {
+        let mut result = match Server::state().persistent_state().role() {
             ServerRole::Primary => self.primary_loop().await?,
-            ServerRole::Replica => self.replica_loop(None).await?,
+            ServerRole::Replica => self.replica_loop().await?,
         };
 
         loop {
             result = match result {
                 ReplicatorStateResult::ConnectToPrimary((ip, port)) => {
-                    self.replica_loop(Some((ip, port))).await?
+                    Server::state()
+                        .persistent_state()
+                        .set_primary_address(format!("{}:{}", ip, port));
+                    Server::state().persistent_state().save();
+                    self.replica_loop().await?
                 }
                 ReplicatorStateResult::PrimaryMode => {
                     tracing::info!("Switching to primary mode");

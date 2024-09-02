@@ -1,7 +1,4 @@
-use crate::{
-    ini_bool, ini_usize, parse_number, replication::ReplicationConfig, SableError,
-    StorageOpenParams,
-};
+use crate::{ini_bool, ini_usize, parse_number, SableError, StorageOpenParams};
 use ini::Ini;
 use std::path::PathBuf;
 
@@ -117,11 +114,6 @@ pub struct ServerOptions {
 impl ServerOptions {
     pub fn use_tls(&self) -> bool {
         self.general_settings.key.is_some() && self.general_settings.cert.is_some()
-    }
-
-    /// Load the replication configuration from disk
-    pub fn load_replication_config(&self) -> ReplicationConfig {
-        ReplicationConfig::load(self)
     }
 
     /// Read values from INI configuration file and return `ServerOptions` structure

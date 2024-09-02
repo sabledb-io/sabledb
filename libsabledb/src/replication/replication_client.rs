@@ -4,7 +4,7 @@ use crate::{
     replication::{
         cluster_manager, cluster_manager::NodeProperties, StorageUpdates, StorageUpdatesIterItem,
     },
-    BatchUpdate, SableError, StorageAdapter, U8ArrayReader,
+    BatchUpdate, SableError, Server, StorageAdapter, U8ArrayReader,
 };
 use crate::{
     replication::{
@@ -151,6 +151,7 @@ impl ReplicationClient {
                             RequestChangesResult::ExitThread => {
                                 info!("Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
+                                Server::state().persistent_state().set_primary_node_id(None);
                                 return; // leave the thread
                             }
                             RequestChangesResult::FullSync => {
@@ -165,6 +166,9 @@ impl ReplicationClient {
                     }
                 }
                 info!("Replication thread now exiting");
+
+                // Change the state back to primary
+                Server::state().persistent_state().set_primary_node_id(None);
             });
         });
 
@@ -173,16 +177,13 @@ impl ReplicationClient {
         Ok(tx)
     }
 
-    fn connect_to_primary(options: &ServerOptions) -> Result<TcpStream, SableError> {
-        let repl_config = options.load_replication_config();
-        info!("Connecting to primary at: {}", repl_config.address);
+    fn connect_to_primary(_options: &ServerOptions) -> Result<TcpStream, SableError> {
+        let primary_address = Server::state().persistent_state().primary_address();
+        info!("Connecting to primary at: {}", primary_address);
 
-        let addr = repl_config.address.parse::<SocketAddr>()?;
+        let addr = primary_address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect(addr)?;
-        info!(
-            "Successfully connected to primary at: {}",
-            repl_config.address
-        );
+        info!("Successfully connected to primary at: {}", primary_address);
         Ok(stream)
     }
 
@@ -330,12 +331,18 @@ impl ReplicationClient {
                     ReplicationResponse::Ok(common) => {
                         // fall through
                         info!("JoinShard Ok. Primary Node ID: {}", common.node_id());
+                        // Store the primary's node ID (this also changes the state to Replica)
+                        Server::state()
+                            .persistent_state()
+                            .set_primary_node_id(Some(common.node_id().to_string()));
                         JoinShardResult::Ok
                     }
                     ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
                         // do a full sync
                         info!("Failed to join the shard! {}", common);
+                        // Reset the node's state back to primary
+                        Server::state().persistent_state().set_primary_node_id(None);
                         JoinShardResult::Err
                     }
                 }

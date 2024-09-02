@@ -1,8 +1,4 @@
-use crate::{
-    replication::{ReplicationConfig, ServerRole},
-    utils::TimeUtils,
-    NodeId, SableError, ServerOptions,
-};
+use crate::{replication::ServerRole, utils::TimeUtils, SableError, Server, ServerOptions};
 use redis::Commands;
 use std::collections::BTreeMap;
 use std::sync::RwLock;
@@ -29,14 +25,16 @@ pub struct NodeProperties {
 
 impl NodeProperties {
     pub fn current(options: &ServerOptions) -> Self {
-        let repl_info = ReplicationConfig::load(options);
         let mut properties = BTreeMap::<&str, String>::new();
-        properties.insert(PROP_NODE_ID, NodeId::current());
+        properties.insert(PROP_NODE_ID, Server::state().persistent_state().id());
         properties.insert(
             PROP_NODE_ADDRESS,
             options.general_settings.private_address.clone(),
         );
-        properties.insert(PROP_ROLE, format!("{}", repl_info.role));
+        properties.insert(
+            PROP_ROLE,
+            format!("{}", Server::state().persistent_state().role()),
+        );
         properties.insert(
             PROP_LAST_UPDATED,
             format!("{}", TimeUtils::epoch_micros().unwrap_or_default()),
@@ -48,7 +46,7 @@ impl NodeProperties {
 
     /// Write this object to the cluster manager database
     pub fn put(&self, conn: &mut redis::Client) -> Result<(), SableError> {
-        let cur_node_id = NodeId::current();
+        let cur_node_id = Server::state().persistent_state().id();
         let props: Vec<(String, String)> = self
             .properties
             .iter()
@@ -146,7 +144,7 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
         return Ok(());
     };
 
-    let cur_node_id = NodeId::current();
+    let cur_node_id = Server::state().persistent_state().id();
     let curts = TimeUtils::epoch_micros().unwrap_or_default();
     tracing::debug!(
         "Updating cluster manager property: '{}:({} => {})'",
@@ -168,7 +166,7 @@ pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(
     let Some(client) = &mut conn.client else {
         return Ok(());
     };
-    let cur_node_id = NodeId::current();
+    let cur_node_id = Server::state().persistent_state().id();
     let mut conn = client.get_connection()?;
     tracing::debug!(
         "Associating node({}) as replica for ({})",
@@ -189,7 +187,7 @@ pub fn remove_replica(options: &ServerOptions, replica_node_id: String) -> Resul
     let Some(client) = &mut conn.client else {
         return Ok(());
     };
-    let cur_node_id = NodeId::current();
+    let cur_node_id = Server::state().persistent_state().id();
     let mut conn = client.get_connection()?;
     tracing::debug!(
         "Disassociating node({}) from primary ({})",

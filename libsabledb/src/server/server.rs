@@ -4,10 +4,8 @@ use crate::server::{
 };
 use crate::{
     commands::ClientNextAction,
-    replication::{
-        ReplicationConfig, ReplicationWorkerMessage, Replicator, ReplicatorContext, ServerRole,
-    },
-    Cron, CronContext, CronMessage, RedisCommand, StorageAdapter,
+    replication::{ReplicationWorkerMessage, Replicator, ReplicatorContext},
+    Cron, CronContext, CronMessage, RedisCommand, ServerPersistentState, StorageAdapter,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -15,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::RwLock as StdRwLock;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    //atomic::{AtomicBool, Ordering},
     Arc,
 };
 use tokio::sync::mpsc::Receiver as TokioReceiver;
@@ -100,10 +98,11 @@ pub struct ServerState {
     blocked_clients: TokioRwLock<BlockedClients>,
     telemetry: Arc<StdRwLock<Telemetry>>,
     opts: ServerOptions,
-    role_primary: AtomicBool,
     replicator_context: Option<Arc<ReplicatorContext>>,
     evictor_context: Option<Arc<CronContext>>,
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
+    /// This state is persisted to the disk
+    persistent_state: ServerPersistentState,
 }
 
 pub struct Server {
@@ -122,10 +121,10 @@ impl ServerState {
             telemetry: Arc::new(StdRwLock::<Telemetry>::default()),
             blocked_clients: TokioRwLock::<BlockedClients>::default(),
             opts: ServerOptions::default(),
-            role_primary: AtomicBool::new(true),
             replicator_context: None,
             evictor_context: None,
             worker_tx_channels: DashMap::<std::thread::ThreadId, WorkerSender>::new(),
+            persistent_state: ServerPersistentState::new(),
         }
     }
 
@@ -145,12 +144,6 @@ impl ServerState {
 
     pub fn set_server_options(mut self, opts: ServerOptions) -> Self {
         self.opts = opts;
-        let repl_config = self.opts.load_replication_config();
-        let _ = repl_config.save(&self.opts);
-        match repl_config.role {
-            ServerRole::Primary => self.set_primary(),
-            ServerRole::Replica => self.set_replica(),
-        }
         self
     }
 
@@ -180,26 +173,6 @@ impl ServerState {
 
     pub fn options(&self) -> &ServerOptions {
         &self.opts
-    }
-
-    /// Is the server role is primary?
-    pub fn is_primary(&self) -> bool {
-        self.role_primary.load(Ordering::Relaxed)
-    }
-
-    /// Is the server role is replica?
-    pub fn is_replica(&self) -> bool {
-        !self.is_primary()
-    }
-
-    pub fn set_replica(&self) {
-        tracing::info!("Server marked as Replica");
-        self.role_primary.store(false, Ordering::Relaxed);
-    }
-
-    pub fn set_primary(&self) {
-        tracing::info!("Server marked as Primary");
-        self.role_primary.store(true, Ordering::Relaxed);
     }
 
     /// Remove `client_id` from the blocking list queues
@@ -311,28 +284,40 @@ impl ServerState {
     pub async fn connect_to_primary(&self, address: String, port: u16) -> Result<(), SableError> {
         if let Some(repliction_context) = &self.replicator_context {
             // Update the configuration file first
-            let repl_config = ReplicationConfig::new_replica(format!("{}:{}", address, port));
-            repl_config.save(self.options())?;
-
+            Server::state()
+                .persistent_state()
+                .set_primary_address(format!("{}:{}", address, port));
+            Server::state().persistent_state().save();
             repliction_context
                 .send(ReplicationWorkerMessage::ConnectToPrimary((address, port)))
                 .await?;
-            self.set_replica();
+        }
+        Ok(())
+    }
+
+    // Connect to primary instance
+    pub fn connect_to_primary_sync(&self, address: String, port: u16) -> Result<(), SableError> {
+        if let Some(repliction_context) = &self.replicator_context {
+            // Update the configuration file first
+            Server::state()
+                .persistent_state()
+                .set_primary_address(format!("{}:{}", address, port));
+            Server::state().persistent_state().save();
+            repliction_context
+                .send_sync(ReplicationWorkerMessage::ConnectToPrimary((address, port)))?;
         }
         Ok(())
     }
 
     // Change the role of this instance to primary
     pub async fn switch_role_to_primary(&self) -> Result<(), SableError> {
-        let repl_config =
-            ReplicationConfig::new_replica(self.options().general_settings.private_address.clone());
-        repl_config.save(self.options())?;
+        Server::state().persistent_state().set_primary_node_id(None);
+        Server::state().persistent_state().save();
 
         if let Some(repliction_context) = &self.replicator_context {
             repliction_context
                 .send(ReplicationWorkerMessage::PrimaryMode)
                 .await?;
-            self.set_primary();
         }
         Ok(())
     }
@@ -364,6 +349,10 @@ impl ServerState {
             evictor_context.send_sync(message)?;
         }
         Ok(())
+    }
+
+    pub fn persistent_state(&self) -> &ServerPersistentState {
+        &self.persistent_state
     }
 }
 
