@@ -21,7 +21,7 @@ pub use server::{BlockClientResult, Server, ServerState};
 pub use server::{Worker, WorkerContext, WorkerMessage};
 pub use storage::{BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb};
 pub use utils::resp_builder_v2::RespBuilderV2;
-pub use utils::resp_response_parser_v2::{ParseResult, RedisObject, RespResponseParserV2};
+pub use utils::resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
 pub use utils::*;
 
 /// Parse string into `usize` with suffix support
@@ -335,7 +335,7 @@ mod tests {
                 )
                 .unwrap()
                 {
-                    ParseResult::Ok((_, obj)) => {
+                    ResponseParseResult::Ok((_, obj)) => {
                         return Ok(obj);
                     }
                     _ => {

@@ -84,7 +84,7 @@ impl ReplicationClient {
                             tracing::error!("Failed to connect to primary. {:?}", e);
 
                             // Check whether we should attempt to reconnect
-                            let _ = cluster_manager::fail_over_if_needed(&options);
+                            let _ = cluster_manager::fail_over_if_needed(&options, &store).await;
                             match Self::check_command_channel(&mut rx) {
                                 CheckShutdownResult::Terminate => {
                                     info!(
@@ -132,7 +132,7 @@ impl ReplicationClient {
                     // and store them in our database
                     let mut request_id = 0u64;
                     loop {
-                        let _ = cluster_manager::fail_over_if_needed(&options);
+                        let _ = cluster_manager::fail_over_if_needed(&options, &store).await;
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =

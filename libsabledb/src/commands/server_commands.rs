@@ -5,6 +5,7 @@ use crate::{
     commands::{HandleCommandResult, StringCommands},
     metadata::{CommonValueMetadata, KeyType},
     parse_string_to_number,
+    replication::cluster_manager,
     server::ClientState,
     storage::StringsDb,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
@@ -113,6 +114,12 @@ impl ServerCommands {
         let builder = RespBuilderV2::default();
         match (first_arg.as_str(), second_arg.as_str()) {
             ("no", "one") => {
+                // Remove ourself from the cluster database, when a new replicas will join
+                // this instance we register itself with the database
+                cluster_manager::delete_self(
+                    client_state.server_inner_state().options(),
+                    client_state.database(),
+                )?;
                 client_state
                     .server_inner_state()
                     .switch_role_to_primary()

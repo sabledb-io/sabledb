@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use libsabledb::{
-    BytesMutUtils, ParseResult, RedisObject, RespBuilderV2, RespResponseParserV2, SableError,
+    BytesMutUtils, RedisObject, RespBuilderV2, RespResponseParserV2, ResponseParseResult,
+    SableError,
 };
 use pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddrV4;
@@ -241,8 +242,8 @@ impl RedisClient {
     ) -> Result<RedisObject, SableError> {
         loop {
             match RespResponseParserV2::parse_response(&self.read_buffer)? {
-                ParseResult::NeedMoreData => self.read_more_bytes(stream).await?,
-                ParseResult::Ok((consume, obj)) => {
+                ResponseParseResult::NeedMoreData => self.read_more_bytes(stream).await?,
+                ResponseParseResult::Ok((consume, obj)) => {
                     let _ = self.read_buffer.split_to(consume);
                     return Ok(obj);
                 }

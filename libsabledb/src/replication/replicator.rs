@@ -225,6 +225,7 @@ impl Replicator {
 
         // Change the node state to primary and clear any primary node ID
         Server::state().persistent_state().set_primary_node_id(None);
+        Server::state().persistent_state().save();
 
         loop {
             tokio::select! {

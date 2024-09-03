@@ -62,6 +62,8 @@ pub enum SableError {
     RedisError(#[from] redis::RedisError),
     #[error("Parsing error. {0}")]
     ParseError(String),
+    #[error("Internal error. {0}")]
+    InternalError(String),
 }
 
 #[allow(dead_code)]

@@ -3,14 +3,16 @@ use crate::replication::{
     PROP_ROLE,
 };
 use crate::{
-    replication::{ClusterDB, ServerRole},
-    utils::TimeUtils,
-    SableError, Server, ServerOptions,
+    replication::{cluster_database::LockResult, ClusterDB, ServerRole},
+    utils::{RedisObject, RespResponseParserV2, ResponseParseResult, TimeUtils},
+    RedisCommand, SableError, Server, ServerOptions, StorageAdapter,
 };
 use num_format::{Locale, ToFormattedString};
 use rand::Rng;
 use redis::Commands;
 use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 lazy_static::lazy_static! {
@@ -157,22 +159,132 @@ pub fn remove_this_from_primary(options: &ServerOptions) -> Result<(), SableErro
     db.remove_this_from_primary()
 }
 
+/// Update the cluster database that this node is a primary
+pub fn delete_self(options: &ServerOptions, _store: &StorageAdapter) -> Result<(), SableError> {
+    let current_node_id = Server::state().persistent_state().id();
+    tracing::info!(
+        "Deleting node: {} from the cluster database",
+        current_node_id
+    );
+    let db = ClusterDB::with_options(options);
+
+    // if we are associated with a primary -> remove ourself
+    let _ = db.remove_this_from_primary();
+    db.delete_self()
+}
+
 /// Check and perform failover is needed
-pub fn fail_over_if_needed(options: &ServerOptions) -> Result<(), SableError> {
-    if check_is_alive(options)? {
+pub async fn fail_over_if_needed(
+    options: &ServerOptions,
+    store: &StorageAdapter,
+) -> Result<(), SableError> {
+    if is_primary_alive(options)? {
         return Ok(());
     }
 
-    // TODO: do failover here
+    let db = ClusterDB::with_options(options);
+
+    // Try to lock the primary, if we succeeded in doing this,
+    // this `lock_primary` returns the value of the lock which
+    // is used later to delete the lock
+    tracing::info!("Trying to perform a failover...");
+    let lock_created = match db.lock_primary()? {
+        LockResult::Ok => {
+            tracing::info!("Successfully created lock");
+            true
+        }
+        LockResult::AlreadyExist(node_id) => {
+            tracing::info!("Failover already started by Node {node_id}");
+            false
+        }
+    };
+
+    if lock_created {
+        // This instance will be the orchestrator of the failover
+        tracing::info!("Listing replicas...");
+        let members = db.list_replicas()?;
+        tracing::info!("Found {:?}", members);
+
+        let current_node_id = Server::state().persistent_state().id();
+
+        // filter this instance
+        let members: Vec<(&String, &u64)> = members
+            .iter()
+            .filter_map(|(node_id, last_updated)| {
+                if node_id.ne(&current_node_id) {
+                    Some((node_id, last_updated))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        tracing::info!(
+            "Remaining replicas after removing self from the list: {:?}",
+            members
+        );
+
+        if members.is_empty() {
+            // No other replicas, disconnect this node from the primary, and switch to primary node
+            tracing::info!("This node is the single replica. Switching to primary mode");
+            if !process_command_internal(
+                options,
+                store,
+                "REPLICAOF NO ONE",
+                RedisObject::Status("OK".into()),
+            )
+            .await?
+            {
+                return Err(SableError::OtherError(
+                    "Failed to execute internal command: REPLICAOF NO ONE".into(),
+                ));
+            }
+
+            // Perform a database cleanup and change this node to Primary
+            tracing::info!("Deleting Primary from the cluster database");
+            db.delete_primary()?;
+            tracing::info!("Success");
+        } else {
+            // TODO: we have more replicas, choose the best replica and make it the primary
+        }
+    } else {
+        // Some other instance is coordinating the failover
+        // TODO: wait for the command for the coordinator replica
+    }
     Ok(())
 }
 
 ///===------------------------------
 /// Private API calls
 ///===------------------------------
+async fn process_command_internal(
+    _options: &ServerOptions,
+    store: &StorageAdapter,
+    command: &str,
+    expected_output: RedisObject,
+) -> Result<bool, SableError> {
+    let Ok(cmd) = RedisCommand::from_str(command) else {
+        return Err(SableError::InternalError(
+            "Failed to construct command".into(),
+        ));
+    };
+
+    // Instruct this instance to switch role to primary
+    let response = match RespResponseParserV2::parse_response(
+        &Server::process_internal_command(Rc::new(cmd), store).await?,
+    )? {
+        ResponseParseResult::Ok((_, response)) => response,
+        ResponseParseResult::NeedMoreData => {
+            return Err(SableError::ParseError(
+                "Failed to process internal command (NeedMoreData)".into(),
+            ));
+        }
+    };
+    Ok(response == expected_output)
+}
 
 /// Check that the primary is alive
-fn check_is_alive(options: &ServerOptions) -> Result<bool, SableError> {
+fn is_primary_alive(options: &ServerOptions) -> Result<bool, SableError> {
     if !check_us_passed_since!(LAST_HTBT_CHECKED_TS, 1_500_000) {
         return Ok(true);
     }
@@ -184,7 +296,7 @@ fn check_is_alive(options: &ServerOptions) -> Result<bool, SableError> {
     let db = ClusterDB::with_options(options);
 
     // get the primary last updated timestamp from the database
-    let primary_heartbeat_ts = db.primary_last_updated()?;
+    let primary_heartbeat_ts = db.primary_last_updated()?.unwrap_or(0);
     let primary_node_id = Server::state().persistent_state().primary_node_id();
     let curr_ts = TimeUtils::epoch_micros().unwrap_or(0);
 

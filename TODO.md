@@ -11,7 +11,7 @@ Shard management:
 - [x] Add random check interval per replica for checking whether the primary is alive or not
 - [ ] When losing connection with the primary, remove itself from the `<primary_node_id>_replicas` entry
 - [ ] When calling `REPLICAOF NO ONE` make sure to:
-    - [ ] Update the cluster database with the new role
+    - [x] Update the cluster database with the new role
     - [ ] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
 
 ## Auto-Failover
@@ -19,9 +19,9 @@ Shard management:
 When a replica detects that its primary did not update its `last_updated` field in over than `N` seconds (where `N` is a random number for each replica),
 it should trigger an auto-faileover process:
 
-- [ ] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
+- [x] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
 - [ ] Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
-- [ ] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPO`P) with the correct `REPLICAOF` command to execute
+- [ ] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPOP`) with the correct `REPLICAOF` command to execute
 - [ ] Delete the `<old_primary>` HASH key from the database
 - [ ] Delete the `<old_primary>_replicas` SET key from the database
 - [ ] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)

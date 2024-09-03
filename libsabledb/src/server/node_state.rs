@@ -70,6 +70,18 @@ impl ServerPersistentState {
             },
             Ordering::Relaxed,
         );
+
+        if role == ServerRole::Primary {
+            // Clear replica related values
+            self.private_primary_address
+                .write()
+                .expect("poisoned mutex")
+                .clear();
+            self.primary_node_id
+                .write()
+                .expect("poisoned mutex")
+                .clear();
+        }
     }
 
     #[inline]
@@ -124,6 +136,10 @@ impl ServerPersistentState {
         } else {
             self.set_role(ServerRole::Primary);
             self.primary_node_id
+                .write()
+                .expect("poisoned mutex")
+                .clear();
+            self.private_primary_address
                 .write()
                 .expect("poisoned mutex")
                 .clear();

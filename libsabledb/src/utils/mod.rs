@@ -16,7 +16,7 @@ pub use crate::{
 };
 pub use request_parser::*;
 pub use resp_builder_v2::RespBuilderV2;
-pub use resp_response_parser_v2::RedisObject;
+pub use resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
 pub use shard_locker::*;
 pub use stopwatch::*;
 
@@ -47,7 +47,7 @@ impl StringUtils {
         buffer.windows(what.len()).position(|window| window == what)
     }
 
-    /// Split `buffer` by whitespace
+    /// Split `buffer` by white-space
     pub fn split(buffer: &mut BytesMut) -> Result<Vec<BytesMut>, ParserError> {
         let mut word = BytesMut::with_capacity(1024);
         let mut words = Vec::<BytesMut>::new();

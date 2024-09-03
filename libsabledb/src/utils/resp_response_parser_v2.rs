@@ -2,7 +2,7 @@ use crate::{BytesMutUtils, SableError, StringUtils};
 use bytes::BytesMut;
 
 #[derive(PartialEq, Eq, Debug)]
-pub enum ParseResult {
+pub enum ResponseParseResult {
     NeedMoreData,
     /// How many bytes consumed to form the RedisObject + the object
     Ok((usize, RedisObject)),
@@ -80,9 +80,9 @@ impl RedisObject {
 pub struct RespResponseParserV2 {}
 
 impl RespResponseParserV2 {
-    pub fn parse_response(buffer: &[u8]) -> Result<ParseResult, SableError> {
+    pub fn parse_response(buffer: &[u8]) -> Result<ResponseParseResult, SableError> {
         if buffer.is_empty() {
-            return Ok(ParseResult::NeedMoreData);
+            return Ok(ResponseParseResult::NeedMoreData);
         }
 
         // buffer contains something
@@ -92,10 +92,10 @@ impl RespResponseParserV2 {
                 let mut consume = 1usize;
                 let buffer = &buffer[1..];
                 let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
+                    return Ok(ResponseParseResult::NeedMoreData);
                 };
                 consume = consume.saturating_add(crlf_pos + 2);
-                Ok(ParseResult::Ok((
+                Ok(ResponseParseResult::Ok((
                     consume,
                     RedisObject::Status(BytesMut::from(&buffer[..crlf_pos])),
                 )))
@@ -105,10 +105,10 @@ impl RespResponseParserV2 {
                 let mut consume = 1usize;
                 let buffer = &buffer[1..];
                 let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
+                    return Ok(ResponseParseResult::NeedMoreData);
                 };
                 consume = consume.saturating_add(crlf_pos + 2);
-                Ok(ParseResult::Ok((
+                Ok(ResponseParseResult::Ok((
                     consume,
                     RedisObject::Error(BytesMut::from(&buffer[..crlf_pos])),
                 )))
@@ -118,7 +118,7 @@ impl RespResponseParserV2 {
                 let mut consume = 1usize;
                 let buffer = &buffer[1..];
                 let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
+                    return Ok(ResponseParseResult::NeedMoreData);
                 };
                 consume = consume.saturating_add(crlf_pos + 2);
                 let num = BytesMut::from(&buffer[..crlf_pos]);
@@ -129,7 +129,10 @@ impl RespResponseParserV2 {
                     )));
                 };
 
-                Ok(ParseResult::Ok((consume, RedisObject::Integer(num))))
+                Ok(ResponseParseResult::Ok((
+                    consume,
+                    RedisObject::Integer(num),
+                )))
             }
             b'$' => {
                 // consume the prefix
@@ -137,7 +140,7 @@ impl RespResponseParserV2 {
                 let buffer = &buffer[1..];
                 // read the length
                 let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
+                    return Ok(ResponseParseResult::NeedMoreData);
                 };
                 consume = consume.saturating_add(crlf_pos + 2);
                 let num = BytesMut::from(&buffer[..crlf_pos]);
@@ -150,7 +153,7 @@ impl RespResponseParserV2 {
 
                 if strlen <= 0 {
                     // Null or empty string
-                    Ok(ParseResult::Ok((consume, RedisObject::NullString)))
+                    Ok(ResponseParseResult::Ok((consume, RedisObject::NullString)))
                 } else {
                     let strlen = strlen as usize;
                     // read the string content
@@ -158,12 +161,15 @@ impl RespResponseParserV2 {
                     if buffer.len() < strlen + 2
                     /* the terminator \r\n */
                     {
-                        return Ok(ParseResult::NeedMoreData);
+                        return Ok(ResponseParseResult::NeedMoreData);
                     }
 
                     let str_content = BytesMut::from(&buffer[..strlen]);
                     consume = consume.saturating_add(strlen + 2);
-                    Ok(ParseResult::Ok((consume, RedisObject::Str(str_content))))
+                    Ok(ResponseParseResult::Ok((
+                        consume,
+                        RedisObject::Str(str_content),
+                    )))
                 }
             }
             b'*' => {
@@ -172,7 +178,7 @@ impl RespResponseParserV2 {
                 let buffer = &buffer[1..];
                 // read & parse the array length
                 let Some(crlf_pos) = StringUtils::find_subsequence(buffer, b"\r\n") else {
-                    return Ok(ParseResult::NeedMoreData);
+                    return Ok(ResponseParseResult::NeedMoreData);
                 };
                 let num = BytesMut::from(&buffer[..crlf_pos]);
                 let Some(arrlen) = BytesMutUtils::parse::<i32>(&num) else {
@@ -186,7 +192,7 @@ impl RespResponseParserV2 {
 
                 // Null array?
                 if arrlen < 0 {
-                    return Ok(ParseResult::Ok((consume, RedisObject::NullArray)));
+                    return Ok(ResponseParseResult::Ok((consume, RedisObject::NullArray)));
                 }
 
                 let mut objects = Vec::<RedisObject>::with_capacity(arrlen as usize);
@@ -196,15 +202,20 @@ impl RespResponseParserV2 {
                 for _ in 0..arrlen {
                     let result = Self::parse_response(buffer)?;
                     match result {
-                        ParseResult::Ok((bytes_read, obj)) => {
+                        ResponseParseResult::Ok((bytes_read, obj)) => {
                             consume = consume.saturating_add(bytes_read);
                             buffer = &buffer[bytes_read..];
                             objects.push(obj);
                         }
-                        ParseResult::NeedMoreData => return Ok(ParseResult::NeedMoreData),
+                        ResponseParseResult::NeedMoreData => {
+                            return Ok(ResponseParseResult::NeedMoreData)
+                        }
                     }
                 }
-                Ok(ParseResult::Ok((consume, RedisObject::Array(objects))))
+                Ok(ResponseParseResult::Ok((
+                    consume,
+                    RedisObject::Array(objects),
+                )))
             }
             _ => Err(SableError::OtherError(format!(
                 "unexpected token found `{}`",
@@ -241,7 +252,7 @@ mod tests {
         expected_response: RedisObject,
     ) -> Result<(), SableError> {
         let response = RespResponseParserV2::parse_response(buffer)?;
-        let ParseResult::Ok((consumed, obj)) = response else {
+        let ResponseParseResult::Ok((consumed, obj)) = response else {
             assert!(false, "Expected ParseResult::Ok");
             return Err(SableError::OtherError(
                 "Expected ParseResult::Ok".to_string(),
@@ -269,7 +280,7 @@ mod tests {
         expected_consumed: usize,
     ) -> Result<(), SableError> {
         let response = RespResponseParserV2::parse_response(buffer)?;
-        let ParseResult::Ok((consumed, obj)) = response else {
+        let ResponseParseResult::Ok((consumed, obj)) = response else {
             assert!(false, "Expected ParseResult::Ok");
             return Err(SableError::OtherError(
                 "Expected ParseResult::Ok".to_string(),
