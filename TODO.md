@@ -30,7 +30,6 @@ it should trigger an auto-faileover process:
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed
 we have the `EX 60` as a backup plan
 
-
 The current information stored in the cluster DB is (HASH):
 
 ```
@@ -52,3 +51,26 @@ replicas in its shard:
     "aaa-bbb-ccc-ddd"
 }
 ```
+
+# Test cases
+
+The following use cases should be automated and checked:
+
+
+1. Make sure that cluster DB is down
+2. Bring the replica up **before** the primary is up
+3. Primary goes up
+
+Expected outcome: replica connects to the primary. The fact that the ClusterDB is down, does not affect the data exchange between the two
+
+4. Start the Cluster DB
+
+Expected outcome:
+- both instances are able to re-connect it
+- All records in the Cluster DB are updated
+
+5. Bring the primary down
+
+Expected outcome:
+- After N seconds, replica performs auto-failover and becomes the primary
+- Replica records changed in the Cluster DB to "Primary"
