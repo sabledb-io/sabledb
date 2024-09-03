@@ -76,16 +76,10 @@ impl<'a> TcpStreamBytesReader<'a> {
 macro_rules! try_socket_read {
     ($reader:expr) => {
         // try read some bytes
-        tracing::trace!("Reading some bytes from the socket...");
-        let bytes_read = match $reader.read_some()? {
+        match $reader.read_some()? {
             None => return Ok(None),
             Some(count) => count,
-        };
-        tracing::trace!(
-            "Read: {} bytes from the socket. Internal buffer length: {}",
-            bytes_read,
-            $reader.bytes_read.len()
-        );
+        }
     };
 }
 

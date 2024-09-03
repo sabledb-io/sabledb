@@ -38,7 +38,6 @@ where
                 || e.kind() == std::io::ErrorKind::WouldBlock =>
         {
             // Timeout occurred, not an error
-            tracing::trace!("Read timedout");
             Ok(None)
         }
         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {

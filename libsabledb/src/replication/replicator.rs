@@ -1,4 +1,4 @@
-use crate::replication::ReplicationServer;
+use crate::replication::{cluster_manager, ReplicationServer};
 
 #[allow(unused_imports)]
 use crate::{
@@ -226,6 +226,14 @@ impl Replicator {
         // Change the node state to primary and clear any primary node ID
         Server::state().persistent_state().set_primary_node_id(None);
         Server::state().persistent_state().save();
+
+        // Remove ourself from the cluster database, when a new replicas will join
+        // this instance we register itself with the database
+        tracing::debug!("Deleting self from cluster database");
+        if let Err(e) = cluster_manager::delete_self(Server::state().options()) {
+            tracing::warn!("Cluster manager error. {:?}", e);
+        }
+        tracing::debug!("Success");
 
         loop {
             tokio::select! {

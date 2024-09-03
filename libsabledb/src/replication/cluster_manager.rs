@@ -35,6 +35,16 @@ macro_rules! check_us_passed_since {
     }};
 }
 
+/// Check whether we have a cluster DB set in our configuration file
+/// return if not
+macro_rules! check_cluster_db {
+    ($options:expr) => {{
+        if $options.general_settings.cluster_address.is_none() {
+            return Ok(());
+        }
+    }};
+}
+
 #[derive(Default)]
 pub struct NodeProperties {
     properties: BTreeMap<&'static str, String>,
@@ -62,7 +72,7 @@ impl NodeProperties {
     }
 
     /// Write this object to the cluster manager database
-    pub fn put(&self, conn: &mut redis::Client) -> Result<(), SableError> {
+    pub fn put(&self, conn: &mut redis::Connection) -> Result<(), SableError> {
         let cur_node_id = Server::state().persistent_state().id();
         let props: Vec<(String, String)> = self
             .properties
@@ -70,7 +80,6 @@ impl NodeProperties {
             .map(|(field_name, field_value)| (field_name.to_string(), field_value.to_string()))
             .collect();
         tracing::debug!("Writing node object in cluster manager: {:?}", props);
-        let mut conn = conn.get_connection()?;
         conn.hset_multiple(cur_node_id, &props)?;
         tracing::debug!("Success");
         update_heartbeat_reported_ts();
@@ -120,12 +129,15 @@ pub fn put_node_properties(
     options: &ServerOptions,
     node_info: &NodeProperties,
 ) -> Result<(), SableError> {
+    check_cluster_db!(options);
+
     let db = ClusterDB::with_options(options);
     db.put_node_properties(node_info)
 }
 
 /// Update the "last updated" field for this node in the cluster manager database
 pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
+    check_cluster_db!(options);
     if !check_us_passed_since!(LAST_UPDATED_TS, 1_000_000) {
         return Ok(());
     }
@@ -138,6 +150,7 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
 
 /// Associate node identified by `replica_node_id` with the current node
 pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
+    check_cluster_db!(options);
     let db = ClusterDB::with_options(options);
     db.add_replica(replica_node_id)
 }
@@ -148,6 +161,7 @@ pub fn remove_replica_from_this(
     options: &ServerOptions,
     replica_node_id: String,
 ) -> Result<(), SableError> {
+    check_cluster_db!(options);
     let db = ClusterDB::with_options(options);
     db.remove_replica_from_this(replica_node_id)
 }
@@ -155,12 +169,14 @@ pub fn remove_replica_from_this(
 #[allow(dead_code)]
 /// Remove the current from its primary
 pub fn remove_this_from_primary(options: &ServerOptions) -> Result<(), SableError> {
+    check_cluster_db!(options);
     let db = ClusterDB::with_options(options);
     db.remove_this_from_primary()
 }
 
 /// Update the cluster database that this node is a primary
-pub fn delete_self(options: &ServerOptions, _store: &StorageAdapter) -> Result<(), SableError> {
+pub fn delete_self(options: &ServerOptions) -> Result<(), SableError> {
+    check_cluster_db!(options);
     let current_node_id = Server::state().persistent_state().id();
     tracing::info!(
         "Deleting node: {} from the cluster database",
@@ -178,6 +194,7 @@ pub async fn fail_over_if_needed(
     options: &ServerOptions,
     store: &StorageAdapter,
 ) -> Result<(), SableError> {
+    check_cluster_db!(options);
     if is_primary_alive(options)? {
         return Ok(());
     }

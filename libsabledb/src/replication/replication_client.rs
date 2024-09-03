@@ -46,12 +46,12 @@ enum RequestChangesResult {
     Reconnect,
     /// Exit the replication thread, do not attempt to reconnect to the primary
     ExitThread,
-    /// Command completed successfully
-    Success,
+    /// Command completed successfully. Returns the last sequence number
+    Success(u64),
     /// Request a full sync from the primary
     FullSync,
-    /// Server replied that there are no changes available
-    NoChanges,
+    /// Server replied that there are no changes available. Returns the last sequence number
+    NoChanges(u64),
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,7 +84,9 @@ impl ReplicationClient {
                             tracing::error!("Failed to connect to primary. {:?}", e);
 
                             // Check whether we should attempt to reconnect
-                            let _ = cluster_manager::fail_over_if_needed(&options, &store).await;
+                            if let Err(e) =  cluster_manager::fail_over_if_needed(&options, &store).await {
+                                tracing::warn!("Cluster manager error. {:?}", e);
+                            }
                             match Self::check_command_channel(&mut rx) {
                                 CheckShutdownResult::Terminate => {
                                     info!(
@@ -132,17 +134,26 @@ impl ReplicationClient {
                     // and store them in our database
                     let mut request_id = 0u64;
                     loop {
-                        let _ = cluster_manager::fail_over_if_needed(&options, &store).await;
+                        if let Err(e) = cluster_manager::fail_over_if_needed(&options, &store).await {
+                            tracing::warn!("Cluster manager error. {:?}", e);
+                        }
+
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
                             Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id);
                         match result {
-                            RequestChangesResult::Success | RequestChangesResult::NoChanges => {
+                            RequestChangesResult::Success(sequence_number)
+                            | RequestChangesResult::NoChanges(sequence_number) => {
                                 // Note: if there are no changes, the primary server will stall
-                                // the response
-                                if let Err(e) = cluster_manager::put_last_updated(&options) {
-                                    tracing::warn!("Error while updating node 'last_updated' property. {:?}", e);
+                                // the response. Update the cluster manager with the current info
+                                let node_info = NodeProperties::current(&options)
+                                    .with_last_txn_id(sequence_number)
+                                    .with_role_replica()
+                                    .with_primary_node_id(Server::state().persistent_state().primary_node_id());
+
+                                if let Err(e) = cluster_manager::put_node_properties(&options, &node_info) {
+                                    tracing::warn!("Error while updating cluster manager. {:?}", e);
                                 }
                             }
                             RequestChangesResult::Reconnect => {
@@ -396,7 +407,7 @@ impl ReplicationClient {
             return RequestChangesResult::ExitThread;
         };
 
-        debug!("Successfully sent requesst: {} to primary", request);
+        tracing::trace!("Successfully sent request: {} to primary", request);
 
         // We expect now an "Ok" or "NotOk" response
         let common = match Self::read_replication_message(reader) {
@@ -415,7 +426,7 @@ impl ReplicationClient {
                         if common.reason().eq(&ResponseReason::NoChangesAvailable) =>
                     {
                         // The server stalled the request as long as it could, but no changes were available
-                        return RequestChangesResult::NoChanges;
+                        return RequestChangesResult::NoChanges(sequence_number);
                     }
                     ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
@@ -541,12 +552,12 @@ impl ReplicationClient {
     /// Write the next sequence to get from the primary to the file system.
     fn write_next_sequence(sequence_file: PathBuf, sequence_number: u64) -> RequestChangesResult {
         ReplicationTelemetry::set_last_change(sequence_number);
-        let sequence_number = format!("{}", sequence_number);
-        if let Err(e) = std::fs::write(sequence_file, sequence_number) {
+        let sequence_number_str = format!("{}", sequence_number);
+        if let Err(e) = std::fs::write(sequence_file, sequence_number_str) {
             error!("Failed to read sequence file content: {:?}.", e);
             RequestChangesResult::Reconnect
         } else {
-            RequestChangesResult::Success
+            RequestChangesResult::Success(sequence_number)
         }
     }
 }

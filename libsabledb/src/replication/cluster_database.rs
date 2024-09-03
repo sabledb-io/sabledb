@@ -1,6 +1,7 @@
 use crate::{replication::NodeProperties, utils::TimeUtils, SableError, Server, ServerOptions};
 use redis::Commands;
 use std::sync::RwLock;
+use std::time::Duration;
 
 #[allow(unused_imports)]
 use crate::replication::{
@@ -63,7 +64,7 @@ fn close_connection() {
 
 fn get_conn_and_run<F>(options: &ServerOptions, mut code: F) -> Result<(), SableError>
 where
-    F: FnMut(&mut redis::Client) -> Result<(), SableError>,
+    F: FnMut(&mut redis::Connection) -> Result<(), SableError>,
 {
     open_connection(options);
     let mut conn = CM_CONN.write().expect(MUTEX_ERR);
@@ -71,7 +72,8 @@ where
         return Ok(());
     };
 
-    if let Err(e) = code(client) {
+    let mut conn = client.get_connection_with_timeout(Duration::from_secs(1))?;
+    if let Err(e) = code(&mut conn) {
         // In case of an error, close the connection
         close_connection();
         Err(e)

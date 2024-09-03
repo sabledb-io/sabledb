@@ -220,17 +220,16 @@ impl ServerPersistentState {
 
         let filepath = self.config_file.read().expect("poisoned mutex").clone();
         let mut ini = ini::Ini::default();
-        ini.with_section(Some("general")).set("node_id", self.id());
 
+        ini.with_section(Some("general")).set("node_id", self.id());
         ini.with_section(Some("replication"))
             .set("address", self.primary_address())
             .set("role", format!("{}", self.role()));
 
         if let Err(e) = ini.write_to_file(&filepath) {
-            tracing::error!("Failed to write INI file. {:?}", e);
+            tracing::debug!("Failed to write INI file `{}`. {:?}", filepath, e);
             return;
         }
-
         tracing::info!("Successfully updated file: {}", filepath);
     }
 
@@ -245,6 +244,9 @@ impl ServerPersistentState {
         };
 
         replication_conf.push(Self::NODE_FILE);
+        let replication_conf = replication_conf
+            .canonicalize()
+            .unwrap_or(PathBuf::from(Self::NODE_FILE));
         replication_conf
     }
 }

@@ -298,6 +298,7 @@ impl ServerState {
     // Connect to primary instance
     pub fn connect_to_primary_sync(&self, address: String, port: u16) -> Result<(), SableError> {
         if let Some(repliction_context) = &self.replicator_context {
+            tracing::debug!("Sending request to ConnectToPrimary({}, {})", address, port);
             // Update the configuration file first
             Server::state()
                 .persistent_state()
@@ -305,6 +306,7 @@ impl ServerState {
             Server::state().persistent_state().save();
             repliction_context
                 .send_sync(ReplicationWorkerMessage::ConnectToPrimary((address, port)))?;
+            tracing::debug!("Success");
         }
         Ok(())
     }
