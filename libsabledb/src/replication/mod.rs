@@ -1,3 +1,4 @@
+mod cluster_database;
 pub mod cluster_manager;
 mod replication_client;
 mod replication_config;
@@ -10,6 +11,7 @@ mod storage_updates;
 pub use crate::SableError;
 
 pub use cluster_manager::NodeProperties;
+pub use cluster_database::ClusterDB;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
 pub use replication_config::ServerRole;
@@ -33,3 +35,10 @@ pub fn prepare_std_socket(socket: &std::net::TcpStream) -> Result<(), SableError
     let _ = socket.set_nodelay(true);
     Ok(())
 }
+
+const PROP_NODE_ID: &str = "node_id";
+const PROP_NODE_ADDRESS: &str = "node_address";
+const PROP_ROLE: &str = "role";
+const PROP_LAST_UPDATED: &str = "last_updated";
+const PROP_LAST_TXN_ID: &str = "last_txn_id";
+const PROP_PRIMARY_NODE_ID: &str = "primary_node_id";

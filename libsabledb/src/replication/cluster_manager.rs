@@ -1,13 +1,19 @@
-use crate::{replication::ServerRole, utils::TimeUtils, SableError, Server, ServerOptions};
+use crate::replication::{
+    PROP_LAST_TXN_ID, PROP_LAST_UPDATED, PROP_NODE_ADDRESS, PROP_NODE_ID, PROP_PRIMARY_NODE_ID,
+    PROP_ROLE,
+};
+use crate::{
+    replication::{ClusterDB, ServerRole},
+    utils::TimeUtils,
+    SableError, Server, ServerOptions,
+};
 use num_format::{Locale, ToFormattedString};
 use rand::Rng;
 use redis::Commands;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
 
 lazy_static::lazy_static! {
-    static ref CM_CONN: RwLock<Connection> = RwLock::<Connection>::default();
     static ref LAST_UPDATED_TS: AtomicU64 = AtomicU64::default();
     static ref LAST_HTBT_CHECKED_TS: AtomicU64 = AtomicU64::default();
     static ref CHECK_PRIMARY_ALIVE_INTERVAL: AtomicU64 = AtomicU64::default();
@@ -26,13 +32,6 @@ macro_rules! check_us_passed_since {
         }
     }};
 }
-
-const PROP_NODE_ID: &str = "node_id";
-const PROP_NODE_ADDRESS: &str = "node_address";
-const PROP_ROLE: &str = "role";
-const PROP_LAST_UPDATED: &str = "last_updated";
-const PROP_LAST_TXN_ID: &str = "last_txn_id";
-const PROP_PRIMARY_NODE_ID: &str = "primary_node_id";
 
 #[derive(Default)]
 pub struct NodeProperties {
@@ -101,39 +100,6 @@ impl NodeProperties {
     }
 }
 
-/// Connection to the cluster manager database
-#[derive(Default)]
-struct Connection {
-    pub client: Option<redis::Client>,
-}
-
-impl Connection {
-    pub fn open(&mut self, options: &ServerOptions) -> Result<(), SableError> {
-        let Some(cluster_address) = &options.general_settings.cluster_address else {
-            return Ok(());
-        };
-
-        self.client = Some(redis::Client::open(format!(
-            "rediss://{}/#insecure",
-            cluster_address
-        ))?);
-        Ok(())
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.client.is_some()
-    }
-}
-
-/// Connect to the cluster database
-fn connect(options: &ServerOptions) -> Result<(), SableError> {
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    if conn.is_connected() {
-        return Ok(());
-    }
-    conn.open(options)
-}
-
 /// Initialise the cluster manager API
 pub fn initialise(_options: &ServerOptions) {
     let mut rng = rand::thread_rng();
@@ -152,12 +118,8 @@ pub fn put_node_properties(
     options: &ServerOptions,
     node_info: &NodeProperties,
 ) -> Result<(), SableError> {
-    connect(options)?;
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    let Some(client) = &mut conn.client else {
-        return Ok(());
-    };
-    node_info.put(client)
+    let db = ClusterDB::with_options(options);
+    db.put_node_properties(node_info)
 }
 
 /// Update the "last updated" field for this node in the cluster manager database
@@ -166,66 +128,33 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
         return Ok(());
     }
 
-    connect(options)?;
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    let Some(client) = &mut conn.client else {
-        return Ok(());
-    };
-
-    let cur_node_id = Server::state().persistent_state().id();
-    let curts = TimeUtils::epoch_micros().unwrap_or_default();
-    tracing::debug!(
-        "Updating cluster manager property: '{}:({} => {})'",
-        cur_node_id,
-        PROP_LAST_UPDATED,
-        curts
-    );
-    let mut conn = client.get_connection()?;
-    conn.hset(cur_node_id, PROP_LAST_UPDATED, curts)?;
+    let db = ClusterDB::with_options(options);
+    db.put_last_updated()?;
     update_heartbeat_reported_ts();
-    tracing::debug!("Success");
     Ok(())
 }
 
 /// Associate node identified by `replica_node_id` with the current node
 pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
-    connect(options)?;
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    let Some(client) = &mut conn.client else {
-        return Ok(());
-    };
-    let cur_node_id = Server::state().persistent_state().id();
-    let mut conn = client.get_connection()?;
-    tracing::debug!(
-        "Associating node({}) as replica for ({})",
-        replica_node_id,
-        cur_node_id,
-    );
-    let key = format!("{}_replicas", cur_node_id);
-    conn.sadd(key, replica_node_id)?;
-    tracing::debug!("Success");
-    Ok(())
+    let db = ClusterDB::with_options(options);
+    db.add_replica(replica_node_id)
 }
 
 #[allow(dead_code)]
 /// Remove replica identified by `replica_node_id` from the current node
-pub fn remove_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
-    connect(options)?;
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    let Some(client) = &mut conn.client else {
-        return Ok(());
-    };
-    let cur_node_id = Server::state().persistent_state().id();
-    let mut conn = client.get_connection()?;
-    tracing::debug!(
-        "Disassociating node({}) from primary ({})",
-        replica_node_id,
-        cur_node_id,
-    );
-    let key = format!("{}_replicas", cur_node_id);
-    conn.srem(key, replica_node_id)?;
-    tracing::debug!("Success");
-    Ok(())
+pub fn remove_replica_from_this(
+    options: &ServerOptions,
+    replica_node_id: String,
+) -> Result<(), SableError> {
+    let db = ClusterDB::with_options(options);
+    db.remove_replica_from_this(replica_node_id)
+}
+
+#[allow(dead_code)]
+/// Remove the current from its primary
+pub fn remove_this_from_primary(options: &ServerOptions) -> Result<(), SableError> {
+    let db = ClusterDB::with_options(options);
+    db.remove_this_from_primary()
 }
 
 /// Check and perform failover is needed
@@ -252,36 +181,13 @@ fn check_is_alive(options: &ServerOptions) -> Result<bool, SableError> {
     if !Server::state().persistent_state().is_replica() {
         return Ok(true);
     }
+    let db = ClusterDB::with_options(options);
 
-    connect(options)?;
-    let mut conn = CM_CONN.write().expect("poisoned mutex");
-    let Some(client) = &mut conn.client else {
-        return Ok(true);
-    };
-
+    // get the primary last updated timestamp from the database
+    let primary_heartbeat_ts = db.primary_last_updated()?;
     let primary_node_id = Server::state().persistent_state().primary_node_id();
-    if primary_node_id.is_empty() {
-        tracing::debug!("Replica has no primary node defined");
-        return Ok(true);
-    }
-    let mut conn = client.get_connection()?;
-
-    let res = conn.hget(&primary_node_id, PROP_LAST_UPDATED)?;
-    let primary_heartbeat_ts = match res {
-        redis::Value::BulkString(val) => {
-            let Ok(val) = String::from_utf8_lossy(&val).parse::<u64>() else {
-                tracing::warn!("Failed to parse last_updated field to u64");
-                return Ok(true);
-            };
-            val
-        }
-        _ => {
-            tracing::warn!("Expected BulkString value");
-            return Ok(true);
-        }
-    };
-
     let curr_ts = TimeUtils::epoch_micros().unwrap_or(0);
+
     if curr_ts.saturating_sub(primary_heartbeat_ts)
         > CHECK_PRIMARY_ALIVE_INTERVAL.load(Ordering::Relaxed)
     {
