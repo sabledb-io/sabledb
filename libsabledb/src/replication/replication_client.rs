@@ -76,6 +76,7 @@ impl ReplicationClient {
 
         // Spawn a thread to handle the replication
         let _ = std::thread::spawn(move || {
+            tracing::info!("Replication client started");
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 loop {
@@ -103,7 +104,8 @@ impl ReplicationClient {
                                     break; // leave the thread
                                 }
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            tracing::info!("Trying again...");
+                            std::thread::sleep(std::time::Duration::from_secs(1));
                             continue;
                         }
                         Ok(stream) => stream,

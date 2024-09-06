@@ -64,6 +64,11 @@ pub enum SableError {
     ParseError(String),
     #[error("Internal error. {0}")]
     InternalError(String),
+    /// Failover related error
+    #[error("AutoFailOverError error. {0}")]
+    AutoFailOverError(String),
+    #[error("ClusterDB error. {0}")]
+    ClsuterDbError(String),
 }
 
 #[allow(dead_code)]

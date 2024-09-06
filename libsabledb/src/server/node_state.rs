@@ -244,9 +244,8 @@ impl ServerPersistentState {
         };
 
         replication_conf.push(Self::NODE_FILE);
-        let replication_conf = replication_conf
-            .canonicalize()
-            .unwrap_or(PathBuf::from(Self::NODE_FILE));
         replication_conf
+            .canonicalize()
+            .unwrap_or(PathBuf::from(Self::NODE_FILE))
     }
 }

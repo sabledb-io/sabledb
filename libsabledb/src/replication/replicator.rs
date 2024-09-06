@@ -40,6 +40,8 @@ pub enum ReplicationWorkerMessage {
     ConnectToPrimary((String, u16)),
     /// Shutdown the replicator thread
     Shutdown,
+    /// Initialisation is done, start the replicator
+    InitDone,
 }
 
 #[derive(Default, Debug)]
@@ -139,9 +141,6 @@ impl Replicator {
 
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, async move {
-                    // The replicator tasks:
-                    // - The replication main loop (exchanging data)
-                    // - Heartbeat task (using UDP)
                     let server_options_cloned = server_options.clone();
                     let replicator_handle = tokio::task::spawn_local(async move {
                         let mut replicator =
@@ -172,10 +171,7 @@ impl Replicator {
     /// - The server terminated
     /// - User issued a "replicaof no one" command which basically changes the server role to primary
     async fn replica_loop(&mut self) -> Result<ReplicatorStateResult, SableError> {
-        tracing::info!(
-            "Connecting to primary at: {}",
-            Server::state().persistent_state().primary_address()
-        );
+        tracing::info!("Entering replica loop");
 
         let replication_client = ReplicationClient::default();
         // Launch the replication client on a dedicated thread
@@ -183,25 +179,33 @@ impl Replicator {
         let tx = replication_client
             .run(self.server_options.clone(), self.store.clone())
             .await?;
-
         loop {
             match self.rx_channel.recv().await {
                 Some(ReplicationWorkerMessage::ConnectToPrimary((primary_ip, primary_port))) => {
-                    // switching primary
-                    tracing::info!(
-                        "Connecting to primary server: {}:{}",
-                        primary_ip,
-                        primary_port
-                    );
+                    let address = format!("{}:{}", primary_ip, primary_port);
 
-                    // terminate the current replication
-                    let _ = tx.send(ReplClientCommand::Shutdown).await;
+                    if address == Server::state().persistent_state().primary_address() {
+                        tracing::info!(
+                            "Requested to connect to primary at {} (current primary address is: {}), dropping request",
+                            address,
+                            address);
+                    } else {
+                        // switching primary
+                        tracing::info!(
+                            "Connecting to new primary server at address: {}:{}",
+                            primary_ip,
+                            primary_port
+                        );
 
-                    // start a new one
-                    return Ok(ReplicatorStateResult::ConnectToPrimary((
-                        primary_ip,
-                        primary_port,
-                    )));
+                        // terminate the current replication
+                        let _ = tx.send(ReplClientCommand::Shutdown).await;
+
+                        // start a new one
+                        return Ok(ReplicatorStateResult::ConnectToPrimary((
+                            primary_ip,
+                            primary_port,
+                        )));
+                    }
                 }
                 Some(ReplicationWorkerMessage::PrimaryMode) => {
                     // switching into primary mode, tell our replication thread to terminate itself
@@ -212,6 +216,11 @@ impl Replicator {
                 Some(ReplicationWorkerMessage::Shutdown) => {
                     let _ = tx.send(ReplClientCommand::Shutdown).await;
                     return Ok(ReplicatorStateResult::Shutdown);
+                }
+                Some(ReplicationWorkerMessage::InitDone) => {
+                    return Err(SableError::InternalError(
+                        "Unexpected 'ReplicationWorkerMessage::InitDone' message".into(),
+                    ));
                 }
                 None => {}
             }
@@ -229,11 +238,11 @@ impl Replicator {
 
         // Remove ourself from the cluster database, when a new replicas will join
         // this instance we register itself with the database
-        tracing::debug!("Deleting self from cluster database");
+        tracing::info!("Deleting self from cluster database");
         if let Err(e) = cluster_manager::delete_self(Server::state().options()) {
             tracing::warn!("Cluster manager error. {:?}", e);
         }
-        tracing::debug!("Success");
+        tracing::info!("Success");
 
         loop {
             tokio::select! {
@@ -254,6 +263,9 @@ impl Replicator {
                         Some(ReplicationWorkerMessage::Shutdown) => {
                             return Ok(ReplicatorStateResult::Shutdown);
                         }
+                        Some(ReplicationWorkerMessage::InitDone) => {
+                            return Err(SableError::InternalError("Invalid command 'Start'".into()));
+                        }
                         None => {}
                     }
                 }
@@ -264,6 +276,10 @@ impl Replicator {
 
     /// The replicator's main loop
     async fn main_loop(&mut self) -> Result<(), SableError> {
+        tracing::info!("Waiting for initialisation complete event..");
+        let Some(ReplicationWorkerMessage::InitDone) = self.rx_channel.recv().await else {
+            return Err(SableError::InternalError("Expected 'Start' command".into()));
+        };
         tracing::info!("Started");
 
         let mut result = match Server::state().persistent_state().role() {

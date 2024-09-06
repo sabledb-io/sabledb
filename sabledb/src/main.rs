@@ -66,6 +66,9 @@ fn main() -> Result<(), SableError> {
         server_state_clone.persistent_state().id()
     );
 
+    // Notify the replicator thread to start
+    server_state_clone.notify_replicator_init_done_sync()?;
+
     // If this node is a replica, trigger a "REPLICAOF" command
     if server_state_clone.persistent_state().is_replica() {
         let addr: IpPort = server_state_clone

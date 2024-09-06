@@ -12,7 +12,7 @@ Shard management:
 - [ ] When losing connection with the primary, remove itself from the `<primary_node_id>_replicas` entry
 - [ ] When calling `REPLICAOF NO ONE` make sure to:
     - [x] Update the cluster database with the new role
-    - [ ] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
+    - [x] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
 
 ## Auto-Failover
 
@@ -20,11 +20,11 @@ When a replica detects that its primary did not update its `last_updated` field 
 it should trigger an auto-faileover process:
 
 - [x] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
-- [ ] Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
-- [ ] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPOP`) with the correct `REPLICAOF` command to execute
-- [ ] Delete the `<old_primary>` HASH key from the database
-- [ ] Delete the `<old_primary>_replicas` SET key from the database
-- [ ] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
+- [x] Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
+- [x] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPOP`) with the correct `REPLICAOF` command to execute
+- [x] Delete the `<old_primary>` HASH key from the database
+- [x] Delete the `<old_primary>_replicas` SET key from the database
+- [x] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
 
 **A note about locking:**
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed

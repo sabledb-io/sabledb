@@ -22,6 +22,11 @@ lazy_static::lazy_static! {
     static ref NOT_RESPONDING_COUNTER: AtomicU64 = AtomicU64::default();
 }
 
+enum ProcessCommandQueueResult {
+    Done,
+    NoCommands,
+}
+
 macro_rules! check_us_passed_since {
     ($counter:expr, $interval_us:expr) => {{
         let current_time = $crate::TimeUtils::epoch_micros().unwrap_or_default();
@@ -166,14 +171,6 @@ pub fn remove_replica_from_this(
     db.remove_replica_from_this(replica_node_id)
 }
 
-#[allow(dead_code)]
-/// Remove the current from its primary
-pub fn remove_this_from_primary(options: &ServerOptions) -> Result<(), SableError> {
-    check_cluster_db!(options);
-    let db = ClusterDB::with_options(options);
-    db.remove_this_from_primary()
-}
-
 /// Update the cluster database that this node is a primary
 pub fn delete_self(options: &ServerOptions) -> Result<(), SableError> {
     check_cluster_db!(options);
@@ -194,11 +191,23 @@ pub async fn fail_over_if_needed(
     options: &ServerOptions,
     store: &StorageAdapter,
 ) -> Result<(), SableError> {
+    // In order to be able to perform a failover, this instance needs to have a valid primary node ID
+    if Server::state()
+        .persistent_state()
+        .primary_node_id()
+        .is_empty()
+        && Server::state().persistent_state().is_replica()
+    {
+        tracing::info!("No primary is set yet, fail-over is ignored");
+        return Ok(());
+    }
+
     check_cluster_db!(options);
     if is_primary_alive(options)? {
         return Ok(());
     }
 
+    tracing::info!("Starting fail-over");
     let db = ClusterDB::with_options(options);
 
     // Try to lock the primary, if we succeeded in doing this,
@@ -219,61 +228,104 @@ pub async fn fail_over_if_needed(
     if lock_created {
         // This instance will be the orchestrator of the failover
         tracing::info!("Listing replicas...");
-        let members = db.list_replicas()?;
-        tracing::info!("Found {:?}", members);
+        let all_replicas = db.list_replicas()?;
+        tracing::info!("Found {:?}", all_replicas);
 
-        let current_node_id = Server::state().persistent_state().id();
-
-        // filter this instance
-        let members: Vec<(&String, &u64)> = members
+        // We have more replicas, choose the best replica and make it the primary
+        let Some((new_primary_id, _last_txn_id)) = all_replicas
             .iter()
-            .filter_map(|(node_id, last_updated)| {
-                if node_id.ne(&current_node_id) {
-                    Some((node_id, last_updated))
-                } else {
-                    None
-                }
-            })
-            .collect();
+            .max_by_key(|(_node_id, last_updated_txn)| last_updated_txn)
+        else {
+            return Err(SableError::AutoFailOverError("No replicas found".into()));
+        };
 
-        tracing::info!(
-            "Remaining replicas after removing self from the list: {:?}",
-            members
-        );
-
-        if members.is_empty() {
-            // No other replicas, disconnect this node from the primary, and switch to primary node
-            tracing::info!("This node is the single replica. Switching to primary mode");
-            if !process_command_internal(
-                options,
-                store,
-                "REPLICAOF NO ONE",
-                RedisObject::Status("OK".into()),
-            )
-            .await?
-            {
-                return Err(SableError::OtherError(
-                    "Failed to execute internal command: REPLICAOF NO ONE".into(),
-                ));
-            }
-
-            // Perform a database cleanup and change this node to Primary
-            tracing::info!("Deleting Primary from the cluster database");
-            db.delete_primary()?;
-            tracing::info!("Success");
-        } else {
-            // TODO: we have more replicas, choose the best replica and make it the primary
-        }
-    } else {
-        // Some other instance is coordinating the failover
-        // TODO: wait for the command for the coordinator replica
+        tracing::info!("New primary: {}", new_primary_id);
+        notify_replicas_to_switch_primary(options, &all_replicas, new_primary_id).await?;
     }
+
+    // Pop the command from the queue and execute it
+    process_commands_queue(options, store, 1).await?;
     Ok(())
 }
 
 ///===------------------------------
 /// Private API calls
 ///===------------------------------
+
+/// Notify all replicas to switch to a new primary. We do this by sending a string command
+/// on a LIST channel
+async fn notify_replicas_to_switch_primary(
+    options: &ServerOptions,
+    all_replicas: &Vec<(String, u64)>,
+    new_primary_id: &String,
+) -> Result<(), SableError> {
+    // get the new primary port + IP
+    let db = ClusterDB::with_options(options);
+    let address = db.node_address(new_primary_id)?;
+    let address = address.replace(':', " ");
+    let command = format!("REPLICAOF {}", address);
+    let command_primary = String::from("REPLICAOF NO ONE");
+
+    tracing::info!("Sending commands to replicas...");
+    for (node_id, _) in all_replicas {
+        if node_id.eq(new_primary_id) {
+            tracing::info!(
+                "Sending command: '{}' to new primary {}",
+                &command_primary,
+                node_id
+            );
+            db.push_command(node_id, &command_primary)?;
+        } else {
+            tracing::info!("Sending command: '{}' to node {}", &command, node_id);
+            db.push_command(node_id, &command)?;
+        }
+    }
+    tracing::info!("Success");
+    Ok(())
+}
+
+/// Process `count` commands from the node's commands queue
+async fn process_commands_queue(
+    options: &ServerOptions,
+    store: &StorageAdapter,
+    mut count: u32,
+) -> Result<(), SableError> {
+    // wait for the command and run it
+    loop {
+        if let ProcessCommandQueueResult::Done = try_process_commands_queue(options, store).await? {
+            count = count.saturating_sub(1);
+            if count == 0 {
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Check the current node's command queue and process a single command from it
+async fn try_process_commands_queue(
+    options: &ServerOptions,
+    store: &StorageAdapter,
+) -> Result<ProcessCommandQueueResult, SableError> {
+    let db = ClusterDB::with_options(options);
+    let current_node_id = Server::state().persistent_state().id();
+
+    // wait for the command and run it
+    tracing::info!("Waiting for command on queue {}_QUEUE...", current_node_id);
+    let Some(cmd) = db.pop_command_with_timeout(&current_node_id, 1.0)? else {
+        return Ok(ProcessCommandQueueResult::NoCommands);
+    };
+
+    tracing::info!("Node {} running command '{}'", current_node_id, cmd);
+    process_command_internal(
+        options,
+        store,
+        cmd.as_str(),
+        RedisObject::Status("OK".into()),
+    )
+    .await?;
+    Ok(ProcessCommandQueueResult::Done)
+}
+
 async fn process_command_internal(
     _options: &ServerOptions,
     store: &StorageAdapter,
@@ -281,7 +333,7 @@ async fn process_command_internal(
     expected_output: RedisObject,
 ) -> Result<bool, SableError> {
     let Ok(cmd) = RedisCommand::from_str(command) else {
-        return Err(SableError::InternalError(
+        return Err(SableError::AutoFailOverError(
             "Failed to construct command".into(),
         ));
     };
@@ -292,7 +344,7 @@ async fn process_command_internal(
     )? {
         ResponseParseResult::Ok((_, response)) => response,
         ResponseParseResult::NeedMoreData => {
-            return Err(SableError::ParseError(
+            return Err(SableError::AutoFailOverError(
                 "Failed to process internal command (NeedMoreData)".into(),
             ));
         }

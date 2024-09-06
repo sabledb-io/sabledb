@@ -280,6 +280,14 @@ impl ServerState {
         BlockClientResult::Blocked(rx)
     }
 
+    // Notify the replicator that initialisation is done
+    pub fn notify_replicator_init_done_sync(&self) -> Result<(), SableError> {
+        if let Some(repliction_context) = &self.replicator_context {
+            repliction_context.send_sync(ReplicationWorkerMessage::InitDone)?;
+        }
+        Ok(())
+    }
+
     // Connect to primary instance
     pub async fn connect_to_primary(&self, address: String, port: u16) -> Result<(), SableError> {
         if let Some(repliction_context) = &self.replicator_context {
