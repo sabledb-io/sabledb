@@ -359,6 +359,13 @@ impl ReplicationClient {
                         Server::state()
                             .persistent_state()
                             .set_primary_node_id(Some(common.node_id().to_string()));
+
+                        // Associate this node with its new primary
+                        if let Err(e) =
+                            cluster_manager::update_replicas_set(Server::state().options().clone())
+                        {
+                            tracing::warn!("Failed to update primary SET. {:?}", e);
+                        }
                         JoinShardResult::Ok
                     }
                     ReplicationResponse::NotOk(common) => {

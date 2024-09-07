@@ -1,6 +1,6 @@
 use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
+use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
-use crate::{server::ServerOptions, Server};
 
 use crate::utils;
 #[allow(unused_imports)]
@@ -168,36 +168,6 @@ impl ReplicationServer {
         }
     }
 
-    /// Update the shard database with the following:
-    /// - Report this Primary info
-    /// - If `replica_id` is not `None`, re-associate it with this primary node
-    fn update_shard_info(
-        options: Arc<StdRwLock<ServerOptions>>,
-        store: &StorageAdapter,
-        replica_id: Option<String>,
-    ) {
-        // Update the current node info in the cluster manager database
-        let node_info = NodeProperties::current(options.clone())
-            .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
-            .with_role_primary();
-
-        if let Err(e) = cluster_manager::put_node_properties(options.clone(), &node_info) {
-            tracing::warn!("Error while updating cluster manager. {:?}", e);
-        }
-
-        if let Some(replica_id) = replica_id {
-            let current_node_id = Server::state().persistent_state().id();
-            if let Err(e) = cluster_manager::add_replica(options, replica_id.clone()) {
-                tracing::warn!(
-                    "Error while associating replica {} with primary {}. {:?}",
-                    replica_id,
-                    current_node_id,
-                    e
-                );
-            }
-        }
-    }
-
     /// The main replication request -> reply flow is happening here.
     /// This function reads a single replication request and responds with the proper response.
     fn handle_single_request(
@@ -217,7 +187,7 @@ impl ReplicationServer {
                     error!("Failed to read request. {:?}", e);
                     return false;
                 }
-                // And this is why I ❤ Rust...
+                // ❤ Rust...
                 Ok(Some(req)) => break req,
                 Ok(None) => {
                     // timeout
@@ -225,6 +195,7 @@ impl ReplicationServer {
                         info!("Received request to shutdown - bye");
                         return false;
                     }
+                    Self::update_primary_info(options.clone(), store);
                     continue;
                 }
             };
@@ -243,7 +214,6 @@ impl ReplicationServer {
                 if !Self::write_response(&mut writer, &response_ok) {
                     return false;
                 }
-                Self::update_shard_info(options.clone(), store, None);
             }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request {}", common);
@@ -271,7 +241,9 @@ impl ReplicationServer {
                     distance_from_primary: 0,
                 };
                 ReplicationTelemetry::update_replica_info(replica_addr.to_string(), replinfo);
-                Self::update_shard_info(options, store, Some(common.node_id().to_string()));
+
+                // Update the current node info in the cluster manager database as primary
+                Self::update_primary_info(options.clone(), store);
             }
             ReplicationRequest::GetUpdatesSince((common, seq)) => {
                 debug!(
@@ -350,9 +322,6 @@ impl ReplicationServer {
                         break Some(storage_updates);
                     }
                 };
-
-                // Associate common.node_id() as replica for the current node
-                Self::update_shard_info(options, store, Some(common.node_id().to_string()));
 
                 let Some(storage_updates) = storage_updates else {
                     // No changes available to send
@@ -476,6 +445,7 @@ impl ReplicationServer {
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;
                     }
+                    Self::update_primary_info(server_options_clone.clone(), &store_clone);
                 }
             });
             // let the handle drop to make the thread detached
@@ -483,5 +453,19 @@ impl ReplicationServer {
 
         #[allow(unreachable_code)]
         Ok::<(), SableError>(())
+    }
+
+    fn update_primary_info(options: Arc<StdRwLock<ServerOptions>>, store: &StorageAdapter) {
+        // Update the current node info in the cluster manager database as primary
+        let node_info = NodeProperties::current(options.clone())
+            .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
+            .with_role_primary();
+        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+            tracing::warn!(
+                "Error while updating self as Primary({:?}) in the cluster database. {:?}",
+                node_info,
+                e
+            );
+        }
     }
 }

@@ -3,7 +3,7 @@ use crate::replication::{
     PROP_ROLE,
 };
 use crate::{
-    replication::{cluster_database::LockResult, ClusterDB, ServerRole},
+    replication::{ClusterDB, Lock, PrimaryLock, ServerRole},
     utils::{RedisObject, RespResponseParserV2, ResponseParseResult, TimeUtils},
     RedisCommand, SableError, Server, ServerOptions, StorageAdapter,
 };
@@ -45,8 +45,8 @@ macro_rules! check_us_passed_since {
 
 /// Check whether we have a cluster DB set in our configuration file
 /// return if not
-macro_rules! check_cluster_db {
-    ($options:expr) => {{
+macro_rules! check_cluster_db_or {
+    ($options:expr, $ret_val:expr) => {{
         if $options
             .read()
             .expect("read error")
@@ -54,12 +54,12 @@ macro_rules! check_cluster_db {
             .cluster_address
             .is_none()
         {
-            return Ok(());
+            return $ret_val;
         }
     }};
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct NodeProperties {
     properties: BTreeMap<&'static str, String>,
 }
@@ -148,7 +148,7 @@ pub fn put_node_properties(
     options: Arc<StdRwLock<ServerOptions>>,
     node_info: &NodeProperties,
 ) -> Result<(), SableError> {
-    check_cluster_db!(options);
+    check_cluster_db_or!(options, Ok(()));
 
     let db = ClusterDB::with_options(options);
     db.put_node_properties(node_info)
@@ -156,7 +156,7 @@ pub fn put_node_properties(
 
 /// Update the "last updated" field for this node in the cluster manager database
 pub fn put_last_updated(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
-    check_cluster_db!(options);
+    check_cluster_db_or!(options, Ok(()));
     if !check_us_passed_since!(LAST_UPDATED_TS, 1_000_000) {
         return Ok(());
     }
@@ -167,30 +167,32 @@ pub fn put_last_updated(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), Sa
     Ok(())
 }
 
-/// Associate node identified by `replica_node_id` with the current node
-pub fn add_replica(
-    options: Arc<StdRwLock<ServerOptions>>,
-    replica_node_id: String,
-) -> Result<(), SableError> {
-    check_cluster_db!(options);
-    let db = ClusterDB::with_options(options);
-    db.add_replica(replica_node_id)
-}
+/// Associate current node as
+pub fn update_replicas_set(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
+    check_cluster_db_or!(options, Ok(()));
 
-#[allow(dead_code)]
-/// Remove replica identified by `replica_node_id` from the current node
-pub fn remove_replica_from_this(
-    options: Arc<StdRwLock<ServerOptions>>,
-    replica_node_id: String,
-) -> Result<(), SableError> {
-    check_cluster_db!(options);
+    if !Server::state().persistent_state().is_replica() {
+        return Ok(());
+    }
+
+    let primary_node_id = Server::state().persistent_state().primary_node_id();
+    let current_node_id = Server::state().persistent_state().id();
+    if primary_node_id.is_empty() {
+        tracing::warn!(
+            "Can't associate Replica({}) with Primary({})",
+            current_node_id,
+            primary_node_id
+        );
+        return Ok(());
+    }
+
     let db = ClusterDB::with_options(options);
-    db.remove_replica_from_this(replica_node_id)
+    db.update_replicas_set(&primary_node_id, &current_node_id)
 }
 
 /// Update the cluster database that this node is a primary
 pub fn delete_self(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
-    check_cluster_db!(options);
+    check_cluster_db_or!(options, Ok(()));
     let current_node_id = Server::state().persistent_state().id();
     tracing::info!(
         "Deleting node: {} from the cluster database",
@@ -208,6 +210,8 @@ pub async fn fail_over_if_needed(
     options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
 ) -> Result<(), SableError> {
+    check_cluster_db_or!(options, Ok(()));
+
     // In order to be able to perform a failover, this instance needs to have a valid primary node ID
     if Server::state()
         .persistent_state()
@@ -215,53 +219,53 @@ pub async fn fail_over_if_needed(
         .is_empty()
         && Server::state().persistent_state().is_replica()
     {
-        tracing::info!("No primary is set yet, fail-over is ignored");
+        tracing::debug!("No primary is set yet, fail-over is ignored");
         return Ok(());
     }
 
-    check_cluster_db!(options);
+    // Lock the shard
+    let mut primary_lock = PrimaryLock::new(options.clone())?;
+    primary_lock.lock()?;
+
+    if !is_commands_queue_empty(options.clone()).await? {
+        // Got commands to process, do it now
+        // This can happen if a fail-over is in process
+        return process_commands_queue(options.clone(), store, 1).await;
+    }
+
     if is_primary_alive(options.clone())? {
         return Ok(());
     }
 
     tracing::info!("Starting fail-over");
     let db = ClusterDB::with_options(options.clone());
+    let current_node_id = Server::state().persistent_state().id();
 
     // Try to lock the primary, if we succeeded in doing this,
     // this `lock_primary` returns the value of the lock which
     // is used later to delete the lock
     tracing::info!("Trying to perform a failover...");
-    let lock_created = match db.lock_primary()? {
-        LockResult::Ok => {
-            tracing::info!("Successfully created lock");
-            true
-        }
-        LockResult::AlreadyExist(node_id) => {
-            tracing::info!("Failover already started by Node {node_id}");
-            false
-        }
+
+    // This instance will be the orchestrator of the failover
+    tracing::info!("Listing replicas...");
+    let all_replicas = db.list_replicas()?;
+    tracing::info!("Found {:?}", all_replicas);
+
+    // We have more replicas, choose the best replica and make it the primary
+    let Some((new_primary_id, _last_txn_id)) = all_replicas
+        .iter()
+        .max_by_key(|(_node_id, last_updated_txn)| last_updated_txn)
+    else {
+        return Err(SableError::AutoFailOverError("No replicas found".into()));
     };
 
-    if lock_created {
-        // This instance will be the orchestrator of the failover
-        tracing::info!("Listing replicas...");
-        let all_replicas = db.list_replicas()?;
-        tracing::info!("Found {:?}", all_replicas);
+    tracing::info!("New primary: {}", new_primary_id);
+    broadcast_failover(options.clone(), &all_replicas, new_primary_id).await?;
 
-        // We have more replicas, choose the best replica and make it the primary
-        let Some((new_primary_id, _last_txn_id)) = all_replicas
-            .iter()
-            .max_by_key(|(_node_id, last_updated_txn)| last_updated_txn)
-        else {
-            return Err(SableError::AutoFailOverError("No replicas found".into()));
-        };
-
-        tracing::info!("New primary: {}", new_primary_id);
-        notify_replicas_to_switch_primary(options.clone(), &all_replicas, new_primary_id).await?;
+    if current_node_id.eq(new_primary_id) {
+        // If this node is the primary, don't wait until next iteration, switch to primary node now
+        process_commands_queue(options, store, 1).await?;
     }
-
-    // Pop the command from the queue and execute it
-    process_commands_queue(options, store, 1).await?;
     Ok(())
 }
 
@@ -269,9 +273,8 @@ pub async fn fail_over_if_needed(
 /// Private API calls
 ///===------------------------------
 
-/// Notify all replicas to switch to a new primary. We do this by sending a string command
-/// on a LIST channel
-async fn notify_replicas_to_switch_primary(
+/// Broadcast all members of this shard that a failover is taking place
+async fn broadcast_failover(
     options: Arc<StdRwLock<ServerOptions>>,
     all_replicas: &Vec<(String, u64)>,
     new_primary_id: &String,
@@ -299,6 +302,15 @@ async fn notify_replicas_to_switch_primary(
     }
     tracing::info!("Success");
     Ok(())
+}
+
+/// Return whether the current node's command queue is empty
+async fn is_commands_queue_empty(
+    options: Arc<StdRwLock<ServerOptions>>,
+) -> Result<bool, SableError> {
+    let db = ClusterDB::with_options(options);
+    let current_node_id = Server::state().persistent_state().id();
+    Ok(db.command_queue_len(&current_node_id)? == 0)
 }
 
 /// Process `count` commands from the node's commands queue

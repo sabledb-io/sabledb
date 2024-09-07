@@ -3,14 +3,13 @@ Shard management:
 ## Primary:
 
 - [x] Update primary info the cluster database in a constant interval (this is the equivalent of a `heartbeat` operation)
-- [x] Update the replicas in the SET ( `<primary_node_id>_replicas` ) after each successful operation / timeout ( `GET_CHANGES`, `FULL_SYNC` etc)
 
 ## Replica:
 
 - [x] Update the node info after each successful operation (mainly the fields: `last_txn_id` + `last_updated`)
 - [x] Add random check interval per replica for checking whether the primary is alive or not
-- [ ] When losing connection with the primary, remove itself from the `<primary_node_id>_replicas` entry
-- [ ] When calling `REPLICAOF NO ONE` make sure to:
+- [x] Update the replicas in the SET ( `<primary_node_id>_replicas` ) after each successful operation / timeout ( `GET_CHANGES`, `FULL_SYNC` etc)
+- [x] When calling `REPLICAOF NO ONE` make sure to:
     - [x] Update the cluster database with the new role
     - [x] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
 
@@ -25,7 +24,7 @@ it should trigger an auto-faileover process:
 - [x] Delete the `<old_primary>` HASH key from the database
 - [x] Delete the `<old_primary>_replicas` SET key from the database
 - [x] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
-- [ ] Place a command on the new OLD primary to connect to the new PRIMARY
+- [ ] Place a command on the OLD primary to connect to the new PRIMARY
 
 **A note about locking:**
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed

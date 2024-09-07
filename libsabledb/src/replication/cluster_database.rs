@@ -24,6 +24,16 @@ pub enum LockResult {
     AlreadyExist(String),
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum UnLockResult {
+    /// Lock unlocked successfully
+    Ok,
+    /// Can't unlock it - the lock was not created by this instance
+    NotOwner(String),
+    /// Could not find a lock with this name
+    NoSuchLock,
+}
+
 /// Attempt to open redis connection. If a connection is already opened,
 /// do nothing
 fn open_connection(options: Arc<StdRwLock<ServerOptions>>) {
@@ -122,51 +132,13 @@ impl ClusterDB {
         })
     }
 
-    /// Associate node identified by `replica_node_id` with the current node
-    pub fn add_replica(&self, replica_node_id: String) -> Result<(), SableError> {
-        get_conn_and_run(self.options.clone(), move |client| {
-            if !Server::state().persistent_state().is_primary() {
-                return Err(SableError::OtherError(
-                    "Can't add replica. Node is not a Primary".into(),
-                ));
-            }
-
-            let cur_node_id = Server::state().persistent_state().id();
-            tracing::debug!(
-                "Adding replica {} to node {}",
-                &replica_node_id,
-                cur_node_id
-            );
-            let key = format!("{}_replicas", cur_node_id);
-            client.sadd(key, &replica_node_id)?;
-            tracing::debug!("Success");
-            Ok(())
-        })
-    }
-
-    /// Remove replica identified by `replica_node_id` from the current node
-    pub fn remove_replica_from_this(&self, replica_node_id: String) -> Result<(), SableError> {
-        get_conn_and_run(self.options.clone(), move |client| {
-            let cur_node_id = Server::state().persistent_state().id();
-            tracing::debug!(
-                "Disassociating node({}) from primary ({})",
-                replica_node_id,
-                cur_node_id,
-            );
-            let key = format!("{}_replicas", cur_node_id);
-            client.srem(key, &replica_node_id)?;
-            tracing::debug!("Success");
-            Ok(())
-        })
-    }
-
-    /// Detach this node from the primary
+    /// Detach this node from its primary
     pub fn remove_this_from_primary(&self) -> Result<(), SableError> {
         get_conn_and_run(self.options.clone(), move |client| {
             let cur_node_id = Server::state().persistent_state().id();
             let primary_node_id = self.node_primary_id()?;
             tracing::info!(
-                "Disassociating self({}) from primary ({})",
+                "Disassociating self({}) from Primary({})",
                 cur_node_id,
                 primary_node_id,
             );
@@ -230,18 +202,22 @@ impl ClusterDB {
     /// Attempt to create a lock for this node's primary
     pub fn lock_primary(&self) -> Result<LockResult, SableError> {
         let primary_node_id = self.node_primary_id()?;
-        let current_node_id = Server::state().persistent_state().id();
         let lock_key = format!("{}_LOCK", primary_node_id);
+        self.lock(&lock_key)
+    }
 
+    /// Attempt to create a lock with a given name
+    pub fn lock(&self, lock_name: &String) -> Result<LockResult, SableError> {
+        let current_node_id = Server::state().persistent_state().id();
         let mut result = LockResult::Ok;
         get_conn_and_run(self.options.clone(), |client| {
             let set_options = redis::SetOptions::default()
                 .with_expiration(redis::SetExpiry::EX(60))
                 .conditional_set(redis::ExistenceCheck::NX);
-            let res = client.set_options(&lock_key, &current_node_id, set_options)?;
+            let res = client.set_options(lock_name, &current_node_id, set_options)?;
             match res {
                 Value::Nil => {
-                    let lock_value = if let Value::BulkString(s) = client.get(&lock_key)? {
+                    let lock_value = if let Value::BulkString(s) = client.get(lock_name)? {
                         String::from_utf8_lossy(&s).to_string()
                     } else {
                         String::default()
@@ -260,6 +236,50 @@ impl ClusterDB {
             }
         })?;
         Ok(result)
+    }
+
+    /// Attempt to create a lock with a given name
+    pub fn unlock(&self, lock_name: &String) -> Result<UnLockResult, SableError> {
+        let current_node_id = Server::state().persistent_state().id();
+        let mut result = UnLockResult::Ok;
+        get_conn_and_run(self.options.clone(), |client| {
+            let res = client.get(lock_name)?;
+            match res {
+                Value::BulkString(val) => {
+                    let owner_node_id = String::from_utf8_lossy(&val).to_string();
+                    if owner_node_id.eq(&current_node_id) {
+                        client.del(lock_name)?;
+                        result = UnLockResult::Ok;
+                    } else {
+                        result = UnLockResult::NotOwner(owner_node_id);
+                    }
+                }
+                _ => {
+                    result = UnLockResult::NoSuchLock;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(result)
+    }
+
+    /// Add `replica_node_id` to the set identified by the key `<primary_node_id>_replicas`
+    pub fn update_replicas_set(
+        &self,
+        primary_node_id: &String,
+        replica_node_id: &String,
+    ) -> Result<(), SableError> {
+        get_conn_and_run(self.options.clone(), |client| {
+            tracing::debug!(
+                "Adding replica {} to node {}",
+                replica_node_id,
+                primary_node_id
+            );
+            let key = format!("{}_replicas", primary_node_id);
+            client.sadd(key, replica_node_id)?;
+            tracing::debug!("Success");
+            Ok(())
+        })
     }
 
     /// Return list of replicas for the current node's primary + their last updated txn ID
@@ -295,19 +315,6 @@ impl ClusterDB {
             Ok(())
         })?;
         Ok(result)
-    }
-
-    /// Delete primary from the database
-    /// - Delete the primary record from the database
-    /// - Delete `<primary_id>_replicas` set from the database
-    pub fn delete_primary(&self) -> Result<(), SableError> {
-        let primary_id = self.node_primary_id()?;
-        get_conn_and_run(self.options.clone(), |client| {
-            client.del(&primary_id)?;
-            let replicas_set = format!("{}_replicas", primary_id);
-            client.del(&replicas_set)?;
-            Ok(())
-        })
     }
 
     /// Return the node address from the database
@@ -354,6 +361,18 @@ impl ClusterDB {
             Ok(())
         })?;
         Ok(val)
+    }
+
+    pub fn command_queue_len(&self, node_id: &String) -> Result<usize, SableError> {
+        let mut qlen = 0usize;
+        get_conn_and_run(self.options.clone(), |client| {
+            let queue_name = format!("{}_QUEUE", node_id);
+            if let Value::Int(len) = client.llen(&queue_name)? {
+                qlen = len.try_into().unwrap_or(0);
+            }
+            Ok(())
+        })?;
+        Ok(qlen)
     }
 
     /// ========---------------------------------------------

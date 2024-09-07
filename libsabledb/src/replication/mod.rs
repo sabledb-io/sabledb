@@ -1,4 +1,5 @@
 mod cluster_database;
+mod cluster_lock;
 pub mod cluster_manager;
 mod replication_client;
 mod replication_config;
@@ -10,7 +11,8 @@ mod storage_updates;
 
 pub use crate::SableError;
 
-pub use cluster_database::ClusterDB;
+pub use cluster_database::{ClusterDB, LockResult, UnLockResult};
+pub use cluster_lock::{BlockingLock, Lock, PrimaryLock};
 pub use cluster_manager::NodeProperties;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};
@@ -30,8 +32,8 @@ pub use replicator::{ReplicationWorkerMessage, Replicator, ReplicatorContext};
 pub fn prepare_std_socket(socket: &std::net::TcpStream) -> Result<(), SableError> {
     // tokio sockets are non-blocking. We need to change this
     socket.set_nonblocking(false)?;
-    socket.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;
-    socket.set_write_timeout(Some(std::time::Duration::from_millis(100)))?;
+    socket.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
+    socket.set_write_timeout(Some(std::time::Duration::from_millis(250)))?;
     let _ = socket.set_nodelay(true);
     Ok(())
 }
