@@ -160,7 +160,7 @@ impl ServerOptions {
         }
 
         if let Some(log_level) = &cli_args.log_level {
-            if let Ok(log_level) = tracing::Level::from_str(&log_level) {
+            if let Ok(log_level) = tracing::Level::from_str(log_level) {
                 self.general_settings.log_level = log_level;
             }
         }
