@@ -51,6 +51,20 @@ macro_rules! parse_number {
 }
 
 #[macro_export]
+macro_rules! ini_read_prop {
+    ($ini_file:expr, $sect:expr, $name:expr) => {{
+        let Some(properties) = $ini_file.section(Some($sect)) else {
+            return Ok(());
+        };
+
+        let Some(val) = properties.get($name) else {
+            return Ok(());
+        };
+        val
+    }};
+}
+
+#[macro_export]
 macro_rules! ini_usize {
     ($value:expr) => {{
         let Ok(num_usize) = $value.parse::<usize>() else {

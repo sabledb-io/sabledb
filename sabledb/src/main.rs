@@ -1,6 +1,7 @@
+use clap::Parser;
 use libsabledb::{
-    replication::cluster_manager, utils::IpPort, SableError, Server, ServerOptions, Transport,
-    WorkerManager, WorkerMessage,
+    replication::cluster_manager, utils::IpPort, CommandLineArgs, SableError, Server,
+    ServerOptions, Transport, WorkerManager, WorkerMessage,
 };
 use std::net::TcpListener;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -10,12 +11,19 @@ const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 fn main() -> Result<(), SableError> {
     // configure our tracing subscriber
-    let options = if let Some(config_file) = std::env::args().nth(1) {
-        Arc::new(StdRwLock::new(ServerOptions::from_config(config_file)?))
+    let args = CommandLineArgs::parse();
+    let options = if let Some(config_file) = args.parameters.get(0) {
+        Arc::new(StdRwLock::new(ServerOptions::from_config(
+            config_file.to_string(),
+        )?))
     } else {
         Arc::new(StdRwLock::<ServerOptions>::default())
     };
 
+    // Override options from values read from the command line
+    options.write().unwrap().apply_command_line_args(&args);
+
+    // Override values passed to the command line
     let fmtr = tracing_subscriber::fmt::fmt()
         .with_thread_names(true)
         .with_thread_ids(true)
