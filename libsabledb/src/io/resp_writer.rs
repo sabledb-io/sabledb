@@ -3,6 +3,8 @@ use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
 
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
+
 pub struct RespWriter<'a, W> {
     tx: &'a mut W,
     buffer: BytesMut,
@@ -19,6 +21,8 @@ where
         let flush_threshold = client_state
             .server_inner_state()
             .options()
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
             .client_limits
             .client_response_buffer_size;
 

@@ -25,6 +25,7 @@ it should trigger an auto-faileover process:
 - [x] Delete the `<old_primary>` HASH key from the database
 - [x] Delete the `<old_primary>_replicas` SET key from the database
 - [x] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
+- [ ] Place a command on the new OLD primary to connect to the new PRIMARY
 
 **A note about locking:**
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed

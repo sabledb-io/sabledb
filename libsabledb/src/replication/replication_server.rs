@@ -14,8 +14,13 @@ use crate::{
 };
 
 use num_format::{Locale, ToFormattedString};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, RwLock as StdRwLock,
+};
 use tokio::net::TcpListener;
+
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 #[cfg(not(test))]
 use tracing::{debug, error, info};
@@ -102,7 +107,7 @@ impl ReplicationServer {
     /// changes
     fn send_checkpoint(
         store: &StorageAdapter,
-        _options: &ServerOptions,
+        _options: Arc<StdRwLock<ServerOptions>>,
         replica_addr: &String,
         stream: &mut std::net::TcpStream,
     ) -> Result<u64, SableError> {
@@ -167,16 +172,16 @@ impl ReplicationServer {
     /// - Report this Primary info
     /// - If `replica_id` is not `None`, re-associate it with this primary node
     fn update_shard_info(
-        options: &ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         store: &StorageAdapter,
         replica_id: Option<String>,
     ) {
         // Update the current node info in the cluster manager database
-        let node_info = NodeProperties::current(options)
+        let node_info = NodeProperties::current(options.clone())
             .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
             .with_role_primary();
 
-        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+        if let Err(e) = cluster_manager::put_node_properties(options.clone(), &node_info) {
             tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
 
@@ -197,7 +202,7 @@ impl ReplicationServer {
     /// This function reads a single replication request and responds with the proper response.
     fn handle_single_request(
         store: &StorageAdapter,
-        options: &ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         stream: &mut std::net::TcpStream,
         replica_addr: &String,
     ) -> bool {
@@ -238,7 +243,7 @@ impl ReplicationServer {
                 if !Self::write_response(&mut writer, &response_ok) {
                     return false;
                 }
-                Self::update_shard_info(options, store, None);
+                Self::update_shard_info(options.clone(), store, None);
             }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request {}", common);
@@ -250,7 +255,7 @@ impl ReplicationServer {
                     return false;
                 }
                 let changes_count =
-                    match Self::send_checkpoint(store, options, replica_addr, stream) {
+                    match Self::send_checkpoint(store, options.clone(), replica_addr, stream) {
                         Err(e) => {
                             info!(
                                 "Failed sending db checkpoint to replica {}. {:?}",
@@ -294,8 +299,20 @@ impl ReplicationServer {
                 let storage_updates = loop {
                     let storage_updates = match store.storage_updates_since(
                         seq,
-                        Some(options.replication_limits.single_update_buffer_size as u64),
-                        Some(options.replication_limits.num_updates_per_message as u64),
+                        Some(
+                            options
+                                .read()
+                                .expect(OPTIONS_LOCK_ERR)
+                                .replication_limits
+                                .single_update_buffer_size as u64,
+                        ),
+                        Some(
+                            options
+                                .read()
+                                .expect(OPTIONS_LOCK_ERR)
+                                .replication_limits
+                                .num_updates_per_message as u64,
+                        ),
                     ) {
                         Err(e) => {
                             let msg =
@@ -322,7 +339,11 @@ impl ReplicationServer {
                         // Nothing to send, suspend ourselves for a bit
                         // until we have something to send
                         std::thread::sleep(std::time::Duration::from_millis(
-                            options.replication_limits.check_for_updates_interval_ms as u64,
+                            options
+                                .read()
+                                .unwrap()
+                                .replication_limits
+                                .check_for_updates_interval_ms as u64,
                         ));
                         continue;
                     } else {
@@ -381,20 +402,35 @@ impl ReplicationServer {
     // and launch a thread to handle it
     pub async fn run(
         &self,
-        options: ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Result<(), SableError> {
-        let listener = TcpListener::bind(options.general_settings.private_address.clone())
+        let private_address = options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .general_settings
+            .private_address
+            .clone();
+
+        let listener = TcpListener::bind(private_address)
             .await
             .unwrap_or_else(|_| {
                 panic!(
                     "failed to bind address {}",
-                    &options.general_settings.private_address
+                    &options
+                        .read()
+                        .expect(OPTIONS_LOCK_ERR)
+                        .general_settings
+                        .private_address
                 )
             });
         info!(
             "Replication server started on address: {}",
-            &options.general_settings.private_address
+            &options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .general_settings
+                .private_address
         );
         loop {
             let (socket, addr) = listener.accept().await?;
@@ -409,6 +445,7 @@ impl ReplicationServer {
 
             let store_clone = store.clone();
             let server_options_clone = options.clone();
+
             // spawn a thread to so we could move to sync api
             // this will allow us to write directly from the storage -> network
             // without building buffers in the memory
@@ -431,7 +468,7 @@ impl ReplicationServer {
                 loop {
                     if !Self::handle_single_request(
                         &store_clone,
-                        &server_options_clone,
+                        server_options_clone.clone(),
                         &mut stream,
                         &replica_name,
                     ) {

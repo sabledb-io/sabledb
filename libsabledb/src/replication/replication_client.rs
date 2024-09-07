@@ -21,6 +21,7 @@ use num_format::{Locale, ToFormattedString};
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
 
 #[cfg(not(test))]
@@ -28,6 +29,8 @@ use tracing::{debug, error, info};
 
 #[cfg(test)]
 use std::{println as info, println as debug, println as error};
+
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 #[allow(dead_code)]
 pub enum ReplClientCommand {
@@ -69,7 +72,7 @@ impl ReplicationClient {
     /// Run replication client on a dedicated thread and return a channel for communicating with it
     pub async fn run(
         &self,
-        options: ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Result<TokioSender<ReplClientCommand>, SableError> {
         let (tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
@@ -80,12 +83,12 @@ impl ReplicationClient {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 loop {
-                    let mut stream = match Self::connect_to_primary(&options) {
+                    let mut stream = match Self::connect_to_primary() {
                         Err(e) => {
                             tracing::error!("Failed to connect to primary. {:?}", e);
 
                             // Check whether we should attempt to reconnect
-                            if let Err(e) =  cluster_manager::fail_over_if_needed(&options, &store).await {
+                            if let Err(e) =  cluster_manager::fail_over_if_needed(options.clone(), &store).await {
                                 tracing::warn!("Cluster manager error. {:?}", e);
                             }
                             match Self::check_command_channel(&mut rx) {
@@ -136,25 +139,25 @@ impl ReplicationClient {
                     // and store them in our database
                     let mut request_id = 0u64;
                     loop {
-                        if let Err(e) = cluster_manager::fail_over_if_needed(&options, &store).await {
+                        if let Err(e) = cluster_manager::fail_over_if_needed(options.clone(), &store).await {
                             tracing::warn!("Cluster manager error. {:?}", e);
                         }
 
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
-                            Self::request_changes(&store, &options, &mut reader, &mut writer, &mut rx, &mut request_id);
+                            Self::request_changes(&store, options.clone(), &mut reader, &mut writer, &mut rx, &mut request_id);
                         match result {
                             RequestChangesResult::Success(sequence_number)
                             | RequestChangesResult::NoChanges(sequence_number) => {
                                 // Note: if there are no changes, the primary server will stall
                                 // the response. Update the cluster manager with the current info
-                                let node_info = NodeProperties::current(&options)
+                                let node_info = NodeProperties::current(options.clone())
                                     .with_last_txn_id(sequence_number)
                                     .with_role_replica()
                                     .with_primary_node_id(Server::state().persistent_state().primary_node_id());
 
-                                if let Err(e) = cluster_manager::put_node_properties(&options, &node_info) {
+                                if let Err(e) = cluster_manager::put_node_properties(options.clone(), &node_info) {
                                     tracing::warn!("Error while updating cluster manager. {:?}", e);
                                 }
                             }
@@ -171,7 +174,7 @@ impl ReplicationClient {
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) = Self::fullsync(&store, &options, &mut stream, &mut request_id).await {
+                                if let Err(e) = Self::fullsync(&store, options.clone(), &mut stream, &mut request_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
                                     break;
@@ -192,7 +195,7 @@ impl ReplicationClient {
         Ok(tx)
     }
 
-    fn connect_to_primary(_options: &ServerOptions) -> Result<TcpStream, SableError> {
+    fn connect_to_primary() -> Result<TcpStream, SableError> {
         let primary_address = Server::state().persistent_state().primary_address();
         info!("Connecting to primary at: {}", primary_address);
 
@@ -222,7 +225,7 @@ impl ReplicationClient {
     /// Perform a fullsync with the primary
     async fn fullsync(
         store: &StorageAdapter,
-        options: &ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         stream: &mut std::net::TcpStream,
         request_id: &mut u64,
     ) -> Result<(), SableError> {
@@ -257,8 +260,15 @@ impl ReplicationClient {
             "Reading file of size: {} bytes",
             count.to_formatted_string(&Locale::en)
         );
-        let output_file_name = format!("{}.checkpoint.tar", options.open_params.db_path.display());
-        let target_folder_path = format!("{}.checkpoint", options.open_params.db_path.display());
+
+        let (output_file_name, target_folder_path, sequence_file) = {
+            let opts = options.read().expect("lock error");
+            let output_file_name = format!("{}.checkpoint.tar", opts.open_params.db_path.display());
+            let target_folder_path = format!("{}.checkpoint", opts.open_params.db_path.display());
+            let sequence_file = opts.open_params.db_path.join(SEQUENCES_FILE);
+            (output_file_name, target_folder_path, sequence_file)
+        };
+
         let mut file = std::fs::File::create(&output_file_name)?;
         crate::io::read_exact(stream, &mut file, count)?;
         info!(
@@ -282,7 +292,6 @@ impl ReplicationClient {
         store.restore_from_checkpoint(&target_folder_path, true)?;
         info!("Database successfully restored from backup");
 
-        let sequence_file = options.open_params.db_path.join(SEQUENCES_FILE);
         let mut last_txn_id = 0u64;
         if let Some(seq) = Self::read_next_sequence(sequence_file) {
             ReplicationTelemetry::set_last_change(seq);
@@ -290,7 +299,7 @@ impl ReplicationClient {
         }
 
         // Update the cluster manager with the current info
-        let node_info = NodeProperties::current(options)
+        let node_info = NodeProperties::current(options.clone())
             .with_last_txn_id(last_txn_id)
             .with_role_replica()
             .with_primary_node_id(common.node_id().to_string());
@@ -375,7 +384,7 @@ impl ReplicationClient {
     /// request to change role from replica -> primary)
     fn request_changes(
         store: &StorageAdapter,
-        options: &ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         reader: &mut impl BytesReader,
         writer: &mut impl BytesWriter,
         rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
@@ -393,7 +402,12 @@ impl ReplicationClient {
             }
         }
 
-        let sequence_file = options.open_params.db_path.join(SEQUENCES_FILE);
+        let sequence_file = options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .open_params
+            .db_path
+            .join(SEQUENCES_FILE);
         let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
@@ -514,7 +528,7 @@ impl ReplicationClient {
         );
 
         // Update the current node info in the cluster manager database
-        let node_info = NodeProperties::current(options)
+        let node_info = NodeProperties::current(options.clone())
             .with_last_txn_id(sequence_number)
             .with_role_replica()
             .with_primary_node_id(common.node_id().to_string());
@@ -632,12 +646,12 @@ mod tests {
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
-        let mut server_options = ServerOptions::default();
+        let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
         let mut request_id = 0u64;
-        server_options.open_params = replica_db.open_params().clone();
+        server_options.write().unwrap().open_params = replica_db.open_params().clone();
         let res = ReplicationClient::request_changes(
             &replica_db,
-            &server_options,
+            server_options,
             &mut reader,
             &mut writer,
             &mut rx,
@@ -679,13 +693,13 @@ mod tests {
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
-        let mut server_options = ServerOptions::default();
+        let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
+        server_options.write().unwrap().open_params = replica_db.open_params().clone();
 
-        server_options.open_params = replica_db.open_params().clone();
         let mut request_id = 1u64;
         ReplicationClient::request_changes(
             &replica_db,
-            &server_options,
+            server_options,
             &mut reader,
             &mut writer,
             &mut rx,

@@ -87,6 +87,8 @@ impl GenericCommands {
             if !client_state
                 .server_inner_state()
                 .options()
+                .read()
+                .expect("read error")
                 .cron
                 .instant_delete
             {

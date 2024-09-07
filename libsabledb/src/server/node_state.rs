@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU8, Ordering},
-    RwLock,
+    Arc, RwLock,
 };
+
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 macro_rules! ini_read {
     ($ini_file:expr, $section:expr, $prop:expr, $default_value:expr) => {{
@@ -153,7 +155,7 @@ impl ServerPersistentState {
     }
 
     /// Initialise the node ID by loading or creating it
-    pub fn initialise(&self, options: &ServerOptions) {
+    pub fn initialise(&self, options: Arc<RwLock<ServerOptions>>) {
         let file_path = Self::file_path_from_dir(options);
         *self.config_file.write().expect("poisoned mutex") =
             file_path.to_string_lossy().to_string();
@@ -233,8 +235,10 @@ impl ServerPersistentState {
         tracing::info!("Successfully updated file: {}", filepath);
     }
 
-    fn file_path_from_dir(options: &ServerOptions) -> PathBuf {
-        let configuration_dir = options.general_settings.config_dir.as_deref();
+    fn file_path_from_dir(options: Arc<RwLock<ServerOptions>>) -> PathBuf {
+        let options_ref = options.read().expect(OPTIONS_LOCK_ERR);
+        let configuration_dir = options_ref.general_settings.config_dir.as_deref();
+
         let mut replication_conf = match configuration_dir {
             Some(p) => p.to_path_buf(),
             None => match std::env::current_dir() {

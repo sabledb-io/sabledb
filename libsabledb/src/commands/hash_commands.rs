@@ -721,6 +721,8 @@ impl HashCommands {
         let max_response_buffer = client_state
             .server_inner_state()
             .options()
+            .read()
+            .expect("read error")
             .client_limits
             .client_response_buffer_size;
 

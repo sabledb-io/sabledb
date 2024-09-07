@@ -3,23 +3,36 @@ use libsabledb::{
     WorkerManager, WorkerMessage,
 };
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tracing::{debug, error, info};
+
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 fn main() -> Result<(), SableError> {
     // configure our tracing subscriber
     let options = if let Some(config_file) = std::env::args().nth(1) {
-        ServerOptions::from_config(config_file)?
+        Arc::new(StdRwLock::new(ServerOptions::from_config(config_file)?))
     } else {
-        ServerOptions::default()
+        Arc::new(StdRwLock::<ServerOptions>::default())
     };
 
     let fmtr = tracing_subscriber::fmt::fmt()
         .with_thread_names(true)
         .with_thread_ids(true)
-        .with_max_level(options.general_settings.log_level);
+        .with_max_level(
+            options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .general_settings
+                .log_level,
+        );
 
-    if let Some(logdir) = &options.general_settings.logdir {
+    if let Some(logdir) = &options
+        .read()
+        .expect(OPTIONS_LOCK_ERR)
+        .general_settings
+        .logdir
+    {
         fmtr.with_writer(tracing_appender::rolling::hourly(logdir, "sabledb.log"))
             .with_ansi(false) // No need for colours when using file
             .init();
@@ -38,17 +51,34 @@ fn main() -> Result<(), SableError> {
 
     // Open the storage
     let mut store = libsabledb::StorageAdapter::default();
-    store.open(options.open_params.clone())?;
+    store.open(options.read().expect(OPTIONS_LOCK_ERR).open_params.clone())?;
 
-    info!("Server configuration:\n{:#?}", options);
-    let workers_count = WorkerManager::default_workers_count(options.general_settings.workers);
+    info!(
+        "Server configuration:\n{:#?}",
+        options.read().expect(OPTIONS_LOCK_ERR)
+    );
+    let workers_count = WorkerManager::default_workers_count(
+        options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .general_settings
+            .workers,
+    );
 
-    info!("TLS enabled: {:?}", options.use_tls());
+    info!(
+        "TLS enabled: {:?}",
+        options.read().expect(OPTIONS_LOCK_ERR).use_tls()
+    );
 
     // Allocate / load NodeID for this instance
-    let options_cloned = options.clone();
-    let address = options.general_settings.public_address.clone();
-    let server = Arc::new(Server::new(options, store.clone(), workers_count)?);
+    let address = options
+        .read()
+        .expect(OPTIONS_LOCK_ERR)
+        .general_settings
+        .public_address
+        .clone();
+
+    let server = Arc::new(Server::new(options.clone(), store.clone(), workers_count)?);
     info!("Successfully created {} workers", workers_count);
 
     // Bind the listener to the address
@@ -60,7 +90,7 @@ fn main() -> Result<(), SableError> {
     let server_state_clone = Server::state();
     server_state_clone
         .persistent_state()
-        .initialise(&options_cloned);
+        .initialise(options.clone());
     info!(
         "NodeID is set to: {}",
         server_state_clone.persistent_state().id()
@@ -80,7 +110,7 @@ fn main() -> Result<(), SableError> {
     }
 
     // Initialise the cluster manager
-    cluster_manager::initialise(&options_cloned);
+    cluster_manager::initialise(options.clone());
 
     let _ = ctrlc::set_handler(move || {
         info!("Received Ctrl-C");

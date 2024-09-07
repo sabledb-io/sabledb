@@ -10,6 +10,8 @@ use tracing::log::{log_enabled, Level};
 #[allow(unused_imports)]
 use tracing::{debug, error, info, trace};
 
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
+
 #[derive(Debug)]
 pub enum WorkerMessage {
     NewConnection(TcpStream),
@@ -167,10 +169,18 @@ impl Worker {
         let tick_interval_micros = rng.gen_range(100000..150000);
 
         // create the TLS acceptor for this thread
-        let acceptor = if self.server_state.options().use_tls() {
+        let acceptor = if self
+            .server_state
+            .options()
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .use_tls()
+        {
             let cert = &self
                 .server_state
                 .options()
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
                 .general_settings
                 .cert
                 .clone()
@@ -178,6 +188,8 @@ impl Worker {
             let key = &self
                 .server_state
                 .options()
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
                 .general_settings
                 .key
                 .clone()
@@ -259,6 +271,8 @@ impl Worker {
         let wal_flush_interval = self
             .server_state
             .options()
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
             .open_params
             .rocksdb
             .manual_wal_flush_interval_ms as u64;

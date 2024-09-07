@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 const PONG: &[u8] = b"+PONG\r\n";
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 #[allow(unused_imports)]
 use tokio::{
@@ -114,7 +115,14 @@ impl Client {
         let tokio_stream = tokio::net::TcpStream::from_std(stream)?;
         let (channel_tx, channel_rx) = tokio::sync::mpsc::channel(100);
 
-        let (r, w) = if self.state.server_inner_state().options().use_tls() {
+        let (r, w) = if self
+            .state
+            .server_inner_state()
+            .options()
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .use_tls()
+        {
             // TLS enabled. Perform the TLS handshake and spawn the tasks
             let Some(tls_acceptor) = &self.inner().tls_acceptor else {
                 return Err(SableError::OtherError("No TLS acceptor".to_string()));

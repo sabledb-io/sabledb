@@ -1,7 +1,7 @@
 use crate::{replication::NodeProperties, utils::TimeUtils, SableError, Server, ServerOptions};
 use redis::Commands;
 use redis::Value;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
 #[allow(unused_imports)]
@@ -13,7 +13,7 @@ use crate::replication::{
 const MUTEX_ERR: &str = "poisoned mutex";
 
 lazy_static::lazy_static! {
-    static ref CM_CONN: RwLock<Option<redis::Client>> = RwLock::<Option<redis::Client>>::default();
+    static ref CM_CONN: StdRwLock<Option<redis::Client>> = StdRwLock::<Option<redis::Client>>::default();
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -26,7 +26,7 @@ pub enum LockResult {
 
 /// Attempt to open redis connection. If a connection is already opened,
 /// do nothing
-fn open_connection(options: &ServerOptions) {
+fn open_connection(options: Arc<StdRwLock<ServerOptions>>) {
     tracing::trace!("Setting up connection with cluster database");
     {
         // we already have a connection opened, nothing more to be done here
@@ -37,7 +37,12 @@ fn open_connection(options: &ServerOptions) {
         }
     }
 
-    let Some(cluster_address) = &options.general_settings.cluster_address else {
+    let Some(cluster_address) = &options
+        .read()
+        .expect("read error")
+        .general_settings
+        .cluster_address
+    else {
         // No cluster address
         tracing::trace!("Cluster database is not configured");
         return;
@@ -69,11 +74,14 @@ fn close_connection() {
     *CM_CONN.write().expect(MUTEX_ERR) = None;
 }
 
-fn get_conn_and_run<F>(options: &ServerOptions, mut code: F) -> Result<(), SableError>
+fn get_conn_and_run<F>(
+    options: Arc<StdRwLock<ServerOptions>>,
+    mut code: F,
+) -> Result<(), SableError>
 where
     F: FnMut(&mut redis::Connection) -> Result<(), SableError>,
 {
-    open_connection(options);
+    open_connection(options.clone());
     tracing::trace!("Locking connection");
     let mut conn = CM_CONN.write().expect(MUTEX_ERR);
     let Some(client) = &mut *conn else {
@@ -87,24 +95,24 @@ where
     code(&mut conn)
 }
 
-pub struct ClusterDB<'a> {
-    options: &'a ServerOptions,
+pub struct ClusterDB {
+    options: Arc<StdRwLock<ServerOptions>>,
 }
 
-impl<'a> ClusterDB<'a> {
-    pub fn with_options(options: &'a ServerOptions) -> Self {
+impl ClusterDB {
+    pub fn with_options(options: Arc<StdRwLock<ServerOptions>>) -> Self {
         ClusterDB { options }
     }
 
     /// Update this node with the server manager database. If no database is configured, do nothing
     /// If an entry for the same node already exists, it is overridden (the key is the node-id)
     pub fn put_node_properties(&self, node_info: &NodeProperties) -> Result<(), SableError> {
-        get_conn_and_run(self.options, |client| node_info.put(client))
+        get_conn_and_run(self.options.clone(), |client| node_info.put(client))
     }
 
     /// Update the "last_updated" field for this node
     pub fn put_last_updated(&self) -> Result<(), SableError> {
-        get_conn_and_run(self.options, move |client| {
+        get_conn_and_run(self.options.clone(), move |client| {
             let cur_node_id = Server::state().persistent_state().id();
             let curts = TimeUtils::epoch_micros().unwrap_or_default();
             tracing::trace!("Updating heartbeat for node {} -> {}", &cur_node_id, curts);
@@ -116,7 +124,7 @@ impl<'a> ClusterDB<'a> {
 
     /// Associate node identified by `replica_node_id` with the current node
     pub fn add_replica(&self, replica_node_id: String) -> Result<(), SableError> {
-        get_conn_and_run(self.options, move |client| {
+        get_conn_and_run(self.options.clone(), move |client| {
             if !Server::state().persistent_state().is_primary() {
                 return Err(SableError::OtherError(
                     "Can't add replica. Node is not a Primary".into(),
@@ -138,7 +146,7 @@ impl<'a> ClusterDB<'a> {
 
     /// Remove replica identified by `replica_node_id` from the current node
     pub fn remove_replica_from_this(&self, replica_node_id: String) -> Result<(), SableError> {
-        get_conn_and_run(self.options, move |client| {
+        get_conn_and_run(self.options.clone(), move |client| {
             let cur_node_id = Server::state().persistent_state().id();
             tracing::debug!(
                 "Disassociating node({}) from primary ({})",
@@ -154,7 +162,7 @@ impl<'a> ClusterDB<'a> {
 
     /// Detach this node from the primary
     pub fn remove_this_from_primary(&self) -> Result<(), SableError> {
-        get_conn_and_run(self.options, move |client| {
+        get_conn_and_run(self.options.clone(), move |client| {
             let cur_node_id = Server::state().persistent_state().id();
             let primary_node_id = self.node_primary_id()?;
             tracing::info!(
@@ -176,7 +184,7 @@ impl<'a> ClusterDB<'a> {
 
     /// Delete node identified by `node_id` from the database
     pub fn delete_node(&self, node_id: String) -> Result<(), SableError> {
-        get_conn_and_run(self.options, move |client| {
+        get_conn_and_run(self.options.clone(), move |client| {
             client.del(&node_id)?;
             Ok(())
         })
@@ -191,7 +199,7 @@ impl<'a> ClusterDB<'a> {
     /// Return the "last_updated" property of
     pub fn node_last_updated(&self, node_id: String) -> Result<Option<u64>, SableError> {
         let mut node_heartbeat_ts: Option<u64> = None;
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let res = client.hget(&node_id, PROP_LAST_UPDATED)?;
             node_heartbeat_ts = match res {
                 Value::BulkString(val) => {
@@ -226,7 +234,7 @@ impl<'a> ClusterDB<'a> {
         let lock_key = format!("{}_LOCK", primary_node_id);
 
         let mut result = LockResult::Ok;
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let set_options = redis::SetOptions::default()
                 .with_expiration(redis::SetExpiry::EX(60))
                 .conditional_set(redis::ExistenceCheck::NX);
@@ -257,7 +265,7 @@ impl<'a> ClusterDB<'a> {
     /// Return list of replicas for the current node's primary + their last updated txn ID
     pub fn list_replicas(&self) -> Result<Vec<(String, u64)>, SableError> {
         let mut result = Vec::<(String, u64)>::new();
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let primary_node_id = self.node_primary_id()?;
             let shard_set_key = format!("{}_replicas", primary_node_id);
             let Value::Array(members) = client.smembers(&shard_set_key)? else {
@@ -294,7 +302,7 @@ impl<'a> ClusterDB<'a> {
     /// - Delete `<primary_id>_replicas` set from the database
     pub fn delete_primary(&self) -> Result<(), SableError> {
         let primary_id = self.node_primary_id()?;
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             client.del(&primary_id)?;
             let replicas_set = format!("{}_replicas", primary_id);
             client.del(&replicas_set)?;
@@ -305,7 +313,7 @@ impl<'a> ClusterDB<'a> {
     /// Return the node address from the database
     pub fn node_address(&self, node_id: &String) -> Result<String, SableError> {
         let mut address_mut = String::default();
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let Value::BulkString(address) = client.hget(node_id, PROP_NODE_ADDRESS)? else {
                 return Err(SableError::ClsuterDbError(format!(
                     "Failed to read node {} address. Expected BulkString",
@@ -320,7 +328,7 @@ impl<'a> ClusterDB<'a> {
 
     /// Push a command to the node-id
     pub fn push_command(&self, node_id: &String, command: &String) -> Result<(), SableError> {
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let queue_name = format!("{}_QUEUE", node_id);
             tracing::info!("Sending command '{}' to queue '{}'", command, queue_name);
             client.lpush(&queue_name, command)?;
@@ -336,7 +344,7 @@ impl<'a> ClusterDB<'a> {
         timeout_secs: f64,
     ) -> Result<Option<String>, SableError> {
         let mut val = Option::<String>::None;
-        get_conn_and_run(self.options, |client| {
+        get_conn_and_run(self.options.clone(), |client| {
             let queue_name = format!("{}_QUEUE", node_id);
             if let Value::Array(arr) = client.brpop(&queue_name, timeout_secs)? {
                 if let Some(Value::BulkString(cmd)) = arr.get(1) {

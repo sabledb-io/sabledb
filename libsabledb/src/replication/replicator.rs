@@ -14,6 +14,7 @@ use tokio::sync::mpsc::Sender as TokioSender;
 pub type ReplicatorSender = TokioSender<ReplicationWorkerMessage>;
 pub type ReplicatorReceiver = TokioReciever<ReplicationWorkerMessage>;
 pub type WorkerHandle = tokio::runtime::Handle;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -59,7 +60,7 @@ enum ReplicatorStateResult {
 #[allow(dead_code)]
 pub struct Replicator {
     /// Shared server state
-    server_options: ServerOptions,
+    server_options: Arc<StdRwLock<ServerOptions>>,
     /// The channel on which this worker accepts commands
     rx_channel: ReplicatorReceiver,
     /// The store
@@ -101,7 +102,7 @@ impl Replicator {
     /// Private method: create a new replicator instance
     async fn new(
         rx: ReplicatorReceiver,
-        server_options: ServerOptions,
+        server_options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Self {
         Replicator {
@@ -114,7 +115,7 @@ impl Replicator {
     /// Spawn the replication thread returning a a context for the caller
     /// The context can be used to communicate with the replicator
     pub fn run(
-        server_options: ServerOptions,
+        server_options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Result<ReplicatorContext, SableError> {
         let (tx, rx) = tokio::sync::mpsc::channel::<ReplicationWorkerMessage>(100);

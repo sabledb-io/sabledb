@@ -7,6 +7,9 @@ use crate::{
     WorkerHandle,
 };
 use bytes::BytesMut;
+use std::sync::{Arc, RwLock as StdRwLock};
+
+const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 pub type CronReceiver = tokio::sync::mpsc::Receiver<CronMessage>;
 pub type CronSender = tokio::sync::mpsc::Sender<CronMessage>;
@@ -33,7 +36,7 @@ enum RecordExistsResult {
 #[allow(dead_code)]
 pub struct Cron {
     /// Shared server state
-    server_options: ServerOptions,
+    server_options: Arc<StdRwLock<ServerOptions>>,
     /// The store
     store: StorageAdapter,
     /// The channel on which this worker accepts commands
@@ -74,11 +77,11 @@ impl Cron {
     /// Private method: create new eviction thread
     pub async fn new(
         rx_channel: CronReceiver,
-        server_options: ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Self {
         Cron {
-            server_options,
+            server_options: options,
             store,
             rx_channel,
         }
@@ -87,7 +90,7 @@ impl Cron {
     /// Spawn the replication thread returning a a context for the caller
     /// The context can be used to communicate with the replicator
     pub fn run(
-        server_options: ServerOptions,
+        options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
     ) -> Result<CronContext, SableError> {
         let (tx, rx) = tokio::sync::mpsc::channel::<CronMessage>(100);
@@ -114,7 +117,7 @@ impl Cron {
 
                 let local = tokio::task::LocalSet::new();
                 local.block_on(&rt, async move {
-                    let mut cron = Cron::new(rx, server_options.clone(), store.clone()).await;
+                    let mut cron = Cron::new(rx, options, store.clone()).await;
                     if let Err(e) = cron.main_loop().await {
                         tracing::error!("Cron error. {:?}", e);
                     }
@@ -139,11 +142,19 @@ impl Cron {
         tracing::info!("Started");
 
         let mut evict_ticker = Ticker::new(TickInterval::Seconds(
-            self.server_options.cron.evict_orphan_records_secs as u64,
+            self.server_options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .cron
+                .evict_orphan_records_secs as u64,
         ));
 
         let mut scan_ticker = Ticker::new(TickInterval::Seconds(
-            self.server_options.cron.scan_keys_secs as u64,
+            self.server_options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .cron
+                .scan_keys_secs as u64,
         ));
 
         loop {
@@ -154,7 +165,7 @@ impl Cron {
                         Some(CronMessage::Evict) => {
                             // Do evict now
                             tracing::info!("Evicting records from the database");
-                            Self::evict(&self.store, &self.server_options).await?;
+                            Self::evict(&self.store).await?;
                         }
                         Some(CronMessage::Shutdown) => {
                             tracing::info!("Exiting");
@@ -165,11 +176,11 @@ impl Cron {
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
                     if evict_ticker.try_tick()? {
-                        Self::evict(&self.store, &self.server_options).await?;
+                        Self::evict(&self.store).await?;
                     }
 
                     if scan_ticker.try_tick()? {
-                        Self::scan(&self.store, &self.server_options).await?;
+                        Self::scan(&self.store).await?;
                     }
                 }
             }
@@ -216,10 +227,7 @@ impl Cron {
     /// ```
     /// So in the above example, even if a user overrode the value by calling `set` command
     /// we can still access the orphan values and remove them from the database
-    async fn evict(
-        store: &StorageAdapter,
-        _server_options: &ServerOptions,
-    ) -> Result<usize, SableError> {
+    async fn evict(store: &StorageAdapter) -> Result<usize, SableError> {
         let prefix_arr = vec![
             (ValueType::Hash, vec![KeyType::HashItem]),
             (ValueType::List, vec![KeyType::ListItem]),
@@ -357,10 +365,7 @@ impl Cron {
     }
 
     /// Scan the database count keys / databases
-    async fn scan(
-        store: &StorageAdapter,
-        _server_options: &ServerOptions,
-    ) -> Result<(), SableError> {
+    async fn scan(store: &StorageAdapter) -> Result<(), SableError> {
         // Scan of all keys, regardless of their database association
         let mut prefix = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
@@ -477,8 +482,7 @@ mod tests {
                 ZSetLenResult::Some(4)
             );
 
-            let server_options = ServerOptions::default();
-            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
+            let items_evicted = Cron::evict(&db).await.unwrap();
             assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
         });
     }
@@ -508,8 +512,7 @@ mod tests {
             set_db.commit().unwrap();
             assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
 
-            let server_options = ServerOptions::default();
-            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
+            let items_evicted = Cron::evict(&db).await.unwrap();
             assert_eq!(items_evicted, 0); // 0 items should be evicted
 
             // Create another set, using the same *name* but with a different UID
@@ -520,7 +523,7 @@ mod tests {
             assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
 
             // Try evicting again, this time we expect 3 items to be evicted
-            let items_evicted = Cron::evict(&db, &server_options).await.unwrap();
+            let items_evicted = Cron::evict(&db).await.unwrap();
             assert_eq!(items_evicted, 3); // 3 items should be evicted
 
             // The length should be still 3

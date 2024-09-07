@@ -97,7 +97,7 @@ pub enum BlockClientResult {
 pub struct ServerState {
     blocked_clients: TokioRwLock<BlockedClients>,
     telemetry: Arc<StdRwLock<Telemetry>>,
-    opts: ServerOptions,
+    opts: Arc<StdRwLock<ServerOptions>>,
     replicator_context: Option<Arc<ReplicatorContext>>,
     evictor_context: Option<Arc<CronContext>>,
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
@@ -120,7 +120,7 @@ impl ServerState {
         ServerState {
             telemetry: Arc::new(StdRwLock::<Telemetry>::default()),
             blocked_clients: TokioRwLock::<BlockedClients>::default(),
-            opts: ServerOptions::default(),
+            opts: Arc::new(StdRwLock::<ServerOptions>::default()),
             replicator_context: None,
             evictor_context: None,
             worker_tx_channels: DashMap::<std::thread::ThreadId, WorkerSender>::new(),
@@ -142,7 +142,7 @@ impl ServerState {
         Ok(())
     }
 
-    pub fn set_server_options(mut self, opts: ServerOptions) -> Self {
+    pub fn set_server_options(mut self, opts: Arc<StdRwLock<ServerOptions>>) -> Self {
         self.opts = opts;
         self
     }
@@ -171,8 +171,8 @@ impl ServerState {
         self.telemetry.clone()
     }
 
-    pub fn options(&self) -> &ServerOptions {
-        &self.opts
+    pub fn options(&self) -> Arc<StdRwLock<ServerOptions>> {
+        self.opts.clone()
     }
 
     /// Remove `client_id` from the blocking list queues
@@ -368,7 +368,7 @@ impl ServerState {
 
 impl Server {
     pub fn new(
-        opts: ServerOptions,
+        opts: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
         workers_count: usize,
     ) -> Result<Self, SableError> {

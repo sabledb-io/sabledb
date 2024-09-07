@@ -13,7 +13,10 @@ use redis::Commands;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, RwLock as StdRwLock,
+};
 
 lazy_static::lazy_static! {
     static ref LAST_UPDATED_TS: AtomicU64 = AtomicU64::default();
@@ -44,7 +47,13 @@ macro_rules! check_us_passed_since {
 /// return if not
 macro_rules! check_cluster_db {
     ($options:expr) => {{
-        if $options.general_settings.cluster_address.is_none() {
+        if $options
+            .read()
+            .expect("read error")
+            .general_settings
+            .cluster_address
+            .is_none()
+        {
             return Ok(());
         }
     }};
@@ -56,12 +65,17 @@ pub struct NodeProperties {
 }
 
 impl NodeProperties {
-    pub fn current(options: &ServerOptions) -> Self {
+    pub fn current(options: Arc<StdRwLock<ServerOptions>>) -> Self {
         let mut properties = BTreeMap::<&str, String>::new();
         properties.insert(PROP_NODE_ID, Server::state().persistent_state().id());
         properties.insert(
             PROP_NODE_ADDRESS,
-            options.general_settings.private_address.clone(),
+            options
+                .read()
+                .expect("read error")
+                .general_settings
+                .private_address
+                .clone(),
         );
         properties.insert(
             PROP_ROLE,
@@ -117,7 +131,7 @@ impl NodeProperties {
 }
 
 /// Initialise the cluster manager API
-pub fn initialise(_options: &ServerOptions) {
+pub fn initialise(_options: Arc<StdRwLock<ServerOptions>>) {
     let mut rng = rand::thread_rng();
     let us = rng.gen_range(5000000..10_000000);
     CHECK_PRIMARY_ALIVE_INTERVAL.store(us, Ordering::Relaxed);
@@ -131,7 +145,7 @@ pub fn initialise(_options: &ServerOptions) {
 /// Update this node with the server manager database. If no database is configured, do nothing
 /// If an entry for the same node already exists, it is overridden (the key is the node-id)
 pub fn put_node_properties(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     node_info: &NodeProperties,
 ) -> Result<(), SableError> {
     check_cluster_db!(options);
@@ -141,7 +155,7 @@ pub fn put_node_properties(
 }
 
 /// Update the "last updated" field for this node in the cluster manager database
-pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
+pub fn put_last_updated(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
     check_cluster_db!(options);
     if !check_us_passed_since!(LAST_UPDATED_TS, 1_000_000) {
         return Ok(());
@@ -154,7 +168,10 @@ pub fn put_last_updated(options: &ServerOptions) -> Result<(), SableError> {
 }
 
 /// Associate node identified by `replica_node_id` with the current node
-pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(), SableError> {
+pub fn add_replica(
+    options: Arc<StdRwLock<ServerOptions>>,
+    replica_node_id: String,
+) -> Result<(), SableError> {
     check_cluster_db!(options);
     let db = ClusterDB::with_options(options);
     db.add_replica(replica_node_id)
@@ -163,7 +180,7 @@ pub fn add_replica(options: &ServerOptions, replica_node_id: String) -> Result<(
 #[allow(dead_code)]
 /// Remove replica identified by `replica_node_id` from the current node
 pub fn remove_replica_from_this(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     replica_node_id: String,
 ) -> Result<(), SableError> {
     check_cluster_db!(options);
@@ -172,7 +189,7 @@ pub fn remove_replica_from_this(
 }
 
 /// Update the cluster database that this node is a primary
-pub fn delete_self(options: &ServerOptions) -> Result<(), SableError> {
+pub fn delete_self(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
     check_cluster_db!(options);
     let current_node_id = Server::state().persistent_state().id();
     tracing::info!(
@@ -188,7 +205,7 @@ pub fn delete_self(options: &ServerOptions) -> Result<(), SableError> {
 
 /// Check and perform failover is needed
 pub async fn fail_over_if_needed(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
 ) -> Result<(), SableError> {
     // In order to be able to perform a failover, this instance needs to have a valid primary node ID
@@ -203,12 +220,12 @@ pub async fn fail_over_if_needed(
     }
 
     check_cluster_db!(options);
-    if is_primary_alive(options)? {
+    if is_primary_alive(options.clone())? {
         return Ok(());
     }
 
     tracing::info!("Starting fail-over");
-    let db = ClusterDB::with_options(options);
+    let db = ClusterDB::with_options(options.clone());
 
     // Try to lock the primary, if we succeeded in doing this,
     // this `lock_primary` returns the value of the lock which
@@ -240,7 +257,7 @@ pub async fn fail_over_if_needed(
         };
 
         tracing::info!("New primary: {}", new_primary_id);
-        notify_replicas_to_switch_primary(options, &all_replicas, new_primary_id).await?;
+        notify_replicas_to_switch_primary(options.clone(), &all_replicas, new_primary_id).await?;
     }
 
     // Pop the command from the queue and execute it
@@ -255,7 +272,7 @@ pub async fn fail_over_if_needed(
 /// Notify all replicas to switch to a new primary. We do this by sending a string command
 /// on a LIST channel
 async fn notify_replicas_to_switch_primary(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     all_replicas: &Vec<(String, u64)>,
     new_primary_id: &String,
 ) -> Result<(), SableError> {
@@ -286,13 +303,15 @@ async fn notify_replicas_to_switch_primary(
 
 /// Process `count` commands from the node's commands queue
 async fn process_commands_queue(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
     mut count: u32,
 ) -> Result<(), SableError> {
     // wait for the command and run it
     loop {
-        if let ProcessCommandQueueResult::Done = try_process_commands_queue(options, store).await? {
+        if let ProcessCommandQueueResult::Done =
+            try_process_commands_queue(options.clone(), store).await?
+        {
             count = count.saturating_sub(1);
             if count == 0 {
                 return Ok(());
@@ -303,10 +322,10 @@ async fn process_commands_queue(
 
 /// Check the current node's command queue and process a single command from it
 async fn try_process_commands_queue(
-    options: &ServerOptions,
+    options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
 ) -> Result<ProcessCommandQueueResult, SableError> {
-    let db = ClusterDB::with_options(options);
+    let db = ClusterDB::with_options(options.clone());
     let current_node_id = Server::state().persistent_state().id();
 
     // wait for the command and run it
@@ -327,7 +346,7 @@ async fn try_process_commands_queue(
 }
 
 async fn process_command_internal(
-    _options: &ServerOptions,
+    _options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
     command: &str,
     expected_output: RedisObject,
@@ -353,7 +372,7 @@ async fn process_command_internal(
 }
 
 /// Check that the primary is alive
-fn is_primary_alive(options: &ServerOptions) -> Result<bool, SableError> {
+fn is_primary_alive(options: Arc<StdRwLock<ServerOptions>>) -> Result<bool, SableError> {
     if !check_us_passed_since!(LAST_HTBT_CHECKED_TS, 1_500_000) {
         return Ok(true);
     }
