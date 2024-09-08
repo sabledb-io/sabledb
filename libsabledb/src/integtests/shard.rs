@@ -11,10 +11,8 @@ const TARGET_CONFIG: &str = "release";
 
 #[derive(Default, Debug)]
 pub struct Instance {
-    /// The address on which clients can connect to this instance
-    pub address: String,
-    /// Address on which other instances can connect to this instance
-    pub private_address: String,
+    /// Command line arguments
+    pub args: CommandLineArgs,
     /// Handle to SableDB process
     hproc: Option<std::process::Child>,
     /// SableDB working directory
@@ -22,23 +20,13 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn with_process(mut self, hproc: std::process::Child) -> Self {
-        self.hproc = Some(hproc);
-        self
-    }
-
     pub fn with_working_dir(mut self, working_dir: &str) -> Self {
         self.working_dir = working_dir.into();
         self
     }
 
-    pub fn with_address(mut self, address: &str) -> Self {
-        self.address = address.into();
-        self
-    }
-
-    pub fn with_private_address(mut self, address: &str) -> Self {
-        self.private_address = address.into();
+    pub fn with_args(mut self, args: CommandLineArgs) -> Self {
+        self.args = args;
         self
     }
 
@@ -46,17 +34,25 @@ impl Instance {
     ///
     /// Returns the connection
     pub fn connect(&self) -> Result<redis::Connection, SableError> {
-        let connect_string = format!("redis://{}", self.address);
+        let connect_string = format!("redis://{}", self.address());
         let client = redis::Client::open(connect_string.as_str())?;
         let conn = client.get_connection()?;
         Ok(conn)
+    }
+
+    pub fn address(&self) -> String {
+        self.args.public_address.as_deref().unwrap().to_string()
+    }
+
+    pub fn private_address(&self) -> String {
+        self.args.private_address.as_deref().unwrap().to_string()
     }
 
     /// Connect to SableDB with retries and timeout
     ///
     /// Returns the connection
     pub fn connect_with_timeout(&self) -> Result<redis::Connection, SableError> {
-        let connect_string = format!("redis://{}", self.address);
+        let connect_string = format!("redis://{}", self.address());
         let client = redis::Client::open(connect_string.as_str())?;
         let mut retries = 10usize;
         while retries > 0 {
@@ -69,15 +65,40 @@ impl Instance {
 
         Err(SableError::OtherError(format!(
             "Could not connect to SableDB@{}",
-            self.address
+            self.address()
         )))
     }
 
+    /// Terminate the current instance
     pub fn terminate(&mut self) {
         if let Some(hproc) = &mut self.hproc {
+            println!("Terminating SableDB: {}", hproc.id());
             let _ = hproc.kill();
             std::thread::sleep(std::time::Duration::from_secs(1));
+            self.hproc = None;
         }
+    }
+
+    /// Launch SableDB (using the same attributes as this instance was created with)
+    pub fn run(&mut self) -> Result<(), SableError> {
+        self.hproc = Some(run_instance(&self.working_dir, &self.args, false)?);
+        Ok(())
+    }
+
+    /// Launch SableDB
+    pub fn build(mut self) -> Result<Self, SableError> {
+        self.hproc = Some(run_instance(&self.working_dir, &self.args, true)?);
+        Ok(self)
+    }
+
+    /// Return true if this instance of SableDB is running
+    pub fn is_running(&self) -> bool {
+        self.hproc.is_some()
+    }
+
+    /// Return the process ID of this instance of SableDB
+    pub fn pid(&self) -> Option<u32> {
+        self.hproc.as_ref().map(|hproc| hproc.id())
     }
 }
 
@@ -167,6 +188,7 @@ fn create_sabledb_args(cluster_address: Option<String>) -> (String, CommandLineA
 fn run_instance(
     working_dir: &String,
     args: &CommandLineArgs,
+    clear_before: bool,
 ) -> Result<std::process::Child, SableError> {
     let Some(mut rootdir) = super::findup("LICENSE")? else {
         return Err(SableError::NotFound);
@@ -179,8 +201,9 @@ fn run_instance(
     println!("Working directory: {}", working_dir);
 
     // Remove any old instance of this folder
-    let _ = std::fs::remove_dir_all(working_dir);
-
+    if clear_before {
+        let _ = std::fs::remove_dir_all(working_dir);
+    }
     // Ensure that the folder exists
     let _ = std::fs::create_dir_all(working_dir);
 
@@ -209,28 +232,24 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
 
     let (wd, cluster_db_args) = create_sabledb_args(None);
     let mut instances = Vec::<Rc<RefCell<Instance>>>::new();
-    let inst = run_instance(&wd, &cluster_db_args)?;
 
-    let public_address = cluster_db_args.public_address.as_deref().unwrap();
     let cluster_inst = Instance::default()
-        .with_address(public_address)
-        .with_private_address(cluster_db_args.private_address.as_deref().unwrap())
-        .with_process(inst)
-        .with_working_dir(&wd);
+        .with_args(cluster_db_args)
+        .with_working_dir(&wd)
+        .build()?;
+
+    let cluster_address = cluster_inst.private_address();
 
     // Make sure that the host is reachable
     let _conn = cluster_inst.connect_with_timeout()?;
     instances.push(Rc::new(RefCell::new(cluster_inst)));
 
     for _ in 0..instance_count {
-        let (wd, args) = create_sabledb_args(cluster_db_args.private_address.clone());
-        let public_address = args.public_address.as_deref().unwrap();
-
+        let (wd, args) = create_sabledb_args(Some(cluster_address.clone()));
         let inst = Instance::default()
-            .with_address(public_address)
-            .with_private_address(args.private_address.as_deref().unwrap())
-            .with_process(run_instance(&wd, &args)?)
-            .with_working_dir(&wd);
+            .with_args(args)
+            .with_working_dir(&wd)
+            .build()?;
 
         // Make sure that the host is reachable
         let _conn = inst.connect_with_timeout()?;
@@ -256,6 +275,7 @@ mod test {
     use std::collections::HashSet;
 
     #[test]
+    #[serial_test::serial]
     fn test_shard_args_are_unique() {
         let args_vec = create_sabledb_args(None).1.to_vec();
         let args: HashSet<&String> = args_vec.iter().collect();
@@ -265,6 +285,7 @@ mod test {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_start_shard() {
         let shard = start_shard(3).unwrap();
         let mut conn = shard.primary().borrow().connect().unwrap();
@@ -274,5 +295,24 @@ mod test {
         assert_eq!(shard.instances.len(), 4);
         println!("{:?}", shard);
         std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_restart() {
+        let shard = start_shard(3).unwrap();
+        assert!(shard.primary().borrow().is_running());
+        println!(
+            "Server started with PID: {}",
+            shard.primary().borrow().pid().unwrap()
+        );
+        shard.primary().borrow_mut().terminate();
+        assert!(!shard.primary().borrow().is_running());
+        assert!(shard.primary().borrow_mut().run().is_ok());
+
+        println!(
+            "Server started with PID: {}",
+            shard.primary().borrow().pid().unwrap()
+        );
     }
 }
