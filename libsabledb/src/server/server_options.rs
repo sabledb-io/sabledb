@@ -3,6 +3,7 @@ use clap::Parser;
 use ini::Ini;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 #[derive(Clone, Debug)]
 pub struct GeneralSettings {
@@ -115,6 +116,10 @@ pub struct CommandLineArgs {
     /// Private address. Used internally for communicating between SableDB nodes
     pub private_address: Option<String>,
 
+    #[arg(long)]
+    /// Cluster DB address. If provided, SableDB enables advanced cluster / shard features such as "auto-failover"
+    pub cluster_address: Option<String>,
+
     #[arg(short, long)]
     /// Path to the storage directory (you may also set to special devices, e.g. /deb/shm/sabledb.db)
     pub db_path: Option<String>,
@@ -123,12 +128,154 @@ pub struct CommandLineArgs {
     /// Log verbosity (can be one of: info, warn, error, trace, debug)
     pub log_level: Option<String>,
 
+    #[arg(long)]
+    /// Log directory
+    pub logdir: Option<String>,
+
     #[arg(short, long)]
     /// Server workers count. set to 0 to let sabledb decide which defaults to `(number of CPUs / 2)`
     pub workers: Option<usize>,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub parameters: Vec<String>,
+}
+
+impl CommandLineArgs {
+    pub fn with_workers(mut self, workers: usize) -> Self {
+        self.workers = Some(workers);
+        self
+    }
+
+    pub fn with_public_address(mut self, public_address: &str) -> Self {
+        self.public_address = Some(public_address.into());
+        self
+    }
+
+    pub fn with_private_address(mut self, private_address: &str) -> Self {
+        self.private_address = Some(private_address.into());
+        self
+    }
+
+    pub fn with_cluster_address(mut self, cluster_address: &str) -> Self {
+        self.cluster_address = Some(cluster_address.into());
+        self
+    }
+
+    pub fn with_db_path(mut self, db_path: &str) -> Self {
+        self.db_path = Some(db_path.into());
+        self
+    }
+
+    pub fn with_log_level(mut self, log_level: &str) -> Self {
+        self.log_level = Some(log_level.into());
+        self
+    }
+
+    pub fn with_log_dir(mut self, logdir: &str) -> Self {
+        self.logdir = Some(logdir.into());
+        self
+    }
+
+    pub fn to_vec(&self) -> Vec<String> {
+        let mut args = Vec::<String>::new();
+        if let Some(public_address) = &self.public_address {
+            args.push("--public-address".into());
+            args.push(public_address.into());
+        }
+
+        if let Some(private_address) = &self.private_address {
+            args.push("--private-address".into());
+            args.push(private_address.into());
+        }
+
+        if let Some(cluster_address) = &self.cluster_address {
+            args.push("--cluster-address".into());
+            args.push(cluster_address.into());
+        }
+
+        if let Some(db_path) = &self.db_path {
+            args.push("--db-path".into());
+            args.push(db_path.into());
+        }
+
+        if let Some(log_level) = &self.log_level {
+            args.push("--log-level".into());
+            args.push(log_level.into());
+        }
+
+        if let Some(logdir) = &self.logdir {
+            args.push("--logdir".into());
+            args.push(logdir.into());
+        }
+
+        if let Some(workers) = &self.workers {
+            args.push("--workers".into());
+            args.push(format!("{}", workers));
+        }
+        args
+    }
+
+    /// Apply the command line arguments on the server options
+    pub fn apply(&self, options: Arc<StdRwLock<ServerOptions>>) {
+        if let Some(public_address) = &self.public_address {
+            options
+                .write()
+                .expect("poisoned mutex")
+                .general_settings
+                .public_address = public_address.to_string();
+        }
+
+        if let Some(private_address) = &self.private_address {
+            options
+                .write()
+                .expect("poisoned mutex")
+                .general_settings
+                .private_address = private_address.to_string();
+        }
+
+        if let Some(cluster_address) = &self.cluster_address {
+            options
+                .write()
+                .expect("poisoned mutex")
+                .general_settings
+                .cluster_address = Some(cluster_address.to_string());
+        }
+
+        if let Some(db_path) = &self.db_path {
+            options.write().expect("poisoned mutex").open_params.db_path = PathBuf::from(db_path);
+        }
+
+        if let Some(logdir) = &self.logdir {
+            options
+                .write()
+                .expect("poisoned mutex")
+                .general_settings
+                .logdir = Some(PathBuf::from(logdir));
+        }
+
+        if let Some(log_level) = &self.log_level {
+            if let Ok(log_level) = tracing::Level::from_str(log_level) {
+                options
+                    .write()
+                    .expect("poisoned mutex")
+                    .general_settings
+                    .log_level = log_level;
+            }
+        }
+
+        if let Some(workers) = &self.workers {
+            options
+                .write()
+                .expect("poisoned mutex")
+                .general_settings
+                .workers = *workers;
+        }
+    }
+
+    /// Return the configuration file passed (if any)
+    pub fn config_file(&self) -> Option<String> {
+        self.parameters.first().cloned()
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -143,31 +290,6 @@ pub struct ServerOptions {
 impl ServerOptions {
     pub fn use_tls(&self) -> bool {
         self.general_settings.key.is_some() && self.general_settings.cert.is_some()
-    }
-
-    /// Override values read from the configuration file from the
-    pub fn apply_command_line_args(&mut self, cli_args: &CommandLineArgs) {
-        if let Some(public_address) = &cli_args.public_address {
-            self.general_settings.public_address = public_address.to_string();
-        }
-
-        if let Some(private_address) = &cli_args.private_address {
-            self.general_settings.private_address = private_address.to_string();
-        }
-
-        if let Some(db_path) = &cli_args.db_path {
-            self.open_params.db_path = PathBuf::from(db_path);
-        }
-
-        if let Some(log_level) = &cli_args.log_level {
-            if let Ok(log_level) = tracing::Level::from_str(log_level) {
-                self.general_settings.log_level = log_level;
-            }
-        }
-
-        if let Some(workers) = &cli_args.workers {
-            self.general_settings.workers = *workers;
-        }
     }
 
     /// Read values from INI configuration file and return `ServerOptions` structure
@@ -490,14 +612,14 @@ mod tests {
     #[test]
     fn test_override_values_from_cli() {
         let options = Arc::new(StdRwLock::<ServerOptions>::default());
-        let mut cli_args = CommandLineArgs::default();
-        cli_args.db_path = Some("mydbpath".into());
-        cli_args.workers = Some(42);
-        cli_args.log_level = Some("warn".into());
-        cli_args.public_address = Some("public:1234".into());
-        cli_args.private_address = Some("private:1234".into());
+        let cli_args = CommandLineArgs::default()
+            .with_workers(42)
+            .with_public_address("public:1234")
+            .with_private_address("private:1234")
+            .with_log_level("warn")
+            .with_db_path("mydbpath");
 
-        options.write().unwrap().apply_command_line_args(&cli_args);
+        cli_args.apply(options.clone());
 
         let opts = options.read().unwrap();
         assert_eq!(opts.open_params.db_path, PathBuf::from("mydbpath"));

@@ -394,7 +394,7 @@ impl ReplicationServer {
                 )
             });
         info!(
-            "Replication server started on address: {}",
+            "Accepting replicas @{}",
             &options
                 .read()
                 .expect(OPTIONS_LOCK_ERR)

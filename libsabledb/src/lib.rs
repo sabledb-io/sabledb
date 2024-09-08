@@ -7,6 +7,7 @@ pub mod server;
 pub mod storage;
 pub mod types;
 pub mod utils;
+pub mod integtests;
 
 pub use commands::{
     ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,

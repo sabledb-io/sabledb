@@ -12,16 +12,13 @@ const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 fn main() -> Result<(), SableError> {
     // configure our tracing subscriber
     let args = CommandLineArgs::parse();
-    let options = if let Some(config_file) = args.parameters.first() {
-        Arc::new(StdRwLock::new(ServerOptions::from_config(
-            config_file.to_string(),
-        )?))
+    let options = if let Some(config_file) = args.config_file() {
+        Arc::new(StdRwLock::new(ServerOptions::from_config(config_file)?))
     } else {
         Arc::new(StdRwLock::<ServerOptions>::default())
     };
 
-    // Override options from values read from the command line
-    options.write().unwrap().apply_command_line_args(&args);
+    args.apply(options.clone());
 
     // Override values passed to the command line
     let fmtr = tracing_subscriber::fmt::fmt()
