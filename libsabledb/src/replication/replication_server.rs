@@ -10,7 +10,7 @@ use crate::{
         BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse, ResponseCommon,
         ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
-    SableError, StorageAdapter,
+    SableError, Server, StorageAdapter,
 };
 
 use num_format::{Locale, ToFormattedString};
@@ -21,6 +21,14 @@ use std::sync::{
 use tokio::net::TcpListener;
 
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
+
+#[derive(Debug)]
+enum HandleRequestResult {
+    NodeJoined(String),
+    Success,
+    NetError(String),
+    Shutdown(String),
+}
 
 #[cfg(not(test))]
 use tracing::{debug, error, info};
@@ -71,21 +79,43 @@ fn replication_thread_is_going_down() -> bool {
 /// as running and mark it as "off" when this helper
 /// goes out of scope
 struct ReplicationThreadMarker {
-    address: String,
+    address: Option<String>,
 }
 
 impl ReplicationThreadMarker {
-    pub fn new(address: String) -> Self {
-        ReplicationTelemetry::update_replica_info(address.clone(), ReplicaTelemetry::default());
+    pub fn new() -> Self {
         replication_thread_incr();
-        ReplicationThreadMarker { address }
+        ReplicationThreadMarker { address: None }
+    }
+
+    pub fn set_node_id(&mut self, node_id: &String) {
+        self.address = Some(node_id.to_string());
+        ReplicationTelemetry::update_replica_info(node_id.to_string(), ReplicaTelemetry::default());
     }
 }
 
 impl Drop for ReplicationThreadMarker {
     fn drop(&mut self) {
         replication_thread_decr();
-        ReplicationTelemetry::remove_replica(&self.address);
+        if let Some(address) = &self.address {
+            ReplicationTelemetry::remove_replica(address);
+
+            // If we are the last replica, clear our entry from the cluster database
+            if ReplicationTelemetry::connected_replicas() == 0 {
+                let options = Server::state().options();
+                tracing::info!(
+                    "Deleting entry {} from cluster database",
+                    Server::state().persistent_state().id()
+                );
+
+                if let Err(e) = cluster_manager::delete_self(options.clone()) {
+                    tracing::warn!(
+                        "Failed to delete primary entry from cluster database. {:?}",
+                        e
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -174,8 +204,8 @@ impl ReplicationServer {
         store: &StorageAdapter,
         options: Arc<StdRwLock<ServerOptions>>,
         stream: &mut std::net::TcpStream,
-        replica_addr: &String,
-    ) -> bool {
+        replica_node_id: &String,
+    ) -> HandleRequestResult {
         let mut reader = TcpStreamBytesReader::new(stream);
         let mut writer = TcpStreamBytesWriter::new(stream);
 
@@ -184,16 +214,19 @@ impl ReplicationServer {
             let result = Self::read_request(&mut reader);
             match result {
                 Err(e) => {
-                    error!("Failed to read request. {:?}", e);
-                    return false;
+                    return HandleRequestResult::NetError(format!(
+                        "Failed to read request. {:?}",
+                        e
+                    ));
                 }
                 // ❤ Rust...
                 Ok(Some(req)) => break req,
                 Ok(None) => {
                     // timeout
                     if replication_thread_is_going_down() {
-                        info!("Received request to shutdown - bye");
-                        return false;
+                        return HandleRequestResult::Shutdown(
+                            "Received request to shutdown - bye".into(),
+                        );
                     }
                     Self::update_primary_info(options.clone(), store);
                     continue;
@@ -204,16 +237,14 @@ impl ReplicationServer {
 
         match req {
             ReplicationRequest::JoinShard(common) => {
-                debug!("Received request JoinShard({})", common);
-                info!(
-                    "New replica joined with NodeID ({}) requested to join the shard",
-                    common.node_id()
-                );
+                debug!("Received request: JoinShard({})", common);
 
                 let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
                 if !Self::write_response(&mut writer, &response_ok) {
-                    return false;
+                    return HandleRequestResult::NetError("Failed to write response".into());
                 }
+                info!("Replica {} joined the shard", common.node_id());
+                return HandleRequestResult::NodeJoined(common.node_id().to_string());
             }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request {}", common);
@@ -222,16 +253,15 @@ impl ReplicationServer {
                 // Response with an ACK followed by the file
                 debug!("Sending replication response: {}", response_ok);
                 if !Self::write_response(&mut writer, &response_ok) {
-                    return false;
+                    return HandleRequestResult::NetError("Failed to write response".into());
                 }
                 let changes_count =
-                    match Self::send_checkpoint(store, options.clone(), replica_addr, stream) {
+                    match Self::send_checkpoint(store, options.clone(), replica_node_id, stream) {
                         Err(e) => {
-                            info!(
+                            return HandleRequestResult::NetError(format!(
                                 "Failed sending db checkpoint to replica {}. {:?}",
-                                replica_addr, e
-                            );
-                            return false;
+                                replica_node_id, e
+                            ));
                         }
                         Ok(count) => count,
                     };
@@ -240,7 +270,7 @@ impl ReplicationServer {
                     last_change_sequence_number: changes_count,
                     distance_from_primary: 0,
                 };
-                ReplicationTelemetry::update_replica_info(replica_addr.to_string(), replinfo);
+                ReplicationTelemetry::update_replica_info(replica_node_id.to_string(), replinfo);
 
                 // Update the current node info in the cluster manager database as primary
                 Self::update_primary_info(options.clone(), store);
@@ -252,7 +282,7 @@ impl ReplicationServer {
                 );
                 debug!(
                     "Replica {} is requesting changes since: {}",
-                    replica_addr, seq
+                    replica_node_id, seq
                 );
 
                 if common.request_id() == 0 {
@@ -262,7 +292,11 @@ impl ReplicationServer {
                     );
 
                     debug!("Sending replication response: {}", response_not_ok);
-                    return Self::write_response(&mut writer, &response_not_ok);
+                    if Self::write_response(&mut writer, &response_not_ok) {
+                        return HandleRequestResult::Success;
+                    } else {
+                        return HandleRequestResult::NetError("Failed to write response".into());
+                    }
                 }
 
                 // Get the changes from the database. If no changes available
@@ -296,7 +330,13 @@ impl ReplicationServer {
                                 ResponseCommon::new(&common)
                                     .with_reason(ResponseReason::CreatingUpdatesSinceError),
                             );
-                            return Self::write_response(&mut writer, &response_not_ok);
+                            if Self::write_response(&mut writer, &response_not_ok) {
+                                return HandleRequestResult::Success;
+                            } else {
+                                return HandleRequestResult::NetError(
+                                    "Failed to write response".into(),
+                                );
+                            }
                         }
                         Ok(changes_since) => changes_since,
                     };
@@ -329,7 +369,11 @@ impl ReplicationServer {
                         ResponseCommon::new(&common)
                             .with_reason(ResponseReason::NoChangesAvailable),
                     );
-                    return Self::write_response(&mut writer, &response_not_ok);
+                    if Self::write_response(&mut writer, &response_not_ok) {
+                        return HandleRequestResult::Success;
+                    } else {
+                        return HandleRequestResult::NetError("Failed to write response".into());
+                    }
                 };
 
                 info!("Sending replication update: {}", storage_updates);
@@ -337,19 +381,22 @@ impl ReplicationServer {
                 // Send a `ReplicationResponse::Ok` message, followed by the data
                 let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
                 if !Self::write_response(&mut writer, &response_ok) {
-                    return false;
+                    return HandleRequestResult::NetError("Failed to write response".into());
                 }
 
                 // Send the data
                 let mut buffer = storage_updates.to_bytes();
                 match writer.write_message(&mut buffer) {
                     Err(SableError::BrokenPipe) => {
-                        tracing::warn!("Failed to send changes to replica (broken pipe)");
-                        return false;
+                        return HandleRequestResult::NetError(
+                            "Failed to send changes to replica (broken pipe)".into(),
+                        );
                     }
                     Err(e) => {
-                        error!("Failed to send changes to replica. {:?}", e);
-                        return false;
+                        return HandleRequestResult::NetError(format!(
+                            "Failed to send changes to replica. {:?}",
+                            e
+                        ));
                     }
                     _ => {
                         let replinfo = ReplicaTelemetry {
@@ -357,14 +404,14 @@ impl ReplicationServer {
                             distance_from_primary: 0,
                         };
                         ReplicationTelemetry::update_replica_info(
-                            replica_addr.to_string(),
+                            replica_node_id.to_string(),
                             replinfo,
                         );
                     }
                 }
             }
         }
-        true
+        HandleRequestResult::Success
     }
 
     // Primary node main loop: wait for a new replica connection
@@ -420,8 +467,8 @@ impl ReplicationServer {
             // without building buffers in the memory
             let _handle = std::thread::spawn(move || {
                 info!("Replication thread started for connection {:?}", addr);
-                let _guard = ReplicationThreadMarker::new(addr.to_string());
-                let replica_name = addr.to_string();
+                let mut guard = ReplicationThreadMarker::new();
+                let mut replica_name = String::default();
 
                 // we now work in a simple request/reply mode:
                 // the replica sends a request requesting changes since
@@ -435,19 +482,35 @@ impl ReplicationServer {
                 }
 
                 loop {
-                    if !Self::handle_single_request(
+                    match Self::handle_single_request(
                         &store_clone,
                         server_options_clone.clone(),
                         &mut stream,
                         &replica_name,
                     ) {
-                        info!("Closing connection with replica: {:?}", stream);
-                        let _ = stream.shutdown(std::net::Shutdown::Both);
-                        break;
+                        HandleRequestResult::NodeJoined(replica_id) => {
+                            guard.set_node_id(&replica_id);
+                            // keep the node-id
+                            replica_name = replica_id;
+                        }
+                        HandleRequestResult::Success => {}
+                        HandleRequestResult::NetError(msg) => {
+                            tracing::warn!("Network error with replica {replica_name}. {msg}");
+                            info!("Closing connection with replica: {:?}", stream);
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                            break;
+                        }
+                        HandleRequestResult::Shutdown(msg) => {
+                            info!("{msg}");
+                            info!("Closing connection with replica: {:?}", stream);
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                            break;
+                        }
                     }
                     Self::update_primary_info(server_options_clone.clone(), &store_clone);
                 }
             });
+
             // let the handle drop to make the thread detached
         }
 

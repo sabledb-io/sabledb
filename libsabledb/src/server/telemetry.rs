@@ -27,6 +27,16 @@ pub struct ReplicaTelemetry {
     pub last_change_sequence_number: u64,
 }
 
+impl std::fmt::Display for ReplicaTelemetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "distance_from_primary:{},last_change_sequence_number:{}",
+            self.distance_from_primary, self.last_change_sequence_number
+        )
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct PrimaryTelemetry {
     pub replicas: HashMap<String, ReplicaTelemetry>,
@@ -73,6 +83,16 @@ impl ReplicationTelemetry {
             .replicas
             .remove(replica_id);
     }
+
+    /// Return the number of replicas connected to this instance
+    pub fn connected_replicas() -> usize {
+        REPLICATION_INFO
+            .read()
+            .expect("read lock error")
+            .primary_telemetry
+            .replicas
+            .len()
+    }
 }
 
 impl std::fmt::Display for ReplicationTelemetry {
@@ -100,7 +120,7 @@ impl std::fmt::Display for ReplicationTelemetry {
                 ));
 
                 for (replica_id, info) in &self.primary_telemetry.replicas {
-                    lines.push(format!("replica: {}, {:?}", replica_id, info));
+                    lines.push(format!("replica: {},{}", replica_id, info));
                 }
             }
             ServerRole::Replica => {
