@@ -101,31 +101,31 @@ impl std::fmt::Display for ReplicationTelemetry {
 
         let node_role = Server::state().persistent_state().role();
         lines.push("# Replication".to_string());
-        lines.push(format!("role: {}", node_role));
+        lines.push(format!("role:{}", node_role));
         lines.push(format!(
-            "node_id: {}",
+            "node_id:{}",
             Server::state().persistent_state().id()
         ));
 
         lines.push(format!(
-            "last_db_update_sequence_number: {}",
+            "last_db_update_sequence_number:{}",
             self.last_change_sequence_number
         ));
 
         match node_role {
             ServerRole::Primary => {
                 lines.push(format!(
-                    "connected_replicas: {}",
+                    "connected_replicas:{}",
                     self.primary_telemetry.replicas.len()
                 ));
 
                 for (replica_id, info) in &self.primary_telemetry.replicas {
-                    lines.push(format!("replica: {},{}", replica_id, info));
+                    lines.push(format!("replica:{},{}", replica_id, info));
                 }
             }
             ServerRole::Replica => {
                 lines.push(format!(
-                    "primary_node_id: {}",
+                    "primary_node_id:{}",
                     Server::state().persistent_state().primary_node_id()
                 ));
             }
@@ -329,34 +329,34 @@ impl std::fmt::Display for Telemetry {
 
         lines.push("# Commands".to_string());
         lines.push(format!(
-            "total_commands_processed: {}",
+            "total_commands_processed:{}",
             self.total_commands_processed
         ));
 
         lines.push("\n# Network".to_string());
-        lines.push(format!("total_connections: {}", total_connections));
-        lines.push(format!("net_bytes_written: {}", self.net_bytes_written));
-        lines.push(format!("net_bytes_read: {}", self.net_bytes_read));
+        lines.push(format!("total_connections:{}", total_connections));
+        lines.push(format!("net_bytes_written:{}", self.net_bytes_written));
+        lines.push(format!("net_bytes_read:{}", self.net_bytes_read));
         lines.push("\n# Disk I/O".to_string());
         lines.push(format!(
-            "total_io_write_calls: {}",
+            "total_io_write_calls:{}",
             self.total_io_write_calls
         ));
-        lines.push(format!("total_io_read_calls: {}", self.total_io_read_calls));
-        lines.push(format!("total_io_duration: {}", self.total_io_duration));
-        lines.push(format!("avg_io_per_command_micros: {}", avg_io_per_command));
+        lines.push(format!("total_io_read_calls:{}", self.total_io_read_calls));
+        lines.push(format!("total_io_duration:{}", self.total_io_duration));
+        lines.push(format!("avg_io_per_command_micros:{}", avg_io_per_command));
 
         lines.push("\n# Statistics".to_string());
-        lines.push(format!("db_miss: {}", self.db_miss));
-        lines.push(format!("db_hit: {}", self.db_hit));
+        lines.push(format!("db_miss:{}", self.db_miss));
+        lines.push(format!("db_hit:{}", self.db_hit));
 
         lines.push("\n# Keyspace".to_string());
         lines.push(format!(
-            "keys: {}",
+            "keys:{}",
             STORAGE_MD.read().expect("read lock").total_key_count()
         ));
         lines.push(format!(
-            "databases: {}",
+            "databases:{}",
             STORAGE_MD.read().expect("read lock").db_count()
         ));
 

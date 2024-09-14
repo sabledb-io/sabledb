@@ -58,9 +58,17 @@ fn open_connection(options: Arc<StdRwLock<ServerOptions>>) {
         return;
     };
 
-    // run initialization here
-    let cluster_address = format!("rediss://{}/#insecure", cluster_address);
-    tracing::info!("Opening...");
+    // Build the connection string
+    let cluster_address = if cluster_address.starts_with("tls://") {
+        format!(
+            "{}/#insecure",
+            cluster_address.replace("tls://", "rediss://")
+        )
+    } else {
+        format!("redis://{}", cluster_address)
+    };
+
+    tracing::info!("Calling open for {}...", cluster_address);
     let client = match redis::Client::open(cluster_address.as_str()) {
         Err(e) => {
             tracing::warn!(

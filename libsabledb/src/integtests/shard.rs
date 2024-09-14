@@ -1,7 +1,9 @@
-use crate::{CommandLineArgs, SableError};
+use crate::{replication::ServerRole, CommandLineArgs, SableError};
+use redis::InfoDict;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
+use std::str::FromStr;
 
 #[cfg(debug_assertions)]
 const TARGET_CONFIG: &str = "debug";
@@ -17,6 +19,8 @@ pub struct Instance {
     hproc: Option<std::process::Child>,
     /// SableDB working directory
     working_dir: String,
+    /// Holds the INFO data
+    info: Option<InfoDict>,
 }
 
 impl Instance {
@@ -28,6 +32,25 @@ impl Instance {
     pub fn with_args(mut self, args: CommandLineArgs) -> Self {
         self.args = args;
         self
+    }
+
+    pub fn info(&mut self) -> Result<(), SableError> {
+        let mut conn = self.connect()?;
+        let info: redis::InfoDict = redis::cmd("INFO").query(&mut conn)?;
+        self.info = Some(info);
+        Ok(())
+    }
+
+    /// Return the role of the instance based on the INFO output
+    pub fn role(&self) -> Result<ServerRole, SableError> {
+        let Some(info) = &self.info else {
+            return Err(SableError::OtherError(
+                "Can't resolve role. You should call INFO first".into(),
+            ));
+        };
+
+        let role: String = info.get("role").expect("could not find role in INFO");
+        ServerRole::from_str(&role)
     }
 
     /// Connect to the instance
@@ -100,8 +123,19 @@ impl Instance {
     pub fn pid(&self) -> Option<u32> {
         self.hproc.as_ref().map(|hproc| hproc.id())
     }
+
+    pub fn node_id(&self) -> String {
+        let node_id: Option<String> = self.info.clone().unwrap().get("node_id");
+        node_id.unwrap().clone()
+    }
+    pub fn primary_node_id(&self) -> String {
+        let primary_node_id: Option<String> = self.info.clone().unwrap().get("primary_node_id");
+        primary_node_id.unwrap().clone()
+    }
 }
 
+type InstanceRefCell = Rc<RefCell<Instance>>;
+#[allow(dead_code)]
 #[derive(Default, Debug)]
 /// Represents a collection of `Instances` that forms a a "Shard"
 /// In a Shard we have:
@@ -109,24 +143,137 @@ impl Instance {
 /// - 1 primary instance
 /// - N replicas
 pub struct Shard {
-    instances: Vec<Rc<RefCell<Instance>>>,
+    cluster_db_instance: InstanceRefCell,
+    instances: Vec<InstanceRefCell>,
+    primary: Option<InstanceRefCell>,
+    replicas: Option<Vec<InstanceRefCell>>,
 }
 
 impl Shard {
-    pub fn with_instances(instances: Vec<Rc<RefCell<Instance>>>) -> Self {
-        Shard { instances }
+    pub fn with_instances(
+        cluster_db_instance: InstanceRefCell,
+        instances: Vec<InstanceRefCell>,
+    ) -> Self {
+        Shard {
+            cluster_db_instance,
+            instances,
+            primary: None,
+            replicas: None,
+        }
     }
 
-    pub fn primary(&self) -> Rc<RefCell<Instance>> {
-        self.instances.get(1).unwrap().clone()
+    /// Run shard wide INFO command and populate the replicas / primary
+    /// lists. Return true on success (i.e. exactly 1 primary was found and 1+ replicas)
+    /// false otherwise
+    fn try_discover(&mut self) -> Result<bool, SableError> {
+        let mut primary = Vec::<InstanceRefCell>::new();
+        let mut replicas = Vec::<InstanceRefCell>::new();
+
+        for inst in &self.instances {
+            inst.borrow_mut().info()?;
+            match inst.borrow().role()? {
+                ServerRole::Primary => primary.push(inst.clone()),
+                ServerRole::Replica => replicas.push(inst.clone()),
+            }
+        }
+
+        if primary.len() == 1 && !replicas.is_empty() {
+            self.replicas = Some(replicas);
+            self.primary = Some(
+                primary
+                    .first()
+                    .ok_or(SableError::InternalError("No primary?".into()))?
+                    .clone(),
+            );
+            Ok(true)
+        } else {
+            self.replicas = None;
+            self.primary = None;
+            Ok(false)
+        }
     }
 
-    pub fn replicas(&self) -> Vec<Rc<RefCell<Instance>>> {
-        self.instances[2..].to_vec()
+    /// Return true if the cluster is stabilised (we have 1 primary and N replicas)
+    pub fn is_stabilised(&self) -> bool {
+        self.replicas.is_some() && self.primary.is_some()
+    }
+
+    /// Return the shard's replicas
+    pub fn replicas(&self) -> Result<Vec<InstanceRefCell>, SableError> {
+        let Some(replicas) = &self.replicas else {
+            return Err(SableError::InvalidState("Shard is in invalid state".into()));
+        };
+        Ok(replicas.clone())
+    }
+
+    /// Return the shard's primary
+    pub fn primary(&self) -> Result<InstanceRefCell, SableError> {
+        let Some(primary) = &self.primary else {
+            return Err(SableError::InvalidState("Shard is in invalid state".into()));
+        };
+        Ok(primary.clone())
+    }
+
+    pub fn instances(&self) -> Vec<InstanceRefCell> {
+        self.instances.clone()
     }
 
     pub fn cluster_db_instance(&self) -> Rc<RefCell<Instance>> {
         self.instances.first().unwrap().clone()
+    }
+
+    /// Create the replication group by connecting the replicas to the primary
+    fn create_replication_group(&mut self) -> Result<(), SableError> {
+        let mut primary_address = Vec::<String>::new();
+        let mut index = 0usize;
+        for inst in &self.instances {
+            if index == 0 {
+                println!(
+                    "Node {} (Private:{}) : REPLICAOF NO ONE",
+                    inst.borrow().address(),
+                    inst.borrow().private_address()
+                );
+                primary_address = inst
+                    .borrow()
+                    .private_address()
+                    .split(':')
+                    .map(|s| s.to_string())
+                    .collect();
+            } else {
+                let command = format!("REPLICAOF {} {}", primary_address[0], primary_address[1]);
+                println!("Node {}: {}", inst.borrow().address(), command);
+                let mut conn = inst.borrow_mut().connect()?;
+                let mut cmd = redis::cmd("REPLICAOF");
+                for arg in &primary_address {
+                    cmd.arg(arg);
+                }
+                let result = cmd.query(&mut conn)?;
+                match result {
+                    redis::Value::Okay => {
+                        println!("OK");
+                    }
+                    other => {
+                        return Err(SableError::OtherError(format!(
+                            "Failed to execute command '{}'. {:?}",
+                            command, other
+                        )));
+                    }
+                };
+            }
+            index = index.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    /// Query the shard until we get a valid shard (1 primary + N replicas)
+    pub fn wait_for_shard_to_form(&mut self) -> Result<(), SableError> {
+        loop {
+            if self.try_discover()? {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Ok(())
     }
 }
 
@@ -138,7 +285,11 @@ impl Drop for Shard {
             false
         };
 
-        self.instances.iter().for_each(|inst| {
+        let mut all_instances = self.instances.clone();
+        all_instances.push(self.cluster_db_instance.clone());
+
+        // Terminate the primary, replications and the cluster database instance
+        all_instances.iter().for_each(|inst| {
             inst.borrow_mut().terminate();
             if !keep_dir {
                 let d = &inst.borrow().working_dir;
@@ -197,9 +348,6 @@ fn run_instance(
     rootdir.push(TARGET_CONFIG);
     rootdir.push("sabledb");
 
-    println!("Running process: {}", rootdir.display());
-    println!("Working directory: {}", working_dir);
-
     // Remove any old instance of this folder
     if clear_before {
         let _ = std::fs::remove_dir_all(working_dir);
@@ -231,31 +379,43 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     }
 
     let (wd, cluster_db_args) = create_sabledb_args(None);
-    let mut instances = Vec::<Rc<RefCell<Instance>>>::new();
+    let mut instances = Vec::<InstanceRefCell>::new();
 
-    let cluster_inst = Instance::default()
+    let mut cluster_inst = Instance::default()
         .with_args(cluster_db_args)
         .with_working_dir(&wd)
         .build()?;
 
-    let cluster_address = cluster_inst.private_address();
+    // We use the public address
+    let cluster_address = cluster_inst.address();
 
     // Make sure that the host is reachable
     let _conn = cluster_inst.connect_with_timeout()?;
-    instances.push(Rc::new(RefCell::new(cluster_inst)));
+    drop(_conn);
+    cluster_inst.info()?;
 
     for _ in 0..instance_count {
         let (wd, args) = create_sabledb_args(Some(cluster_address.clone()));
-        let inst = Instance::default()
+        let mut inst = Instance::default()
             .with_args(args)
             .with_working_dir(&wd)
             .build()?;
 
         // Make sure that the host is reachable
         let _conn = inst.connect_with_timeout()?;
+        drop(_conn);
+        inst.info()?;
+
         instances.push(Rc::new(RefCell::new(inst)));
     }
-    Ok(Shard::with_instances(instances))
+    let mut shard = Shard::with_instances(Rc::new(RefCell::new(cluster_inst)), instances);
+
+    // Assign roles to each instance
+    shard.create_replication_group()?;
+
+    // Wait for the instances to connect each other
+    shard.wait_for_shard_to_form()?;
+    Ok(shard)
 }
 
 /// Start shard and execute function `test_func`
@@ -287,32 +447,58 @@ mod test {
     #[test]
     #[serial_test::serial]
     fn test_start_shard() {
+        // Start shard of 1 primary 2 replicas
         let shard = start_shard(3).unwrap();
-        let mut conn = shard.primary().borrow().connect().unwrap();
 
+        let all_instances = shard.instances();
+        assert_eq!(all_instances.len(), 3);
+
+        // At this point, we should have a primary instance
+        let primary = shard.primary().unwrap();
+
+        let mut conn = primary.borrow().connect().unwrap();
         let res: redis::Value = conn.set("hello", "world").unwrap();
         assert_eq!(res, redis::Value::Okay);
-        assert_eq!(shard.instances.len(), 4);
-        println!("{:?}", shard);
-        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        let primary_node_id = primary.borrow().node_id();
+        println!("Primary node ID: {}", primary_node_id);
+        let replicas = shard.replicas().unwrap();
+        for replica in &replicas {
+            // refresh the instance information
+            let mut conn = replica.borrow().connect().unwrap();
+
+            // Read-only replica -> we expect error here
+            let res = conn
+                .set::<&str, &str, redis::Value>("hello", "world")
+                .unwrap_err();
+            assert_eq!(res.kind(), redis::ErrorKind::ReadOnly);
+
+            replica.borrow_mut().info().unwrap();
+            println!(
+                "Replica {}: Primary node ID is: {}",
+                replica.borrow().node_id(),
+                replica.borrow().primary_node_id()
+            );
+            assert_eq!(replica.borrow().primary_node_id(), primary_node_id);
+        }
     }
 
     #[test]
     #[serial_test::serial]
     fn test_restart() {
-        let shard = start_shard(3).unwrap();
-        assert!(shard.primary().borrow().is_running());
+        let shard = start_shard(2).unwrap();
+        assert!(shard.primary().unwrap().borrow().is_running());
         println!(
             "Server started with PID: {}",
-            shard.primary().borrow().pid().unwrap()
+            shard.primary().unwrap().borrow().pid().unwrap()
         );
-        shard.primary().borrow_mut().terminate();
-        assert!(!shard.primary().borrow().is_running());
-        assert!(shard.primary().borrow_mut().run().is_ok());
+        shard.primary().unwrap().borrow_mut().terminate();
+        assert!(!shard.primary().unwrap().borrow().is_running());
+        assert!(shard.primary().unwrap().borrow_mut().run().is_ok());
 
         println!(
             "Server started with PID: {}",
-            shard.primary().borrow().pid().unwrap()
+            shard.primary().unwrap().borrow().pid().unwrap()
         );
     }
 }

@@ -36,6 +36,8 @@ pub enum SableError {
     ProtocolError(String),
     #[error("Invalid argument error. {0}")]
     InvalidArgument(String),
+    #[error("Invalid state. {0}")]
+    InvalidState(String),
     #[error("Already exists")]
     AlreadyExists,
     #[error("Tokio channel error. {0}")]
