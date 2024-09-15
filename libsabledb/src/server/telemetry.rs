@@ -135,10 +135,13 @@ impl std::fmt::Display for ReplicationTelemetry {
     }
 }
 
-/// Telemetry collected
+/// A struct representing telemetry collected by SableDB
+///
 /// Each worker holds its own telemetry object so no locking are taking place
-/// while collection is done. Once every N seconds - where N is unique per worker - each worker flushes its
-/// counter to the global one. So expect delay (up to 3 seconds) when viewing statistics
+/// while collection is done.
+///
+/// Every N seconds - where N is unique value per worker - a worker merges its
+/// counters with the global counters - So expect delay (up to 3 seconds) when viewing statistics
 #[derive(Clone, Default, Debug)]
 pub struct Telemetry {
     /// Number of connections opened

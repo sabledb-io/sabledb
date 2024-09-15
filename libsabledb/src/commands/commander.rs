@@ -246,9 +246,12 @@ impl CommandMetadata {
         }
     }
 
-    /// Arity is the number of arguments a command expects. It follows a simple pattern:
+    /// Arity is the number of arguments a command expects.
+    ///
+    /// It follows a simple pattern:
     /// - A positive integer means a fixed number of arguments.
     /// - A negative integer means a minimal number of arguments.
+    ///
     /// Command arity always includes the command's name itself (and the subcommand when applicable).
     pub fn with_arity(mut self, arity: i16) -> Self {
         self.arity = arity;

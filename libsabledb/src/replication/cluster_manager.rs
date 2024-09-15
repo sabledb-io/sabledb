@@ -99,7 +99,7 @@ impl NodeProperties {
             .map(|(field_name, field_value)| (field_name.to_string(), field_value.to_string()))
             .collect();
         tracing::debug!("Writing node object in cluster manager: {:?}", props);
-        conn.hset_multiple(cur_node_id, &props)?;
+        let _: redis::Value = conn.hset_multiple(cur_node_id, &props)?;
         tracing::debug!("Success");
         update_heartbeat_reported_ts();
         Ok(())

@@ -381,11 +381,13 @@ impl ReplicationClient {
         }
     }
 
-    /// Request a single "change request"
+    /// Request a single "change request":
+    ///
     /// 1. Read the next sequence number to fetch from the primary
     /// 2. Send a `ReplRequest` to the primary
     /// 3. Iterate over the changes and store them in our storage
     /// 4. Update the `changes.seq` file with the new sequence
+    ///
     /// In various places throughout this function, we check for
     /// shutdown request (this can happen if the server accepted a
     /// request to change role from replica -> primary)

@@ -5,7 +5,9 @@ use crate::{
 use bytes::BytesMut;
 
 /// A Bookkeeping record that is placed in the database whenever we create a new comlpex type
-/// (Atm, a complex type can be: Hash, List, Zset)
+///
+/// A complex type can be one of: Hash, List, Zset, Set
+///
 /// We keep the UID of the type and the type associated with it (`uid_type`)
 /// we use this record to identify a complex items overwritten by SableDB and might have left some
 /// orphan records.

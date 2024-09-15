@@ -6,8 +6,9 @@ use crate::{
 use bytes::BytesMut;
 
 #[allow(dead_code)]
-/// General purpose database wrapper. This class uses the fact that
-/// all primary types (strings, lists, hashs etc) are using the same
+/// General purpose database wrapper.
+///
+/// This class uses the fact that all primary types (strings, lists, hashs etc) are using the same
 /// key `PrimaryKeyMetadata` and the value has similar prefix:
 /// `[primary_key]` -> `[common_metadata | <per type metadata> | < user data >]`
 ///

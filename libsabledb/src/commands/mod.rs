@@ -170,9 +170,11 @@ macro_rules! to_number_ex {
 
 #[macro_export]
 /// Parse `$val` into a number of type `$number_type`.
-/// On success parsing, return the parsed number, otherwise
+///
+/// On successful parsing, return the parsed number, otherwise
 /// build RESP parsing error message of type `VALUE_NOT_AN_INT_OR_OUT_OF_RANGE`
 /// and return `$err_val`
+///
 macro_rules! to_number {
     ($val:expr, $number_type:ty, $response_buffer:expr, $err_val:expr) => {{
         to_number_ex!(

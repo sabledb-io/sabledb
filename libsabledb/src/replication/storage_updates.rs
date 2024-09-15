@@ -121,16 +121,8 @@ pub enum StorageUpdatesIterItem {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-/// This message is used to return a serialised updates that were
-/// done to the database since txn `start_seq_number` and
-/// up until `end_seq_number` (excluding).
-/// The replica requests this message from the primary server
-/// by sending a `ReplRequest` with type `GET_UPDATES_SINCE` and
-/// providing the `start_seq_number`. In return, the primary constructs this
-/// object, fills it with data and sends it over to the replica.
-/// On the next call, the primary uses the value set in `end_seq_number`
-/// as the `start_seq_number`. Using this mechanism, the replica is able
-/// to tail the primary for updates
+/// A struct that represents changes done to the database since `start_seq_number`
+/// and up to `end_seq_number` (exluded)
 pub struct StorageUpdates {
     /// Changes in this message are starting from `start_seq_number`
     pub start_seq_number: u64,

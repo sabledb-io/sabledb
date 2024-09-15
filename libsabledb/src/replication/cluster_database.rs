@@ -134,7 +134,11 @@ impl ClusterDB {
             let cur_node_id = Server::state().persistent_state().id();
             let curts = TimeUtils::epoch_micros().unwrap_or_default();
             tracing::trace!("Updating heartbeat for node {} -> {}", &cur_node_id, curts);
-            client.hset(cur_node_id, PROP_LAST_UPDATED, curts)?;
+            client.hset::<String, &str, u64, redis::Value>(
+                cur_node_id,
+                PROP_LAST_UPDATED,
+                curts,
+            )?;
             tracing::trace!("Success");
             Ok(())
         })
@@ -151,7 +155,7 @@ impl ClusterDB {
                 primary_node_id,
             );
             let key = format!("{}_replicas", primary_node_id);
-            client.srem(key, &cur_node_id)?;
+            client.srem::<String, &String, redis::Value>(key, &cur_node_id)?;
             tracing::info!("Success");
             Ok(())
         })
@@ -165,7 +169,7 @@ impl ClusterDB {
     /// Delete node identified by `node_id` from the database
     pub fn delete_node(&self, node_id: String) -> Result<(), SableError> {
         get_conn_and_run(self.options.clone(), move |client| {
-            client.del(&node_id)?;
+            client.del::<&String, redis::Value>(&node_id)?;
             Ok(())
         })
     }
@@ -251,12 +255,12 @@ impl ClusterDB {
         let current_node_id = Server::state().persistent_state().id();
         let mut result = UnLockResult::Ok;
         get_conn_and_run(self.options.clone(), |client| {
-            let res = client.get(lock_name)?;
+            let res = client.get::<&String, redis::Value>(lock_name)?;
             match res {
                 Value::BulkString(val) => {
                     let owner_node_id = String::from_utf8_lossy(&val).to_string();
                     if owner_node_id.eq(&current_node_id) {
-                        client.del(lock_name)?;
+                        client.del::<&String, redis::Value>(lock_name)?;
                         result = UnLockResult::Ok;
                     } else {
                         result = UnLockResult::NotOwner(owner_node_id);
@@ -284,7 +288,7 @@ impl ClusterDB {
                 primary_node_id
             );
             let key = format!("{}_replicas", primary_node_id);
-            client.sadd(key, replica_node_id)?;
+            client.sadd::<String, &String, redis::Value>(key, replica_node_id)?;
             tracing::debug!("Success");
             Ok(())
         })
@@ -346,7 +350,7 @@ impl ClusterDB {
         get_conn_and_run(self.options.clone(), |client| {
             let queue_name = format!("{}_QUEUE", node_id);
             tracing::info!("Sending command '{}' to queue '{}'", command, queue_name);
-            client.lpush(&queue_name, command)?;
+            client.lpush::<&String, &String, redis::Value>(&queue_name, command)?;
             tracing::info!("Success");
             Ok(())
         })
@@ -361,7 +365,9 @@ impl ClusterDB {
         let mut val = Option::<String>::None;
         get_conn_and_run(self.options.clone(), |client| {
             let queue_name = format!("{}_QUEUE", node_id);
-            if let Value::Array(arr) = client.brpop(&queue_name, timeout_secs)? {
+            if let Value::Array(arr) =
+                client.brpop::<&String, redis::Value>(&queue_name, timeout_secs)?
+            {
                 if let Some(Value::BulkString(cmd)) = arr.get(1) {
                     val = Some(String::from_utf8_lossy(cmd).to_string());
                 }
@@ -375,7 +381,7 @@ impl ClusterDB {
         let mut qlen = 0usize;
         get_conn_and_run(self.options.clone(), |client| {
             let queue_name = format!("{}_QUEUE", node_id);
-            if let Value::Int(len) = client.llen(&queue_name)? {
+            if let Value::Int(len) = client.llen::<&String, redis::Value>(&queue_name)? {
                 qlen = len.try_into().unwrap_or(0);
             }
             Ok(())

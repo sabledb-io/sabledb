@@ -48,7 +48,7 @@ pub struct TcpStreamBytesReader<'a> {
 }
 
 impl<'a> TcpStreamBytesReader<'a> {
-    pub fn new(tcp_stream: &'a TcpStream) -> TcpStreamBytesReader {
+    pub fn new(tcp_stream: &TcpStream) -> TcpStreamBytesReader {
         TcpStreamBytesReader {
             tcp_stream,
             bytes_read: BytesMut::new(),
