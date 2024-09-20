@@ -205,6 +205,20 @@ pub fn delete_self(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableEr
     db.delete_self()
 }
 
+/// If there are commands on this node's queue, process one
+pub async fn check_node_queue(
+    options: Arc<StdRwLock<ServerOptions>>,
+    store: &StorageAdapter,
+) -> Result<(), SableError> {
+    check_cluster_db_or!(options, Ok(()));
+    if is_commands_queue_empty(options.clone()).await? {
+        return Ok(());
+    }
+
+    // Process one command from the queue
+    return process_commands_queue(options.clone(), store, 1).await;
+}
+
 /// Check and perform failover is needed
 pub async fn fail_over_if_needed(
     options: Arc<StdRwLock<ServerOptions>>,
@@ -223,7 +237,7 @@ pub async fn fail_over_if_needed(
         return Ok(());
     }
 
-    // Lock the shard
+    // Synchronized the operations by using the shard lock
     let mut primary_lock = PrimaryLock::new(options.clone())?;
     primary_lock.lock()?;
 
@@ -241,17 +255,14 @@ pub async fn fail_over_if_needed(
     let db = ClusterDB::with_options(options.clone());
     let current_node_id = Server::state().persistent_state().id();
 
-    // Try to lock the primary, if we succeeded in doing this,
-    // this `lock_primary` returns the value of the lock which
-    // is used later to delete the lock
     tracing::info!("Trying to perform a failover...");
 
     // This instance will be the orchestrator of the failover
     tracing::info!("Listing replicas...");
-    let all_replicas = db.list_replicas()?;
+    let mut all_replicas = db.list_replicas()?;
     tracing::info!("Found {:?}", all_replicas);
 
-    // We have more replicas, choose the best replica and make it the primary
+    // We have multiple replicas, choose the best replica and make it the primary
     let Some((new_primary_id, _last_txn_id)) = all_replicas
         .iter()
         .max_by_key(|(_node_id, last_updated_txn)| last_updated_txn)
@@ -259,11 +270,21 @@ pub async fn fail_over_if_needed(
         return Err(SableError::AutoFailOverError("No replicas found".into()));
     };
 
-    tracing::info!("New primary: {}", new_primary_id);
-    broadcast_failover(options.clone(), &all_replicas, new_primary_id).await?;
+    let old_primary_id = Server::state().persistent_state().primary_node_id();
+    tracing::info!(
+        "New primary: {}. Old primary {}",
+        new_primary_id,
+        old_primary_id
+    );
+    let new_primary_id = new_primary_id.clone();
 
-    if current_node_id.eq(new_primary_id) {
-        // If this node is the primary, don't wait until next iteration, switch to primary node now
+    // Add the old primary to the list of replicas. This way we also broadcast a "REPLICAOF <IP> <PORT>"
+    // to the old primary's queue
+    all_replicas.push((old_primary_id, 0));
+    broadcast_failover(options.clone(), &all_replicas, &new_primary_id).await?;
+
+    if current_node_id.eq(&new_primary_id) {
+        // If this node is the new primary, don't wait until next iteration, switch to primary node now
         process_commands_queue(options, store, 1).await?;
     }
     Ok(())

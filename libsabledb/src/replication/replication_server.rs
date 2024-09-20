@@ -1,6 +1,7 @@
 use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
+use futures::future;
 
 use crate::utils;
 #[allow(unused_imports)]
@@ -448,74 +449,101 @@ impl ReplicationServer {
                 .general_settings
                 .private_address
         );
+
         loop {
-            let (socket, addr) = listener.accept().await?;
-            info!("Accepted new connection from replica: {:?}", addr);
-            let mut stream = match socket.into_std() {
-                Ok(socket) => socket,
-                Err(e) => {
-                    error!("Failed to convert async socket -> std socket!. {:?}", e);
-                    continue;
+            // Accept with timeout
+            let accept_fut = listener.accept();
+            let timeout_fut = tokio::time::sleep(tokio::time::Duration::from_secs(1));
+
+            futures::pin_mut!(accept_fut);
+            futures::pin_mut!(timeout_fut);
+
+            match future::select(accept_fut, timeout_fut).await {
+                future::Either::Left((value, _)) => {
+                    let (socket, addr) = value?;
+                    self.handle_new_replica(options.clone(), store.clone(), socket, addr)?;
                 }
-            };
-
-            let store_clone = store.clone();
-            let server_options_clone = options.clone();
-
-            // spawn a thread to so we could move to sync api
-            // this will allow us to write directly from the storage -> network
-            // without building buffers in the memory
-            let _handle = std::thread::spawn(move || {
-                info!("Replication thread started for connection {:?}", addr);
-                let mut guard = ReplicationThreadMarker::new();
-                let mut replica_name = String::default();
-
-                // we now work in a simple request/reply mode:
-                // the replica sends a request requesting changes since
-                // the Nth update and this primary sends back the changes
-
-                // First, prepare the socket
-                if let Err(e) = prepare_std_socket(&stream) {
-                    error!("Failed to prepare socket. {:?}", e);
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    return;
-                }
-
-                loop {
-                    match Self::handle_single_request(
-                        &store_clone,
-                        server_options_clone.clone(),
-                        &mut stream,
-                        &replica_name,
-                    ) {
-                        HandleRequestResult::NodeJoined(replica_id) => {
-                            guard.set_node_id(&replica_id);
-                            // keep the node-id
-                            replica_name = replica_id;
-                        }
-                        HandleRequestResult::Success => {}
-                        HandleRequestResult::NetError(msg) => {
-                            tracing::warn!("Network error with replica {replica_name}. {msg}");
-                            info!("Closing connection with replica: {:?}", stream);
-                            let _ = stream.shutdown(std::net::Shutdown::Both);
-                            break;
-                        }
-                        HandleRequestResult::Shutdown(msg) => {
-                            info!("{msg}");
-                            info!("Closing connection with replica: {:?}", stream);
-                            let _ = stream.shutdown(std::net::Shutdown::Both);
-                            break;
-                        }
+                future::Either::Right(_) => {
+                    // TimeOut, do a tick operation here
+                    tracing::debug!("Checking node's queue...");
+                    if let Err(e) = cluster_manager::check_node_queue(options.clone(), &store).await
+                    {
+                        tracing::warn!("Failed to process node command queue. {:?}", e);
                     }
-                    Self::update_primary_info(server_options_clone.clone(), &store_clone);
                 }
-            });
-
-            // let the handle drop to make the thread detached
+            }
         }
+    }
 
-        #[allow(unreachable_code)]
-        Ok::<(), SableError>(())
+    /// Create a new thread that will handle the newly connected replica
+    fn handle_new_replica(
+        &self,
+        options: Arc<StdRwLock<ServerOptions>>,
+        store: StorageAdapter,
+        socket: tokio::net::TcpStream,
+        addr: std::net::SocketAddr,
+    ) -> Result<(), SableError> {
+        info!("Accepted new connection from replica: {:?}", addr);
+        let mut stream = match socket.into_std() {
+            Ok(socket) => socket,
+            Err(e) => {
+                error!("Failed to convert async socket -> std socket!. {:?}", e);
+                return Ok(());
+            }
+        };
+
+        let store_clone = store.clone();
+        let server_options_clone = options.clone();
+
+        // spawn a thread to so we could move to sync api
+        // this will allow us to write directly from the storage -> network
+        // without building buffers in the memory
+        let _handle = std::thread::spawn(move || {
+            info!("Replication thread started for connection {:?}", addr);
+            let mut guard = ReplicationThreadMarker::new();
+            let mut replica_name = String::default();
+
+            // we now work in a simple request/reply mode:
+            // the replica sends a request requesting changes since
+            // the Nth update and this primary sends back the changes
+
+            // First, prepare the socket
+            if let Err(e) = prepare_std_socket(&stream) {
+                error!("Failed to prepare socket. {:?}", e);
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                return;
+            }
+
+            loop {
+                match Self::handle_single_request(
+                    &store_clone,
+                    server_options_clone.clone(),
+                    &mut stream,
+                    &replica_name,
+                ) {
+                    HandleRequestResult::NodeJoined(replica_id) => {
+                        guard.set_node_id(&replica_id);
+                        // keep the node-id
+                        replica_name = replica_id;
+                    }
+                    HandleRequestResult::Success => {}
+                    HandleRequestResult::NetError(msg) => {
+                        tracing::warn!("Network error with replica {replica_name}. {msg}");
+                        info!("Closing connection with replica: {:?}", stream);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
+                    HandleRequestResult::Shutdown(msg) => {
+                        info!("{msg}");
+                        info!("Closing connection with replica: {:?}", stream);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
+                }
+                Self::update_primary_info(server_options_clone.clone(), &store_clone);
+            }
+        });
+        Ok(())
     }
 
     fn update_primary_info(options: Arc<StdRwLock<ServerOptions>>, store: &StorageAdapter) {
