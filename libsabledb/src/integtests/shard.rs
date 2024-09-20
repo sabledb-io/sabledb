@@ -39,7 +39,7 @@ impl std::fmt::Display for Instance {
 
 impl Instance {
     pub fn info_property(&self, name: &str) -> Result<String, SableError> {
-        let mut conn = self.connect()?;
+        let mut conn = self.connect_with_retries()?;
         let info: redis::InfoDict = redis::cmd("INFO").query(&mut conn)?;
         Ok(info.get(name).unwrap_or_default())
     }
@@ -60,6 +60,14 @@ impl Instance {
         ServerRole::from_str(&role)
     }
 
+    pub fn address(&self) -> String {
+        self.args.public_address.as_deref().unwrap().to_string()
+    }
+
+    pub fn private_address(&self) -> String {
+        self.args.private_address.as_deref().unwrap().to_string()
+    }
+
     /// Connect to the instance
     ///
     /// Returns the connection
@@ -70,26 +78,18 @@ impl Instance {
         Ok(conn)
     }
 
-    pub fn address(&self) -> String {
-        self.args.public_address.as_deref().unwrap().to_string()
-    }
-
-    pub fn private_address(&self) -> String {
-        self.args.private_address.as_deref().unwrap().to_string()
-    }
-
-    /// Connect to SableDB with retries and timeout
+    /// Connect to SableDB with retries (up to 20 retries)
     ///
     /// Returns the connection
-    pub fn connect_with_timeout(&self) -> Result<redis::Connection, SableError> {
+    pub fn connect_with_retries(&self) -> Result<redis::Connection, SableError> {
         let connect_string = format!("redis://{}", self.address());
         let client = redis::Client::open(connect_string.as_str())?;
-        let mut retries = 10usize;
+        let mut retries = 20usize;
         while retries > 0 {
             if let Ok(conn) = client.get_connection() {
                 return Ok(conn);
             };
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(std::time::Duration::from_millis(100));
             retries = retries.saturating_sub(1);
         }
 
@@ -280,7 +280,7 @@ impl Shard {
             } else {
                 let command = format!("REPLICAOF {} {}", primary_address[0], primary_address[1]);
                 println!("Node {}: {}", inst.borrow().address(), command);
-                let mut conn = inst.borrow_mut().connect()?;
+                let mut conn = inst.borrow_mut().connect_with_retries()?;
                 let mut cmd = redis::cmd("REPLICAOF");
                 for arg in &primary_address {
                     cmd.arg(arg);
@@ -465,7 +465,7 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     let cluster_address = cluster_inst.address();
 
     // Make sure that the host is reachable
-    let _conn = cluster_inst.connect_with_timeout()?;
+    let _conn = cluster_inst.connect_with_retries()?;
     drop(_conn);
 
     for _ in 0..instance_count {
@@ -476,7 +476,7 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
             .build()?;
 
         // Make sure that the host is reachable
-        let _conn = inst.connect_with_timeout()?;
+        let _conn = inst.connect_with_retries()?;
         drop(_conn);
 
         instances.push(Rc::new(RefCell::new(inst)));
@@ -529,7 +529,7 @@ mod test {
         // At this point, we should have a primary instance
         let primary = shard.primary().unwrap();
 
-        let mut conn = primary.borrow().connect().unwrap();
+        let mut conn = primary.borrow().connect_with_retries().unwrap();
         let res: redis::Value = conn.set("hello", "world").unwrap();
         assert_eq!(res, redis::Value::Okay);
 
@@ -538,7 +538,7 @@ mod test {
         let replicas = shard.replicas().unwrap();
         for replica in &replicas {
             // refresh the instance information
-            let mut conn = replica.borrow().connect().unwrap();
+            let mut conn = replica.borrow().connect_with_retries().unwrap();
 
             // Read-only replica -> we expect error here
             let res = conn
