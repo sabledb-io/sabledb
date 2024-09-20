@@ -216,7 +216,7 @@ pub async fn check_node_queue(
     }
 
     // Process one command from the queue
-    return process_commands_queue(options.clone(), store, 1).await;
+    process_commands_queue(options.clone(), store, 1).await
 }
 
 /// Check and perform failover is needed

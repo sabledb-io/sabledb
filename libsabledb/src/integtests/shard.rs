@@ -1,5 +1,4 @@
 use crate::{replication::ServerRole, CommandLineArgs, SableError};
-use redis::InfoDict;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
@@ -19,11 +18,32 @@ pub struct Instance {
     hproc: Option<std::process::Child>,
     /// SableDB working directory
     working_dir: String,
-    /// Holds the INFO data
-    info: Option<InfoDict>,
+}
+
+impl std::fmt::Display for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let node_id = self.node_id();
+        let primary_node_id = self.primary_node_id();
+        let role = match self.role() {
+            Ok(role) => format!("{}", role),
+            Err(_) => String::from("Unknown"),
+        };
+
+        write!(f, "Role: {}, NodeID: {}", role, node_id)?;
+        if let Ok(ServerRole::Replica) = self.role() {
+            write!(f, ", Primary NodeID: {}", primary_node_id)?
+        }
+        Ok(())
+    }
 }
 
 impl Instance {
+    pub fn info_property(&self, name: &str) -> Result<String, SableError> {
+        let mut conn = self.connect()?;
+        let info: redis::InfoDict = redis::cmd("INFO").query(&mut conn)?;
+        Ok(info.get(name).unwrap_or_default())
+    }
+
     pub fn with_working_dir(mut self, working_dir: &str) -> Self {
         self.working_dir = working_dir.into();
         self
@@ -34,22 +54,9 @@ impl Instance {
         self
     }
 
-    pub fn info(&mut self) -> Result<(), SableError> {
-        let mut conn = self.connect()?;
-        let info: redis::InfoDict = redis::cmd("INFO").query(&mut conn)?;
-        self.info = Some(info);
-        Ok(())
-    }
-
     /// Return the role of the instance based on the INFO output
     pub fn role(&self) -> Result<ServerRole, SableError> {
-        let Some(info) = &self.info else {
-            return Err(SableError::OtherError(
-                "Can't resolve role. You should call INFO first".into(),
-            ));
-        };
-
-        let role: String = info.get("role").expect("could not find role in INFO");
+        let role = self.info_property("role")?;
         ServerRole::from_str(&role)
     }
 
@@ -95,9 +102,9 @@ impl Instance {
     /// Terminate the current instance
     pub fn terminate(&mut self) {
         if let Some(hproc) = &mut self.hproc {
-            println!("Terminating SableDB: {}", hproc.id());
             let _ = hproc.kill();
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // wait for the process to exit
+            let _ = hproc.wait();
             self.hproc = None;
         }
     }
@@ -125,12 +132,11 @@ impl Instance {
     }
 
     pub fn node_id(&self) -> String {
-        let node_id: Option<String> = self.info.clone().unwrap().get("node_id");
-        node_id.unwrap().clone()
+        self.info_property("node_id").unwrap_or_default()
     }
+
     pub fn primary_node_id(&self) -> String {
-        let primary_node_id: Option<String> = self.info.clone().unwrap().get("primary_node_id");
-        primary_node_id.unwrap().clone()
+        self.info_property("primary_node_id").unwrap_or_default()
     }
 }
 
@@ -147,6 +153,18 @@ pub struct Shard {
     instances: Vec<InstanceRefCell>,
     primary: Option<InstanceRefCell>,
     replicas: Option<Vec<InstanceRefCell>>,
+}
+
+impl std::fmt::Display for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, "Shard {{")?;
+        writeln!(f, "  Is stabilised: {}", self.is_stabilised())?;
+        writeln!(f, "  Instance count: {}", self.instances.len())?;
+        for inst in &self.instances {
+            writeln!(f, "  {}", inst.borrow())?;
+        }
+        writeln!(f, "}}")
+    }
 }
 
 impl Shard {
@@ -170,21 +188,34 @@ impl Shard {
         let mut replicas = Vec::<InstanceRefCell>::new();
 
         for inst in &self.instances {
-            inst.borrow_mut().info()?;
             match inst.borrow().role()? {
                 ServerRole::Primary => primary.push(inst.clone()),
-                ServerRole::Replica => replicas.push(inst.clone()),
+                ServerRole::Replica => {
+                    if inst.borrow().primary_node_id().is_empty() {
+                        primary.push(inst.clone());
+                    } else {
+                        replicas.push(inst.clone());
+                    }
+                }
             }
         }
 
         if primary.len() == 1 && !replicas.is_empty() {
+            let primary = primary
+                .first()
+                .ok_or(SableError::InternalError("No primary?".into()))?
+                .clone();
+
+            // Make sure that the primary ID is the correct one for every replica
+            let expected_primary_id = primary.borrow().node_id();
+            for repl in &replicas {
+                if repl.borrow().primary_node_id().ne(&expected_primary_id) {
+                    return Ok(false);
+                }
+            }
+
+            self.primary = Some(primary);
             self.replicas = Some(replicas);
-            self.primary = Some(
-                primary
-                    .first()
-                    .ok_or(SableError::InternalError("No primary?".into()))?
-                    .clone(),
-            );
             Ok(true)
         } else {
             self.replicas = None;
@@ -195,7 +226,14 @@ impl Shard {
 
     /// Return true if the cluster is stabilised (we have 1 primary and N replicas)
     pub fn is_stabilised(&self) -> bool {
-        self.replicas.is_some() && self.primary.is_some()
+        let Some(replicas) = &self.replicas else {
+            return false;
+        };
+
+        if self.primary.is_none() {
+            return false;
+        };
+        replicas.len() == self.instances.len().saturating_sub(1)
     }
 
     /// Return the shard's replicas
@@ -266,7 +304,7 @@ impl Shard {
     }
 
     /// Query the shard until we get a valid shard (1 primary + N replicas)
-    pub fn wait_for_shard_to_form(&mut self) -> Result<(), SableError> {
+    pub fn wait_for_shard_to_stabilise(&mut self) -> Result<(), SableError> {
         loop {
             if self.try_discover()? {
                 break;
@@ -274,6 +312,44 @@ impl Shard {
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
         Ok(())
+    }
+
+    /// Terminate and remove the primary node from the cluster
+    pub fn terminate_and_remove_primary(&mut self) -> Result<InstanceRefCell, SableError> {
+        if !self.is_stabilised() {
+            return Err(SableError::InvalidState(
+                "Can not remove Primary from an unstabled shard".into(),
+            ));
+        }
+
+        let Some(primary) = &self.primary else {
+            return Err(SableError::NotFound);
+        };
+
+        let primary = primary.clone();
+        let primary_id = primary.borrow().node_id();
+
+        // Remove the primary from the "all instances" list
+        let mut instances: Vec<InstanceRefCell> = self
+            .instances
+            .iter()
+            .filter(|inst| inst.borrow().node_id().ne(&primary_id))
+            .cloned()
+            .collect();
+
+        std::mem::swap(&mut instances, &mut self.instances);
+
+        // terminate the primary and clear it from this shard
+        primary.borrow_mut().terminate();
+        self.primary = None;
+
+        Ok(primary)
+    }
+
+    /// Re-add to the shard the primary that was terminated.
+    /// `inst` - the terminated primary that was returned from a previous call to `terminate_and_remove_primary`
+    pub fn add_terminated_primary(&mut self, inst: InstanceRefCell) {
+        self.instances.push(inst);
     }
 }
 
@@ -293,7 +369,6 @@ impl Drop for Shard {
             inst.borrow_mut().terminate();
             if !keep_dir {
                 let d = &inst.borrow().working_dir;
-                println!("Deleting directory: {}", d);
                 let _ = std::fs::remove_dir_all(d);
             }
         });
@@ -381,7 +456,7 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     let (wd, cluster_db_args) = create_sabledb_args(None);
     let mut instances = Vec::<InstanceRefCell>::new();
 
-    let mut cluster_inst = Instance::default()
+    let cluster_inst = Instance::default()
         .with_args(cluster_db_args)
         .with_working_dir(&wd)
         .build()?;
@@ -392,11 +467,10 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     // Make sure that the host is reachable
     let _conn = cluster_inst.connect_with_timeout()?;
     drop(_conn);
-    cluster_inst.info()?;
 
     for _ in 0..instance_count {
         let (wd, args) = create_sabledb_args(Some(cluster_address.clone()));
-        let mut inst = Instance::default()
+        let inst = Instance::default()
             .with_args(args)
             .with_working_dir(&wd)
             .build()?;
@@ -404,7 +478,6 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
         // Make sure that the host is reachable
         let _conn = inst.connect_with_timeout()?;
         drop(_conn);
-        inst.info()?;
 
         instances.push(Rc::new(RefCell::new(inst)));
     }
@@ -414,7 +487,7 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     shard.create_replication_group()?;
 
     // Wait for the instances to connect each other
-    shard.wait_for_shard_to_form()?;
+    shard.wait_for_shard_to_stabilise()?;
     Ok(shard)
 }
 
@@ -472,8 +545,6 @@ mod test {
                 .set::<&str, &str, redis::Value>("hello", "world")
                 .unwrap_err();
             assert_eq!(res.kind(), redis::ErrorKind::ReadOnly);
-
-            replica.borrow_mut().info().unwrap();
             println!(
                 "Replica {}: Primary node ID is: {}",
                 replica.borrow().node_id(),
@@ -500,5 +571,55 @@ mod test {
             "Server started with PID: {}",
             shard.primary().unwrap().borrow().pid().unwrap()
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_auto_failover() {
+        // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
+        let inst_count = 3usize;
+        let mut shard = start_shard(inst_count).unwrap();
+        println!("Initial state: {}", shard);
+        let primary_node_id = shard.primary().unwrap().borrow().node_id();
+        assert!(!primary_node_id.is_empty());
+
+        let replicas = shard.replicas().unwrap();
+        for replica in &replicas {
+            let replica_id = replica.borrow().node_id();
+            let replica_primary_id = replica.borrow().primary_node_id();
+
+            assert_eq!(replica_primary_id, primary_node_id);
+            assert!(!replica_id.is_empty());
+        }
+
+        // terminate the primary node
+        let old_primary_id = shard.primary().unwrap().borrow().node_id();
+        let old_primary = shard.terminate_and_remove_primary().unwrap();
+        println!("Primary node {} terminated and removed", old_primary_id);
+        println!(
+            "Shard state after primary terminated and removed: {}",
+            shard
+        );
+        assert_eq!(primary_node_id, old_primary_id);
+        assert!(!shard.is_stabilised());
+
+        assert!(shard.primary.is_none());
+        assert_eq!(shard.instances.len(), inst_count - 1);
+        assert!(!old_primary.borrow().is_running());
+
+        // Wait for the shard to auto failover
+        println!("Waiting for fail-over to take place... (this can take up to 30 seconds)");
+        shard.wait_for_shard_to_stabilise().unwrap();
+        println!("{}", shard);
+        assert!(shard.is_stabilised());
+
+        // Restart the terminated primary and re-add it to the shard
+        println!("Restarting old primary...");
+        assert!(old_primary.borrow_mut().run().is_ok());
+        shard.add_terminated_primary(old_primary);
+        println!("Waiting for old primary to switch role and join the shard...");
+        shard.wait_for_shard_to_stabilise().unwrap();
+        println!("{}", shard);
+        println!("Success!");
     }
 }

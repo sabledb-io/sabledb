@@ -24,7 +24,7 @@ it should trigger an auto-faileover process:
 - [x] Delete the `<old_primary>` HASH key from the database
 - [x] Delete the `<old_primary>_replicas` SET key from the database
 - [x] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
-- [ ] Place a command on the OLD primary to connect to the new PRIMARY
+- [x] Place a command on the OLD primary to connect to the new PRIMARY
 
 **A note about locking:**
 The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed
@@ -52,25 +52,3 @@ replicas in its shard:
 }
 ```
 
-# Test cases
-
-The following use cases should be automated and checked:
-
-
-1. Make sure that cluster DB is down
-2. Bring the replica up **before** the primary is up
-3. Primary goes up
-
-Expected outcome: replica connects to the primary. The fact that the ClusterDB is down, does not affect the data exchange between the two
-
-4. Start the Cluster DB
-
-Expected outcome:
-- both instances are able to re-connect it
-- All records in the Cluster DB are updated
-
-5. Bring the primary down
-
-Expected outcome:
-- After N seconds, replica performs auto-failover and becomes the primary
-- Replica records changed in the Cluster DB to "Primary"
