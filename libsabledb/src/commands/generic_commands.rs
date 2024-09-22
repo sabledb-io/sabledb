@@ -329,14 +329,14 @@ impl GenericCommands {
     async fn scan(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+        response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
-        check_args_count_tx!(command, 2, tx);
+        check_args_count!(command, 2, response_buffer);
         let cursor_id = command_arg_at!(command, 1);
 
-        let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
+        let builder = RespBuilderV2::default();
         let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
-            writer_return_value_not_int!(resp_writer);
+            builder_return_value_not_int!(builder, response_buffer);
         };
 
         // parse optional arguments
@@ -349,7 +349,7 @@ impl GenericCommands {
         let mut obj_type: Option<&BytesMut> = None;
         while let Some(keyword) = iter.next() {
             let Some(value) = iter.next() else {
-                writer_return_syntax_error!(resp_writer);
+                builder_return_syntax_error!(builder, response_buffer);
             };
 
             let keyword = BytesMutUtils::to_string(keyword).to_lowercase();
@@ -365,14 +365,14 @@ impl GenericCommands {
                             10
                         }
                     } else {
-                        writer_return_value_not_int!(resp_writer);
+                        builder_return_value_not_int!(builder, response_buffer);
                     };
                 }
                 "type" if obj_type.is_none() => {
                     obj_type = Some(value);
                 }
                 _ => {
-                    writer_return_syntax_error!(resp_writer);
+                    builder_return_syntax_error!(builder, response_buffer);
                 }
             }
         }
@@ -380,29 +380,55 @@ impl GenericCommands {
         // Get or create a cursor
         let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::default()))
         else {
-            resp_writer
-                .error_string(format!("ERR: Invalid cursor id {}", cursor_id).as_str())
-                .await?;
-            resp_writer.flush().await?;
+            builder.error_string(
+                response_buffer,
+                format!("ERR: Invalid cursor id {}", cursor_id).as_str(),
+            );
             return Ok(());
         };
 
         // Create the prefix iterator
+        let primary_keys_prefix = PrimaryKeyMetadata::first_key(client_state.database_id());
         let prefix = if let Some(saved_prefix) = cursor.prefix() {
             BytesMut::from(saved_prefix)
         } else {
-            PrimaryKeyMetadata::first_key(client_state.database_id())
+            primary_keys_prefix.clone()
         };
 
         // Create the pattern matcher
-        let _matcher = if let Some(pattern) = pattern {
+        let matcher = if let Some(pattern) = pattern {
             PatternMatcher::builder().wildcard(pattern).build()
         } else {
             PatternMatcher::builder().pass_through().build()
         };
 
-        let mut _results = Vec::<(BytesMut, ValueType)>::with_capacity(count);
-        let mut _db_iter = client_state.database().create_iterator(&prefix)?;
+        let mut results = Vec::<(BytesMut, ValueType)>::with_capacity(count);
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
+        while db_iter.valid() {
+            let Some((key, _val)) = db_iter.key_value() else {
+                break;
+            };
+
+            if !key.starts_with(&primary_keys_prefix) {
+                // Not a primary key
+                break;
+            }
+
+            if matcher.matches(key) {
+                results.push((BytesMut::from(key), ValueType::default()));
+            }
+
+            if results.len() == count {
+                // we got all the elements that we wanted
+                break;
+            }
+            db_iter.next();
+        }
+
+        builder.add_array_len(response_buffer, results.len());
+        for (key, _key_type) in &results {
+            builder.add_bulk_string(response_buffer, key);
+        }
         Ok(())
     }
 }
