@@ -35,6 +35,23 @@ impl FromRaw for ValueType {
     }
 }
 
+impl std::str::FromStr for ValueType {
+    type Err = crate::SableError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "string" => Ok(Self::Str),
+            "list" => Ok(Self::List),
+            "hash" => Ok(Self::Hash),
+            "set" => Ok(Self::Set),
+            "zset" => Ok(Self::Zset),
+            _ => Err(crate::SableError::InvalidArgument(format!(
+                "Could not convert '{}' into ValueType",
+                s
+            ))),
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum KeyType {
@@ -51,6 +68,13 @@ pub enum KeyType {
 impl Default for KeyType {
     fn default() -> Self {
         Self::PrimaryKey
+    }
+}
+
+impl crate::FromU8Reader for KeyType {
+    type Item = KeyType;
+    fn from_reader(reader: &mut crate::U8ArrayReader) -> Option<Self::Item> {
+        Self::from_u8(reader.read_u8()?)
     }
 }
 

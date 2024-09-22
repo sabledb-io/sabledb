@@ -844,7 +844,6 @@ impl HashCommands {
             }
         }
 
-        // multiple db calls, requires exclusive lock
         let _unused = LockManager::lock(hash_name, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 

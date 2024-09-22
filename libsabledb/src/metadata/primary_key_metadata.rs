@@ -1,5 +1,6 @@
 use crate::{
-    metadata::{FromRaw, KeyType},
+    metadata::KeyType,
+    utils::{FromU8Reader, ToU8Writer},
     SableError, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
@@ -25,28 +26,31 @@ pub struct KeyMetadata {
     key_slot: u16,
 }
 
-impl KeyMetadata {
-    pub const SIZE: usize =
-        std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
-
-    /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+impl ToU8Writer for KeyMetadata {
+    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
         builder.write_u8(self.key_type as u8);
         builder.write_u16(self.db_id);
         builder.write_u16(self.key_slot);
     }
+}
+
+impl FromU8Reader for KeyMetadata {
+    type Item = KeyMetadata;
+    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
+        Some(KeyMetadata {
+            key_type: KeyType::from_reader(reader)?,
+            db_id: u16::from_reader(reader)?,
+            key_slot: u16::from_reader(reader)?,
+        })
+    }
+}
+impl KeyMetadata {
+    pub const SIZE: usize =
+        std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
 
     pub fn from_bytes(buf: &BytesMut) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
-        let key_type = reader.read_u8().ok_or(SableError::SerialisationError)?;
-        let db_id = reader.read_u16().ok_or(SableError::SerialisationError)?;
-        let key_slot = reader.read_u16().ok_or(SableError::SerialisationError)?;
-
-        Ok(KeyMetadata {
-            key_type: KeyType::from_u8(key_type).ok_or(SableError::SerialisationError)?,
-            db_id,
-            key_slot,
-        })
+        Ok(Self::from_reader(&mut reader).ok_or(SableError::SerialisationError)?)
     }
 
     /// Set the key type
@@ -70,8 +74,21 @@ impl KeyMetadata {
 
         let mut encoded_key = BytesMut::with_capacity(KeyMetadata::SIZE + user_key.len());
         let mut builder = U8ArrayBuilder::with_buffer(&mut encoded_key);
-        key_metadata.to_bytes(&mut builder);
+        key_metadata.to_writer(&mut builder);
         builder.write_bytes(user_key);
+        encoded_key
+    }
+
+    /// Create the key to the first primary key in the database
+    pub fn first_key(db_id: u16) -> BytesMut {
+        let mut key_metadata = KeyMetadata::default()
+            .with_type(KeyType::PrimaryKey)
+            .with_db_id(db_id);
+        key_metadata.key_slot = 0u16; // the first slot is 0
+
+        let mut encoded_key = BytesMut::with_capacity(KeyMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut encoded_key);
+        key_metadata.to_writer(&mut builder);
         encoded_key
     }
 

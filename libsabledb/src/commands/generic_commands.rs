@@ -3,11 +3,12 @@ use crate::commands::Strings;
 use crate::{
     check_args_count, check_value_type, command_arg_at,
     commands::{HandleCommandResult, StringCommands},
+    io::RespWriter,
     metadata::CommonValueMetadata,
     metadata::{KeyType, ValueType},
     parse_string_to_number,
     server::ClientState,
-    storage::GenericDb,
+    storage::{GenericDb, ScanCursor},
     types::List,
     utils::RespBuilderV2,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
@@ -317,6 +318,84 @@ impl GenericCommands {
         for key in &matching_keys {
             builder.add_bulk_string(response_buffer, key);
         }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    /// The SCAN command and the closely related commands SSCAN, HSCAN and ZSCAN are used in order to incrementally
+    /// iterate over a collection of elements.
+    ///
+    /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`
+    async fn scan(
+        client_state: Rc<ClientState>,
+        command: Rc<RedisCommand>,
+        tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
+    ) -> Result<(), SableError> {
+        check_args_count_tx!(command, 2, tx);
+        let cursor_id = command_arg_at!(command, 1);
+
+        let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
+        let Some(cursor_id) = BytesMutUtils::parse::<u64>(cursor_id) else {
+            writer_return_value_not_int!(resp_writer);
+        };
+
+        // parse optional arguments
+        let mut iter = command.args_vec().iter();
+        iter.next(); // SCAN
+        iter.next(); // cursor
+
+        let mut pattern: Option<&BytesMut> = None;
+        let mut count = 10usize;
+        let mut obj_type: Option<&BytesMut> = None;
+        while let Some(keyword) = iter.next() {
+            let Some(value) = iter.next() else {
+                writer_return_syntax_error!(resp_writer);
+            };
+
+            let keyword = BytesMutUtils::to_string(&keyword).to_lowercase();
+            match keyword.as_str() {
+                "match" if pattern.is_none() => {
+                    pattern = Some(value);
+                }
+                "count" => {
+                    count = if let Some(count) = BytesMutUtils::parse::<usize>(value) {
+                        if count > 0 {
+                            count
+                        } else {
+                            10
+                        }
+                    } else {
+                        writer_return_value_not_int!(resp_writer);
+                    };
+                }
+                "type" if obj_type.is_none() => {
+                    obj_type = Some(value);
+                }
+                _ => {
+                    writer_return_syntax_error!(resp_writer);
+                }
+            }
+        }
+
+        // Get or create a cursor
+        let Some(cursor) = client_state.cursor_or(cursor_id, || Rc::new(ScanCursor::default()))
+        else {
+            resp_writer
+                .error_string(format!("ERR: Invalid cursor id {}", cursor_id).as_str())
+                .await?;
+            resp_writer.flush().await?;
+            return Ok(());
+        };
+
+        // Create the prefix iterator
+        let prefix = if let Some(saved_prefix) = cursor.prefix() {
+            BytesMut::from(saved_prefix)
+        } else {
+            PrimaryKeyMetadata::first_key(client_state.database_id())
+        };
+
+        let mut _results = Vec::<(BytesMut, ValueType)>::with_capacity(count);
+        let mut _db_iter = client_state.database().create_iterator(&prefix)?;
         Ok(())
     }
 }

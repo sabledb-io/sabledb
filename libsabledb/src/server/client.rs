@@ -515,7 +515,8 @@ impl Client {
             | RedisCommandName::Del
             | RedisCommandName::Exists
             | RedisCommandName::Expire
-            | RedisCommandName::Keys => {
+            | RedisCommandName::Keys
+            | RedisCommandName::Scan => {
                 match GenericCommands::handle_command(client_state.clone(), command.clone(), tx)
                     .await?
                 {
