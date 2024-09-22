@@ -10,7 +10,7 @@ use crate::{
     server::ClientState,
     storage::{GenericDb, ScanCursor},
     types::List,
-    utils::RespBuilderV2,
+    utils::{PatternMatcher, RespBuilderV2},
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder,
 };
@@ -352,7 +352,7 @@ impl GenericCommands {
                 writer_return_syntax_error!(resp_writer);
             };
 
-            let keyword = BytesMutUtils::to_string(&keyword).to_lowercase();
+            let keyword = BytesMutUtils::to_string(keyword).to_lowercase();
             match keyword.as_str() {
                 "match" if pattern.is_none() => {
                     pattern = Some(value);
@@ -392,6 +392,13 @@ impl GenericCommands {
             BytesMut::from(saved_prefix)
         } else {
             PrimaryKeyMetadata::first_key(client_state.database_id())
+        };
+
+        // Create the pattern matcher
+        let _matcher = if let Some(pattern) = pattern {
+            PatternMatcher::builder().wildcard(pattern).build()
+        } else {
+            PatternMatcher::builder().pass_through().build()
         };
 
         let mut _results = Vec::<(BytesMut, ValueType)>::with_capacity(count);

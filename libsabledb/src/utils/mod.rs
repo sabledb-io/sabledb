@@ -1,4 +1,5 @@
 pub mod file_utils;
+pub mod pattern_matcher;
 pub mod request_parser;
 pub mod resp_builder_v2;
 pub mod resp_response_parser_v2;
@@ -19,6 +20,7 @@ pub use resp_builder_v2::RespBuilderV2;
 pub use resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
 pub use shard_locker::*;
 pub use stopwatch::*;
+pub use pattern_matcher::*;
 
 use bytes::BytesMut;
 use rand::prelude::*;

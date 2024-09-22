@@ -50,7 +50,7 @@ impl KeyMetadata {
 
     pub fn from_bytes(buf: &BytesMut) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
-        Ok(Self::from_reader(&mut reader).ok_or(SableError::SerialisationError)?)
+        Self::from_reader(&mut reader).ok_or(SableError::SerialisationError)
     }
 
     /// Set the key type
