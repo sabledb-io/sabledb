@@ -278,6 +278,7 @@ and visit this page again in couple of days
 | exists | ✓ |✓ |   |
 | expire | ✓ |✓ |   |
 | keys | ✓ |x | Pattern uses wildcard match ( `?` and `*` ) |
+| scan | ✓ |x | Pattern uses wildcard match ( `?` and `*` ) |
 
 ### Server management commands
 
