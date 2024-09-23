@@ -1,4 +1,6 @@
+use crate::{storage::IteratorAdapter, SableError};
 use bytes::BytesMut;
+use std::rc::Rc;
 use std::sync::atomic;
 
 lazy_static::lazy_static! {
@@ -47,5 +49,28 @@ impl ScanCursor {
     /// Return the cursor ID (we send this back to the client)
     pub fn id(&self) -> u64 {
         self.cursor_id
+    }
+
+    /// Given database iterator, return a new cursor to be used by the client for the next "*SCAN" command
+    pub fn create_next_cursor_for_prefix(
+        &self,
+        db_iter: &mut IteratorAdapter,
+        encoded_prefix: &[u8],
+    ) -> Result<Option<Rc<ScanCursor>>, SableError> {
+        if !db_iter.valid() {
+            return Ok(None);
+        }
+
+        // read the next key to be used as the next starting point for next iteration
+        let encoded_key = db_iter.key().ok_or(SableError::InternalError(
+            "failed to read key from the database".into(),
+        ))?;
+
+        if !encoded_key.starts_with(encoded_prefix) {
+            return Ok(None);
+        }
+
+        // Create new cursor
+        Ok(Some(Rc::new(self.progress(BytesMut::from(encoded_key)))))
     }
 }

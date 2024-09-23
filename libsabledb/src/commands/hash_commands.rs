@@ -10,7 +10,7 @@ use crate::{
         HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
     types::List,
-    utils::RespBuilderV2,
+    utils::{PatternMatcher, RespBuilderV2},
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
 };
@@ -20,7 +20,6 @@ use crate::utils;
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
-use wildmatch::WildMatch;
 
 pub struct HashCommands {}
 
@@ -844,7 +843,6 @@ impl HashCommands {
             }
         }
 
-        // multiple db calls, requires exclusive lock
         let _unused = LockManager::lock(hash_name, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
@@ -875,14 +873,12 @@ impl HashCommands {
             return Ok(());
         };
 
-        // Build the prefix matcher
-        let matcher = search_pattern.map(|search_pattern| {
-            WildMatch::new(
-                BytesMutUtils::to_string(search_pattern)
-                    .to_string()
-                    .as_str(),
-            )
-        });
+        // Build the matcher
+        let matcher = if let Some(search_pattern) = search_pattern {
+            PatternMatcher::builder().wildcard(search_pattern).build()
+        } else {
+            PatternMatcher::builder().pass_through().build()
+        };
 
         // Build the prefix
         let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
@@ -911,17 +907,8 @@ impl HashCommands {
             let item_user_key = hash_field_key.key();
             let item_user_value = value;
 
-            // If we got a matcher, use it
-            if let Some(matcher) = &matcher {
-                let key_str = BytesMutUtils::to_string(item_user_key);
-                if matcher.matches(key_str.as_str()) {
-                    results.push((
-                        BytesMut::from(item_user_key),
-                        BytesMut::from(item_user_value),
-                    ));
-                    count = count.saturating_sub(1);
-                }
-            } else {
+            // Collect matches
+            if matcher.matches(item_user_key) {
                 results.push((
                     BytesMut::from(item_user_key),
                     BytesMut::from(item_user_value),
@@ -931,33 +918,24 @@ impl HashCommands {
             db_iter.next();
         }
 
-        let cursor_id = if db_iter.valid() && count == 0 {
-            // read the next key to be used as the next starting point for next iteration
-            let Some((key, _)) = db_iter.key_value() else {
-                // this is an error
+        // Prepare cursor for next iteration
+        let cursor_id = match cursor.create_next_cursor_for_prefix(&mut db_iter, &hash_prefix) {
+            Err(e) => {
                 resp_writer
-                    .error_string("ERR internal error: failed to read key from the database")
+                    .error_string(&format!("ERR internal error. {}", e))
                     .await?;
                 resp_writer.flush().await?;
                 return Ok(());
-            };
-
-            if key.starts_with(&hash_prefix) {
-                // store the next cursor
-                let cursor = Rc::new(cursor.progress(BytesMut::from(key)));
-                // and store the cursor state
-                client_state.set_cursor(cursor.clone());
-                cursor.id()
-            } else {
-                // there are more items, but they don't belong to this hash
+            }
+            Ok(None) => {
+                // reached the end
                 client_state.remove_cursor(cursor.id());
                 0u64
             }
-        } else {
-            // reached the end
-            // delete the cursor
-            client_state.remove_cursor(cursor.id());
-            0u64
+            Ok(Some(new_cursor)) => {
+                client_state.set_cursor(new_cursor.clone());
+                new_cursor.id()
+            }
         };
 
         // write the response

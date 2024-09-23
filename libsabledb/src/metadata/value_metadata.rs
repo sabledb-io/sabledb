@@ -3,7 +3,8 @@ use crate::{
     Expiration, SableError, U8ArrayBuilder, U8ArrayReader,
 };
 
-/// Contains information regarding the String type metadata
+/// Contains information regarding the value, such as: the value type (Str, Hash, Set etc), the item unique ID and its
+/// expiration information
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CommonValueMetadata {
     // u8
@@ -12,6 +13,14 @@ pub struct CommonValueMetadata {
     unique_id: u64,
     /// Value ttl information
     expiration: Expiration,
+}
+
+impl TryFrom<&[u8]> for CommonValueMetadata {
+    type Error = SableError;
+    fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
+        let mut reader = U8ArrayReader::with_buffer(b);
+        Self::from_bytes(&mut reader)
+    }
 }
 
 #[allow(dead_code)]

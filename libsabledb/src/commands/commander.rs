@@ -25,6 +25,9 @@ pub enum RedisCommandFlags {
     /// This command is now allowed inside a transaction block (`MULTI` / `EXEC`)
     #[strum(serialize = "notransaction")]
     NoTxn = 1 << 5,
+    /// This command operates on multiple keys
+    #[strum(serialize = "multikey")]
+    MultiKey = 1 << 6,
 }
 
 #[derive(Clone, Debug, Default, EnumString, PartialEq, Eq)]
@@ -94,6 +97,7 @@ pub enum RedisCommandName {
     Exists,
     Expire,
     Keys,
+    Scan,
     // Hash commands
     Hset,
     Hget,
@@ -1327,6 +1331,15 @@ impl Default for CommandsManager {
                     .with_first_key(1)
                     .with_last_key(-1)
                     .with_step(1),
+            ),
+            (
+                "scan",
+                CommandMetadata::new(RedisCommandName::Scan)
+                    .read_only()
+                    .with_arity(-2)
+                    .with_first_key(0)
+                    .with_last_key(0)
+                    .with_step(0),
             ),
         ]);
 
