@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 pub trait FromRaw {
     type Item;
     fn from_u8(v: u8) -> Option<Self::Item>
@@ -35,7 +37,7 @@ impl FromRaw for ValueType {
     }
 }
 
-impl std::str::FromStr for ValueType {
+impl FromStr for ValueType {
     type Err = crate::SableError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -49,6 +51,13 @@ impl std::str::FromStr for ValueType {
                 s
             ))),
         }
+    }
+}
+
+impl From<&bytes::BytesMut> for ValueType {
+    fn from(b: &bytes::BytesMut) -> Self {
+        let s = String::from_utf8_lossy(b).to_string();
+        ValueType::from_str(&s).unwrap_or_default()
     }
 }
 

@@ -44,6 +44,9 @@ impl GenericCommands {
             RedisCommandName::Keys => {
                 Self::keys(client_state, command, &mut response_buffer).await?;
             }
+            RedisCommandName::Scan => {
+                Self::scan(client_state, command, &mut response_buffer).await?;
+            }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
                     "Non generic command {}",
@@ -321,7 +324,6 @@ impl GenericCommands {
         Ok(())
     }
 
-    #[allow(dead_code)]
     /// The SCAN command and the closely related commands SSCAN, HSCAN and ZSCAN are used in order to incrementally
     /// iterate over a collection of elements.
     ///
@@ -346,7 +348,7 @@ impl GenericCommands {
 
         let mut pattern: Option<&BytesMut> = None;
         let mut count = 10usize;
-        let mut obj_type: Option<&BytesMut> = None;
+        let mut obj_type: Option<ValueType> = None;
         while let Some(keyword) = iter.next() {
             let Some(value) = iter.next() else {
                 builder_return_syntax_error!(builder, response_buffer);
@@ -369,7 +371,7 @@ impl GenericCommands {
                     };
                 }
                 "type" if obj_type.is_none() => {
-                    obj_type = Some(value);
+                    obj_type = Some(ValueType::from(value));
                 }
                 _ => {
                     builder_return_syntax_error!(builder, response_buffer);
@@ -388,7 +390,7 @@ impl GenericCommands {
         };
 
         // Create the prefix iterator
-        let primary_keys_prefix = PrimaryKeyMetadata::first_key(client_state.database_id());
+        let primary_keys_prefix = PrimaryKeyMetadata::first_key_prefix(client_state.database_id());
         let prefix = if let Some(saved_prefix) = cursor.prefix() {
             BytesMut::from(saved_prefix)
         } else {
@@ -402,10 +404,10 @@ impl GenericCommands {
             PatternMatcher::builder().pass_through().build()
         };
 
-        let mut results = Vec::<(BytesMut, ValueType)>::with_capacity(count);
+        let mut results = Vec::<BytesMut>::with_capacity(count);
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         while db_iter.valid() {
-            let Some((key, _val)) = db_iter.key_value() else {
+            let Some((key, val)) = db_iter.key_value() else {
                 break;
             };
 
@@ -414,22 +416,66 @@ impl GenericCommands {
                 break;
             }
 
-            if matcher.matches(key) {
-                results.push((BytesMut::from(key), ValueType::default()));
+            if let Some(user_key) = Self::should_collect(key, val, &matcher, &obj_type)? {
+                results.push(user_key);
             }
+            db_iter.next();
 
-            if results.len() == count {
+            if results.len() >= count {
                 // we got all the elements that we wanted
                 break;
             }
-            db_iter.next();
         }
 
+        // Prepare cursor for next iteration
+        let cursor_id =
+            match cursor.create_next_cursor_for_prefix(&mut db_iter, &primary_keys_prefix) {
+                Err(e) => {
+                    builder.error_string(response_buffer, &format!("ERR internal error. {}", e));
+                    return Ok(());
+                }
+                Ok(None) => {
+                    // reached the end
+                    client_state.remove_cursor(cursor.id());
+                    0u64
+                }
+                Ok(Some(new_cursor)) => {
+                    client_state.set_cursor(new_cursor.clone());
+                    new_cursor.id()
+                }
+            };
+
+        builder.add_array_len(response_buffer, 2);
+        builder.add_number(response_buffer, cursor_id, false);
         builder.add_array_len(response_buffer, results.len());
-        for (key, _key_type) in &results {
+        for key in &results {
             builder.add_bulk_string(response_buffer, key);
         }
         Ok(())
+    }
+
+    /// Scan helper function: return true if the `encoded_key` / `encoded_value` pair are candidates for the scan command
+    fn should_collect(
+        encoded_key: &[u8],
+        encoded_value: &[u8],
+        matcher: &PatternMatcher,
+        requested_obj_type: &Option<ValueType>,
+    ) -> Result<Option<BytesMut>, SableError> {
+        let (_key_metadata, user_key) = PrimaryKeyMetadata::from_raw(encoded_key)?;
+
+        // Filter by object type if needed
+        if let Some(requested_obj_type) = requested_obj_type {
+            let cmd = CommonValueMetadata::try_from(encoded_value)?;
+            if requested_obj_type.ne(&cmd.value_type()) {
+                return Ok(None);
+            }
+        }
+
+        Ok(if matcher.matches(&user_key) {
+            Some(user_key)
+        } else {
+            None
+        })
     }
 }
 
@@ -501,6 +547,22 @@ mod test {
         ("keys ??", "*3\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk1\r\n"),
         ("keys myhash", "*1\r\n$6\r\nmyhash\r\n"),
     ]; "test_keys")]
+    #[test_case(vec![
+        ("set k1 b", "+OK\r\n"),
+        ("set k2 d", "+OK\r\n"),
+        ("set k3 f", "+OK\r\n"),
+        ("set k4 f", "+OK\r\n"),
+        ("hset myhash 1 2 3 4 5 6", ":3\r\n"),
+        // fetch all keys
+        ("scan 0 COUNT 10", "*2\r\n:0\r\n*5\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk4\r\n$6\r\nmyhash\r\n$2\r\nk1\r\n"),
+        // fetch all string keys ("myhash" is excluded)
+        ("scan 0 COUNT 10 TYPE string", "*2\r\n:0\r\n*4\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk4\r\n$2\r\nk1\r\n"),
+        // fetch all hash keys (only "myhash")
+        ("scan 0 COUNT 10 TYPE hash", "*2\r\n:0\r\n*1\r\n$6\r\nmyhash\r\n"),
+        // All keys starting with k regardless of their type
+        ("scan 0 COUNT 10 MATCH k*", "*2\r\n:0\r\n*4\r\n$2\r\nk2\r\n$2\r\nk3\r\n$2\r\nk4\r\n$2\r\nk1\r\n"),
+        ("scan 0 COUNT 10 MATCH *ha*", "*2\r\n:0\r\n*1\r\n$6\r\nmyhash\r\n")
+    ]; "test_scan")]
     fn test_generic_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

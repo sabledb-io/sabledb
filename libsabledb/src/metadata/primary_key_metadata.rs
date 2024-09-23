@@ -28,7 +28,7 @@ pub struct KeyMetadata {
 
 impl ToU8Writer for KeyMetadata {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.key_type as u8);
+        builder.write_key_type(self.key_type);
         builder.write_u16(self.db_id);
         builder.write_u16(self.key_slot);
     }
@@ -48,7 +48,7 @@ impl KeyMetadata {
     pub const SIZE: usize =
         std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
 
-    pub fn from_bytes(buf: &BytesMut) -> Result<Self, SableError> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
         Self::from_reader(&mut reader).ok_or(SableError::SerialisationError)
     }
@@ -79,23 +79,19 @@ impl KeyMetadata {
         encoded_key
     }
 
-    /// Create the key to the first primary key in the database
-    pub fn first_key(db_id: u16) -> BytesMut {
-        let mut key_metadata = KeyMetadata::default()
-            .with_type(KeyType::PrimaryKey)
-            .with_db_id(db_id);
-        key_metadata.key_slot = 0u16; // the first slot is 0
-
+    /// Create a prefix that can be used to iterate all primary keys in the database
+    pub fn first_key_prefix(db_id: u16) -> BytesMut {
         let mut encoded_key = BytesMut::with_capacity(KeyMetadata::SIZE);
         let mut builder = U8ArrayBuilder::with_buffer(&mut encoded_key);
-        key_metadata.to_writer(&mut builder);
+        builder.write_key_type(KeyType::PrimaryKey);
+        builder.write_u16(db_id);
         encoded_key
     }
 
     /// Given an encoded key, return its metadata and the user content
-    pub fn from_raw(encoded_key: &BytesMut) -> Result<(KeyMetadata, BytesMut), SableError> {
+    pub fn from_raw(encoded_key: &[u8]) -> Result<(KeyMetadata, BytesMut), SableError> {
         let (pk_bytes, user_bytes) = encoded_key.split_at(KeyMetadata::SIZE);
-        let pk = KeyMetadata::from_bytes(&BytesMut::from(pk_bytes))?;
+        let pk = KeyMetadata::from_bytes(pk_bytes)?;
         Ok((pk, BytesMut::from(user_bytes)))
     }
 
