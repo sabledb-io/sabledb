@@ -1,4 +1,5 @@
 use crate::{replication::ServerRole, CommandLineArgs, SableError};
+use redis::Commands;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
@@ -178,6 +179,27 @@ impl Shard {
             primary: None,
             replicas: None,
         }
+    }
+
+    /// Return list of all primary node IDs that registered in the cluster database (in the CLUSTER_PRIMARIES set)
+    pub fn cluster_members(&self) -> Result<Vec<String>, SableError> {
+        let mut cluster_db_conn = self.cluster_db_instance.borrow().connect_with_retries()?;
+        let members: redis::Value = cluster_db_conn.smembers("CLUSTER_PRIMARIES")?;
+        let redis::Value::Array(members) = members else {
+            return Err(SableError::OtherError("Expected array of members".into()));
+        };
+
+        let ids: Vec<String> = members
+            .iter()
+            .map(|v| {
+                if let redis::Value::BulkString(node_id) = v {
+                    String::from_utf8_lossy(node_id).to_string()
+                } else {
+                    String::from("INVALID_NODE_ID")
+                }
+            })
+            .collect();
+        Ok(ids)
     }
 
     /// Run shard wide INFO command and populate the replicas / primary
@@ -571,6 +593,60 @@ mod test {
             "Server started with PID: {}",
             shard.primary().unwrap().borrow().pid().unwrap()
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_cluster_set_updated() {
+        // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
+        let inst_count = 3usize;
+        let mut shard = start_shard(inst_count).unwrap();
+        println!("Initial state: {}", shard);
+        let primary_node_id = shard.primary().unwrap().borrow().node_id();
+        assert!(!primary_node_id.is_empty());
+
+        let primaries = shard.cluster_members().unwrap();
+        println!("CLUSTER_PRIMARIES={:?}", primaries);
+
+        assert_eq!(primaries.len(), 1);
+        assert_eq!(primaries.first().unwrap(), &primary_node_id);
+
+        let replicas = shard.replicas().unwrap();
+        for replica in &replicas {
+            let replica_id = replica.borrow().node_id();
+            let replica_primary_id = replica.borrow().primary_node_id();
+
+            assert_eq!(replica_primary_id, primary_node_id);
+            assert!(!replica_id.is_empty());
+        }
+
+        // terminate the primary node
+        let old_primary_id = shard.primary().unwrap().borrow().node_id();
+        let old_primary = shard.terminate_and_remove_primary().unwrap();
+        println!("Primary node {} terminated and removed", old_primary_id);
+        println!(
+            "Shard state after primary terminated and removed: {}",
+            shard
+        );
+        assert_eq!(primary_node_id, old_primary_id);
+        assert!(!shard.is_stabilised());
+
+        assert!(shard.primary.is_none());
+        assert_eq!(shard.instances.len(), inst_count - 1);
+        assert!(!old_primary.borrow().is_running());
+
+        // Wait for the shard to auto failover
+        println!("Waiting for fail-over to take place... (this can take up to 30 seconds)");
+        shard.wait_for_shard_to_stabilise().unwrap();
+        println!("{}", shard);
+        assert!(shard.is_stabilised());
+
+        // Check that the CLUSTER_PRIMARIES set updated
+        let primary_id = shard.primary().unwrap().borrow().node_id();
+        let primaries = shard.cluster_members().unwrap();
+        println!("CLUSTER_PRIMARIES={:?}", primaries);
+        assert_eq!(primaries.len(), 1);
+        assert_eq!(primaries.first().unwrap(), &primary_id);
     }
 
     #[test]

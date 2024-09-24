@@ -1,4 +1,4 @@
-use crate::{replication::NodeProperties, utils::TimeUtils, SableError, Server, ServerOptions};
+use crate::{replication::NodeProperties, SableError, Server, ServerOptions};
 use redis::Commands;
 use redis::Value;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -11,6 +11,7 @@ use crate::replication::{
 };
 
 const MUTEX_ERR: &str = "poisoned mutex";
+const CLUSTER_PRIMARIES: &str = "CLUSTER_PRIMARIES";
 
 lazy_static::lazy_static! {
     static ref CM_CONN: StdRwLock<Option<redis::Client>> = StdRwLock::<Option<redis::Client>>::default();
@@ -128,22 +129,6 @@ impl ClusterDB {
         get_conn_and_run(self.options.clone(), |client| node_info.put(client))
     }
 
-    /// Update the "last_updated" field for this node
-    pub fn put_last_updated(&self) -> Result<(), SableError> {
-        get_conn_and_run(self.options.clone(), move |client| {
-            let cur_node_id = Server::state().persistent_state().id();
-            let curts = TimeUtils::epoch_micros().unwrap_or_default();
-            tracing::trace!("Updating heartbeat for node {} -> {}", &cur_node_id, curts);
-            client.hset::<String, &str, u64, redis::Value>(
-                cur_node_id,
-                PROP_LAST_UPDATED,
-                curts,
-            )?;
-            tracing::trace!("Success");
-            Ok(())
-        })
-    }
-
     /// Detach this node from its primary
     pub fn remove_this_from_primary(&self) -> Result<(), SableError> {
         get_conn_and_run(self.options.clone(), move |client| {
@@ -161,6 +146,22 @@ impl ClusterDB {
         })
     }
 
+    /// Add node to the CLUSTER_PRIMARIES set
+    pub fn cluster_add(&self, node_id: &String) -> Result<(), SableError> {
+        get_conn_and_run(self.options.clone(), move |client| {
+            let _: redis::Value = client.sadd(CLUSTER_PRIMARIES, node_id)?;
+            Ok(())
+        })
+    }
+
+    /// Delete node to the CLUSTER_PRIMARIES set
+    pub fn cluster_del(&self, node_id: &String) -> Result<(), SableError> {
+        get_conn_and_run(self.options.clone(), move |client| {
+            let _: redis::Value = client.srem(CLUSTER_PRIMARIES, node_id)?;
+            Ok(())
+        })
+    }
+
     /// Delete this node from the database
     pub fn delete_self(&self) -> Result<(), SableError> {
         self.delete_node(Server::state().persistent_state().id())
@@ -169,7 +170,7 @@ impl ClusterDB {
     /// Delete node identified by `node_id` from the database
     pub fn delete_node(&self, node_id: String) -> Result<(), SableError> {
         get_conn_and_run(self.options.clone(), move |client| {
-            client.del::<&String, redis::Value>(&node_id)?;
+            let _: redis::Value = client.del(&node_id)?;
             Ok(())
         })
     }

@@ -151,19 +151,12 @@ pub fn put_node_properties(
     check_cluster_db_or!(options, Ok(()));
 
     let db = ClusterDB::with_options(options);
-    db.put_node_properties(node_info)
-}
+    db.put_node_properties(node_info)?;
 
-/// Update the "last updated" field for this node in the cluster manager database
-pub fn put_last_updated(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
-    check_cluster_db_or!(options, Ok(()));
-    if !check_us_passed_since!(LAST_UPDATED_TS, 1_000_000) {
-        return Ok(());
+    if Server::state().persistent_state().is_primary() {
+        // Add ourself to the CLUSTER_PRIMARIES set
+        db.cluster_add(&Server::state().persistent_state().id())?;
     }
-
-    let db = ClusterDB::with_options(options);
-    db.put_last_updated()?;
-    update_heartbeat_reported_ts();
     Ok(())
 }
 
@@ -277,6 +270,9 @@ pub async fn fail_over_if_needed(
         old_primary_id
     );
     let new_primary_id = new_primary_id.clone();
+
+    // Delete the old primary from the "CLUSTER_PRIMARIES" table
+    db.cluster_del(&old_primary_id)?;
 
     // Add the old primary to the list of replicas. This way we also broadcast a "REPLICAOF <IP> <PORT>"
     // to the old primary's queue
