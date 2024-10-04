@@ -7,6 +7,22 @@ use bytes::BytesMut;
 
 pub type PrimaryKeyMetadata = KeyMetadata;
 
+const DB_VERSION: &str = "db.version";
+
+/// Return the key that contains the metadata value
+pub fn db_version_key() -> BytesMut {
+    let key = KeyMetadata::default()
+        .with_type(KeyType::Metadata)
+        .with_db_id(0);
+
+    let mut buffer = BytesMut::default();
+    let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+    key.to_writer(&mut builder);
+
+    builder.write_bytes(DB_VERSION.as_bytes());
+    buffer
+}
+
 ///
 /// Each primary key stored in the storage contains a metadata attached to it which holds information about the
 /// key itself. The metadata is of a fixed size and is placed in the beginning of the byte array
@@ -54,13 +70,13 @@ impl KeyMetadata {
     }
 
     /// Set the key type
-    fn with_type(mut self, key_type: KeyType) -> Self {
+    pub fn with_type(mut self, key_type: KeyType) -> Self {
         self.key_type = key_type;
         self
     }
 
     /// Set the database ID
-    fn with_db_id(mut self, db_id: u16) -> Self {
+    pub fn with_db_id(mut self, db_id: u16) -> Self {
         self.db_id = db_id;
         self
     }
@@ -102,6 +118,14 @@ impl KeyMetadata {
     /// Return the key type: Primary or Secondary
     pub fn key_type(&self) -> KeyType {
         self.key_type
+    }
+
+    pub fn database_id(&self) -> u16 {
+        self.db_id
+    }
+
+    pub fn slot(&self) -> u16 {
+        self.key_slot
     }
 }
 

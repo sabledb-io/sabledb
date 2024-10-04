@@ -1,0 +1,13 @@
+[package]
+name = "sdb-admin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = { version = "0", features = ["log"] }
+tracing-subscriber = "0"
+clap = { version = "4", features = ["derive"] }
+libsabledb = { path = "../libsabledb" }
+bytes = "1"
+lazy_static = "1"
+rocksdb = "0"

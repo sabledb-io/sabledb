@@ -1,7 +1,8 @@
 [workspace]
-members = ["libsabledb", "sabledb", "sb", "sdb-cli"]
+members = ["libsabledb", "sabledb", "sb", "sdb-cli", "sdb-admin"]
 resolver = "2"
 
 [profile.release]
 lto = true
 codegen-units = 1
+strip = "symbols"

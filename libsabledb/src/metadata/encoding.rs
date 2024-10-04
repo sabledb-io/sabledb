@@ -72,6 +72,8 @@ pub enum KeyType {
     ZsetMemberItem = 4,
     ZsetScoreItem = 5,
     SetItem = 6,
+    /// Database metadata record (contains info regarding the current db schema)
+    Metadata = 7,
 }
 
 impl Default for KeyType {

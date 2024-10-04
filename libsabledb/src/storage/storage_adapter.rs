@@ -16,6 +16,10 @@ use std::sync::{
     Arc,
 };
 
+pub const DB_NO_VERSION: &str = "No-Version";
+pub const DB_VERSION_1_0_0: &str = "1.0.0";
+pub const DB_CURRENT_VERSION: &str = DB_VERSION_1_0_0;
+
 #[derive(Debug, Clone)]
 pub enum PutFlags {
     PutIfNotExists,

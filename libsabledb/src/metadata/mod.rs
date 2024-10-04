@@ -19,6 +19,6 @@ pub use zset_metadata::*;
 
 #[allow(unused_imports)]
 pub use list_metadata::ListValueMetadata;
-pub use primary_key_metadata::PrimaryKeyMetadata;
+pub use primary_key_metadata::*;
 pub use string_value_metadata::StringValueMetadata;
 pub use value_metadata::CommonValueMetadata;
