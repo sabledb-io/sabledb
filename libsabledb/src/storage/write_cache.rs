@@ -27,11 +27,11 @@ impl DbCacheEntry {
 ///
 /// This class provides a thin layer that
 /// allows the higher level databases (`HashDb`, `GenericDb`, `StringsDb` etc)
-/// to perform `gut` / `delete` in-memory without interacting with the disk
+/// to perform `put` / `delete` in-memory without interacting with the disk
 ///
 /// `get` operations are directed to the disk
 ///
-/// The changes accumlated in the cacne can be flushed to disk by
+/// The changes accumulated in the cache can be flushed to disk by
 /// calling to `DbWriteCache::to_write_batch()` followed by `StroageAdapter::apply_batch` call
 pub struct DbWriteCache<'a> {
     store: &'a StorageAdapter,
@@ -80,15 +80,14 @@ impl<'a> DbWriteCache<'a> {
         }
     }
 
-    /// Get a key from cache. If the key does not exist in the cache, fetch it from the store
-    /// and keep a copy in the cache. If the key exists in the cache, but with a `None` value
-    /// this means that it was deleted, so return a `None` as well
+    /// Get a key from cache. If the item was deleted, return `None`.
+    /// This function does not update the cache
     pub fn get(&self, key: &BytesMut) -> Result<Option<BytesMut>, SableError> {
         let Some(value) = self.changes.get(key) else {
             return self.store.get(key);
         };
 
-        // found an match in cache
+        // found a match in cache
         if let Some(value) = value {
             // an actual value
             Ok(Some(value.data.clone()))

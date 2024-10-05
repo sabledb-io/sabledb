@@ -15,12 +15,12 @@ pub use crate::{
     metadata::KeyType,
     server::{ParserError, SableError},
 };
+pub use pattern_matcher::*;
 pub use request_parser::*;
 pub use resp_builder_v2::RespBuilderV2;
 pub use resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
 pub use shard_locker::*;
 pub use stopwatch::*;
-pub use pattern_matcher::*;
 
 use bytes::BytesMut;
 use rand::prelude::*;
@@ -454,6 +454,12 @@ impl<'a> U8ArrayReader<'a> {
         Some(arr)
     }
 
+    /// Return any remaining bytes
+    pub fn remaining(&mut self) -> Option<BytesMut> {
+        let len = self.buffer.len().saturating_sub(self.consumed);
+        self.read_bytes(len)
+    }
+
     /// Read a message from the buffer. A message is the combination of `[len|bytes]`
     /// This function is similar to:
     ///
@@ -671,7 +677,7 @@ pub trait FromBytes {
 
 pub trait FromU8Reader {
     type Item;
-    /// We use here `u64`, but the caller can pass any type of `uN`
+    /// Construct "self" from an array reader
     fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item>;
 }
 

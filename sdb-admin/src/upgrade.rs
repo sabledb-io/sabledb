@@ -8,9 +8,11 @@ pub struct UpgradeOptions {
     dbpath: PathBuf,
 }
 
+type UpgradeFunc = fn(&mut StorageAdapter) -> Result<(), libsabledb::SableError>;
+
 lazy_static::lazy_static! {
     static ref UPGRADE_PATH:
-        Vec<(&'static str, fn(&mut StorageAdapter) -> Result<(), libsabledb::SableError>)> =
+        Vec<(&'static str, UpgradeFunc)> =
             vec![
                 // from version : upgrade function
                 (DB_NO_VERSION, upgrade_from_noversion_to_1_0_0)
@@ -48,9 +50,9 @@ pub fn upgrade_database(options: &UpgradeOptions) -> Result<(), libsabledb::Sabl
     };
 
     // locate the first function to call
-    let mut iter = UPGRADE_PATH.iter();
+    let iter = UPGRADE_PATH.iter();
     let mut found = false;
-    while let Some((from_version, func)) = iter.next() {
+    for (from_version, func) in iter {
         if !found {
             if db_version.eq(from_version) {
                 found = true;

@@ -1,5 +1,6 @@
 mod generic_db;
 mod hash_db;
+mod list_db;
 mod scan_cursor;
 mod set_db;
 mod storage_adapter;
@@ -16,6 +17,7 @@ pub use hash_db::{
     GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
     HashGetResult, HashLenResult, HashPutResult,
 };
+pub use list_db::*;
 pub use scan_cursor::ScanCursor;
 pub use set_db::*;
 pub use storage_rocksdb::StorageRocksDb;

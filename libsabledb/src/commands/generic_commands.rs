@@ -461,7 +461,9 @@ impl GenericCommands {
         matcher: &PatternMatcher,
         requested_obj_type: &Option<ValueType>,
     ) -> Result<Option<BytesMut>, SableError> {
-        let (_key_metadata, user_key) = PrimaryKeyMetadata::from_raw(encoded_key)?;
+        let user_key = PrimaryKeyMetadata::from_raw(encoded_key)?
+            .user_key()
+            .clone();
 
         // Filter by object type if needed
         if let Some(requested_obj_type) = requested_obj_type {

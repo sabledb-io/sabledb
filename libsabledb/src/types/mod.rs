@@ -58,4 +58,4 @@ macro_rules! iter_next_or_prev {
 }
 
 #[allow(unused_imports)]
-pub use list::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult};
+pub use list::{BlockingCommandResult, List, ListFlags, ListItem, MoveResult, MultiPopResult};
