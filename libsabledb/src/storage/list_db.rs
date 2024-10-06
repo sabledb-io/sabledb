@@ -6,7 +6,8 @@ use crate::{
 };
 use bytes::BytesMut;
 
-pub struct ListItemKey {
+#[derive(Clone)]
+struct ListItemKey {
     pub list_id: u64,
     pub item_id: u64,
 }
@@ -17,8 +18,8 @@ impl ListItemKey {
     }
 }
 
-#[derive(Default)]
-pub struct ListItemValue {
+#[derive(Default, Clone)]
+struct ListItemValue {
     pub left: u64,
     pub right: u64,
     pub value: BytesMut,
@@ -35,7 +36,7 @@ impl ListItemValue {
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
-pub struct List {
+struct List {
     pub key: PrimaryKeyMetadata,
     pub md: ListValueMetadata,
 }
@@ -89,15 +90,25 @@ impl List {
     pub fn incr_len_by(&mut self, n: u64) {
         self.md.set_len(self.md.len().saturating_add(n))
     }
+
+    pub fn fix_index(&self, index: isize) -> isize {
+        if index < 0 {
+            self.len()
+                .try_into()
+                .unwrap_or(isize::MAX)
+                .saturating_add(index)
+        } else {
+            index
+        }
+    }
 }
 
-#[allow(dead_code)]
-pub struct ListItem {
+#[derive(Clone)]
+struct ListItem {
     pub key: ListItemKey,
     pub value: ListItemValue,
 }
 
-#[allow(dead_code)]
 impl ListItem {
     pub fn new(key: ListItemKey, value: ListItemValue) -> Self {
         ListItem { key, value }
@@ -131,6 +142,10 @@ impl ListItem {
             right_item.value.left = self.id();
             self.value.right = right_item.id();
         }
+    }
+
+    pub fn user_value(&self) -> &BytesMut {
+        &self.value.value
     }
 
     /// Make this item the first item.
@@ -213,17 +228,9 @@ impl ToBytes for ListItemKey {
     }
 }
 
-// Internal enumerator
-#[allow(dead_code)]
-#[derive(Debug, PartialEq, Eq)]
-pub enum GetListMetadataResult {
-    /// An entry exists in the db for the given key, but for a different type
-    WrongType,
-    /// A match was found
-    Some(List),
-    /// No entry exist
-    NotFound,
-}
+//
+// Public enumerators
+//
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum ListAppendResult {
@@ -237,6 +244,8 @@ pub enum ListAppendResult {
 pub enum ListInsertResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
+    /// The reference pivot element was not found in the list
+    PivotNotFound,
     /// Insert was successful
     Ok(usize),
 }
@@ -248,6 +257,27 @@ pub enum ListLenResult {
     /// Returns the list length
     Ok(usize),
     /// List does not exist
+    NotFound,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListRangeResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Returns the requested range
+    Ok(Vec<BytesMut>),
+}
+
+// Private enumerators
+
+// Internal enumerator
+#[derive(Debug, PartialEq, Eq)]
+enum GetListMetadataResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// A match was found
+    Some(List),
+    /// No entry exist
     NotFound,
 }
 
@@ -287,15 +317,39 @@ impl<'a> ListDb<'a> {
     }
 
     /// Append items to the end of the list
-    pub fn append(
+    pub fn rpush(
         &mut self,
         user_key: &BytesMut,
         values: &[&BytesMut],
     ) -> Result<ListAppendResult, SableError> {
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
+            GetListMetadataResult::NotFound => self.new_list(user_key)?,
+            GetListMetadataResult::Some(list) => list,
+        };
+
         for value in values {
-            self.insert(user_key, value, InsertPosition::Last)?;
+            self.insert_internal(&mut list, value, InsertPosition::Last)?;
         }
-        Ok(ListAppendResult::Ok(0))
+        Ok(ListAppendResult::Ok(list.len()))
+    }
+
+    /// Append items to the start of the list
+    pub fn lpush(
+        &mut self,
+        user_key: &BytesMut,
+        values: &[&BytesMut],
+    ) -> Result<ListAppendResult, SableError> {
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
+            GetListMetadataResult::NotFound => self.new_list(user_key)?,
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        for value in values {
+            self.insert_internal(&mut list, value, InsertPosition::First)?;
+        }
+        Ok(ListAppendResult::Ok(list.len()))
     }
 
     /// Return the list length
@@ -312,21 +366,57 @@ impl<'a> ListDb<'a> {
         self.cache.flush()
     }
 
-    // Private helpers
-
-    /// Insert item to the list at a given position
-    fn insert(
-        &mut self,
+    /// Return list item starting from `start` -> `end`.
+    /// If `start` > `end` this
+    pub fn range(
+        &self,
         user_key: &BytesMut,
-        value: &BytesMut,
-        pos: InsertPosition,
-    ) -> Result<ListInsertResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
-            GetListMetadataResult::WrongType => return Ok(ListInsertResult::WrongType),
-            GetListMetadataResult::NotFound => self.new_list(user_key)?,
+        start: isize,
+        end: isize,
+    ) -> Result<ListRangeResult, SableError> {
+        let list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListRangeResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListRangeResult::Ok(Vec::default())),
             GetListMetadataResult::Some(list) => list,
         };
 
+        // convert indices
+        let start = list.fix_index(start);
+        let end = list.fix_index(end);
+
+        if start > end || end < 0 {
+            // empty array
+            Ok(ListRangeResult::Ok(Vec::default()))
+        } else {
+            let start = if start < 0 { 0 } else { start };
+
+            // At this point, both indices are positive, so go ahead and convert them into usize
+            let start = start.try_into().unwrap_or(0usize);
+            let end = end.try_into().unwrap_or(0usize);
+            let mut result = Vec::<BytesMut>::new();
+            self.iterate(&list, |item, index| {
+                if index >= start && index <= end {
+                    result.push(item.user_value().clone());
+                    Ok(index != end)
+                } else {
+                    Ok(true)
+                }
+            })?;
+            Ok(ListRangeResult::Ok(result))
+        }
+    }
+
+    // ===-----------------------------
+    // Private helpers
+    // ===-----------------------------
+
+    /// Insert item to the list at a given position
+    fn insert_internal(
+        &mut self,
+        list: &mut List,
+        value: &BytesMut,
+        pos: InsertPosition,
+    ) -> Result<ListInsertResult, SableError> {
         let new_item_key = ListItemKey::new(list.id(), self.store.generate_id());
         let new_item_value = ListItemValue::with_value(value.clone());
         let mut new_item = ListItem::new(new_item_key, new_item_value);
@@ -335,15 +425,27 @@ impl<'a> ListDb<'a> {
 
         match pos {
             InsertPosition::Last => {
-                self.push_back(&mut list, &mut new_item)?;
+                self.push_back(list, &mut new_item)?;
                 Ok(ListInsertResult::Ok(list.len()))
             }
             InsertPosition::First => {
-                self.push_front(&mut list, &mut new_item)?;
+                self.push_front(list, &mut new_item)?;
                 Ok(ListInsertResult::Ok(list.len()))
             }
-            InsertPosition::Before(_pivot) => Ok(ListInsertResult::WrongType),
-            InsertPosition::After(_pivot) => Ok(ListInsertResult::WrongType),
+            InsertPosition::Before(pivot) => {
+                let Some(mut pivot) = self.get_list_item_by_value(list, &pivot)? else {
+                    return Ok(ListInsertResult::PivotNotFound);
+                };
+                self.insert_before_item(list, &mut pivot, &mut new_item)?;
+                Ok(ListInsertResult::Ok(list.len()))
+            }
+            InsertPosition::After(pivot) => {
+                let Some(mut pivot) = self.get_list_item_by_value(list, &pivot)? else {
+                    return Ok(ListInsertResult::PivotNotFound);
+                };
+                self.insert_after_item(list, &mut pivot, &mut new_item)?;
+                Ok(ListInsertResult::Ok(list.len()))
+            }
         }
     }
 
@@ -391,6 +493,48 @@ impl<'a> ListDb<'a> {
         Ok(())
     }
 
+    /// Insert `new_item` after the `pivot` item
+    fn insert_after_item(
+        &mut self,
+        list: &mut List,
+        pivot: &mut ListItem,
+        new_item: &mut ListItem,
+    ) -> Result<(), SableError> {
+        if let Some(mut right_item) = self.get_list_item_by_id(list, pivot.right())? {
+            // pivot is pointing to a valid item in the list
+            new_item.insert_between(Some(pivot), Some(&mut right_item));
+            self.put_list_item(new_item)?;
+            self.put_list_item(pivot)?;
+            self.put_list_item(&right_item)?;
+            list.incr_len_by(1);
+        } else {
+            // pivot is the last item
+            self.push_back(list, new_item)?;
+        }
+        Ok(())
+    }
+
+    /// Insert `new_item` before the `pivot` item
+    fn insert_before_item(
+        &mut self,
+        list: &mut List,
+        pivot: &mut ListItem,
+        new_item: &mut ListItem,
+    ) -> Result<(), SableError> {
+        if let Some(mut left_item) = self.get_list_item_by_id(list, pivot.left())? {
+            // pivot is pointing to a valid item in the list
+            new_item.insert_between(Some(&mut left_item), Some(pivot));
+            self.put_list_item(new_item)?;
+            self.put_list_item(pivot)?;
+            self.put_list_item(&left_item)?;
+            list.incr_len_by(1);
+        } else {
+            // pivot is the first item
+            self.push_front(list, new_item)?;
+        }
+        Ok(())
+    }
+
     /// Load and cache the list metadata
     fn list_metadata(&self, user_key: &BytesMut) -> Result<GetListMetadataResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
@@ -432,7 +576,7 @@ impl<'a> ListDb<'a> {
     ) -> Result<Option<ListValueMetadata>, SableError> {
         let mut reader = U8ArrayReader::with_buffer(value);
         let common_md = CommonValueMetadata::from_bytes(&mut reader)?;
-        if !common_md.is_set() {
+        if !common_md.is_list() {
             return Ok(None);
         }
 
@@ -453,7 +597,7 @@ impl<'a> ListDb<'a> {
     }
 
     fn get_list_item_by_id(
-        &mut self,
+        &self,
         list: &List,
         item_id: u64,
     ) -> Result<Option<ListItem>, SableError> {
@@ -465,18 +609,37 @@ impl<'a> ListDb<'a> {
         Ok(Some(ListItem::new(key, value)))
     }
 
-    fn iterate<F>(&mut self, list: &List, callback: F) -> Result<(), SableError>
-    where
-        F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
-    {
-        self.do_iterate(list, false, callback)
+    /// Iterate over the list, head -> tail and find the first item
+    /// the matches `value`
+    fn get_list_item_by_value(
+        &self,
+        list: &List,
+        value: &BytesMut,
+    ) -> Result<Option<ListItem>, SableError> {
+        // Search for the first item with the given value
+        let mut matched_item: Option<ListItem> = None;
+        self.iterate(list, |item, _index| {
+            if item.user_value().eq(value) {
+                matched_item = Some(item.clone());
+                return Ok(false);
+            }
+            Ok(true)
+        })?;
+        Ok(matched_item)
     }
 
-    fn reverse_iterate<F>(&mut self, list: &List, callback: F) -> Result<(), SableError>
+    fn iterate<F>(&self, list: &List, callback: F) -> Result<(), SableError>
     where
         F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
     {
-        self.do_iterate(list, true, callback)
+        self.iterate_internal(list, false, callback)
+    }
+
+    fn reverse_iterate<F>(&self, list: &List, callback: F) -> Result<(), SableError>
+    where
+        F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
+    {
+        self.iterate_internal(list, true, callback)
     }
 
     /// Iterate over the list
@@ -495,8 +658,8 @@ impl<'a> ListDb<'a> {
     /// Callback return value:
     ///
     /// Return `true` to continue the iteration, `false` otherwise
-    fn do_iterate<F>(
-        &mut self,
+    fn iterate_internal<F>(
+        &self,
         list: &List,
         reverse: bool,
         mut callback: F,
@@ -526,5 +689,73 @@ impl<'a> ListDb<'a> {
             counter = counter.saturating_add(1);
         }
         Ok(())
+    }
+}
+
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_left_push() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+
+        let mut values = Vec::<BytesMut>::new();
+        for i in 0..10 {
+            let key = format!("key_{}", i);
+            values.push(BytesMut::from(key.as_bytes()));
+        }
+
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let res = db.lpush(&list_name, &values).unwrap();
+        assert_eq!(res, ListAppendResult::Ok(10));
+
+        db.commit().unwrap();
+
+        let ListRangeResult::Ok(mut items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        // items needs to be reversed (we added them at the HEAD of the list)
+        items.reverse();
+        println!("{:?}", items);
+        assert_eq!(items.len(), values.len());
+        assert_eq!(items, values);
+    }
+
+    #[test]
+    fn test_right_push() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+
+        let mut values = Vec::<BytesMut>::new();
+        for i in 0..10 {
+            let key = format!("key_{}", i);
+            values.push(BytesMut::from(key.as_bytes()));
+        }
+
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let res = db.rpush(&list_name, &values).unwrap();
+        assert_eq!(res, ListAppendResult::Ok(10));
+
+        db.commit().unwrap();
+
+        let ListRangeResult::Ok(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        println!("{:?}", items);
+        assert_eq!(items.len(), values.len());
+        assert_eq!(items, values);
     }
 }
