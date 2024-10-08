@@ -1,6 +1,7 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
+    storage::{ListAppendResult, ListDb},
     to_number,
     types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
@@ -22,31 +23,41 @@ impl ListCommands {
         command: Rc<RedisCommand>,
         _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
-        let response_buffer = BytesMut::with_capacity(256);
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Lpush => {
-                Self::push(client_state, command, response_buffer, ListFlags::FromLeft).await
+                Self::push(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ListFlags::FromLeft,
+                )
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lpushx => {
                 Self::push(
                     client_state,
                     command,
-                    response_buffer,
+                    &mut response_buffer,
                     ListFlags::FromLeft | ListFlags::ListMustExist,
                 )
-                .await
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpush => {
-                Self::push(client_state, command, response_buffer, ListFlags::None).await
+                Self::push(client_state, command, &mut response_buffer, ListFlags::None).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpushx => {
                 Self::push(
                     client_state,
                     command,
-                    response_buffer,
+                    &mut response_buffer,
                     ListFlags::ListMustExist,
                 )
-                .await
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lpop => {
                 Self::pop(client_state, command, response_buffer, ListFlags::FromLeft).await
@@ -101,38 +112,37 @@ impl ListCommands {
     pub async fn push(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
+        response_buffer: &mut BytesMut,
         flags: ListFlags,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
-
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
         let key = command_arg_at!(command, 1);
 
-        let mut iter = command.args_vec().iter();
-        iter.next(); // lpush
-        iter.next(); // key
-
-        // collect the values
-        let mut values = Vec::<&BytesMut>::with_capacity(command.arg_count());
-        for value in iter {
-            values.push(value);
-        }
-
+        let values: Vec<&BytesMut> = command.args_vec()[2..].iter().collect();
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.push(key, &values, &mut response_buffer, flags)?;
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.push(key, &values, flags)? {
+            ListAppendResult::Some(list_len) => {
+                // Commit the changes
+                db.commit()?;
 
-        client_state
-            .server_inner_state()
-            .wakeup_clients(key, values.len())
-            .await;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                // Build the response (integer reply)
+                builder.number_usize(response_buffer, list_len);
+
+                // And wakeup any waiting clients
+                client_state
+                    .server_inner_state()
+                    .wakeup_clients(key, values.len())
+                    .await;
+            }
+            ListAppendResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListAppendResult::ListNotFound => builder.number_usize(response_buffer, 0),
+        }
+        Ok(())
     }
 
     /// Atomically returns and removes the last element (tail) of the list stored at source, and

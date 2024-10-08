@@ -83,7 +83,7 @@ bitflags::bitflags! {
 pub struct ListFlags: u32  {
     /// None: Actions are performed from the right side of the list
     const None = 0;
-    /// For convinience, same as `None`
+    /// For convenience, same as `None`
     const FromRight = 0;
     /// Before performing the operation, the list must exist
     const ListMustExist = 1 << 0;

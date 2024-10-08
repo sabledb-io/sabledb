@@ -1,6 +1,7 @@
 use crate::{
     metadata::{Bookkeeping, ListValueMetadata, ValueType},
     storage::DbWriteCache,
+    types::ListFlags,
     CommonValueMetadata, FromBytes, FromU8Reader, PrimaryKeyMetadata, SableError, StorageAdapter,
     ToBytes, ToU8Writer, U8ArrayBuilder, U8ArrayReader,
 };
@@ -237,17 +238,9 @@ pub enum ListAppendResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// Returns the list length
-    Ok(usize),
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub enum ListInsertResult {
-    /// An entry exists in the db for the given key, but for a different type
-    WrongType,
-    /// The reference pivot element was not found in the list
-    PivotNotFound,
-    /// Insert was successful
-    Ok(usize),
+    Some(usize),
+    /// List does not exist
+    ListNotFound,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -255,7 +248,7 @@ pub enum ListLenResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// Returns the list length
-    Ok(usize),
+    Some(usize),
     /// List does not exist
     NotFound,
 }
@@ -265,10 +258,40 @@ pub enum ListRangeResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// Returns the requested range
-    Ok(Vec<BytesMut>),
+    Some(Vec<BytesMut>),
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListInsertResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// The reference pivot element was not found in the list
+    PivotNotFound,
+    /// The reference pivot element was not found in the list
+    ListNotFound,
+    /// Insert was successful
+    Some(usize),
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListItemAt {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Return the item at the given index
+    Some(BytesMut),
+    /// Could not find the index
+    None,
 }
 
 // Private enumerators
+
+#[derive(PartialEq, Eq, Debug)]
+enum ListInsertInternalResult {
+    /// The reference pivot element was not found in the list
+    PivotNotFound,
+    /// Insert was successful
+    Some(usize),
+}
 
 // Internal enumerator
 #[derive(Debug, PartialEq, Eq)]
@@ -316,46 +339,42 @@ impl<'a> ListDb<'a> {
         }
     }
 
-    /// Append items to the end of the list
-    pub fn rpush(
+    /// Append items to the end or start of the list
+    pub fn push(
         &mut self,
         user_key: &BytesMut,
         values: &[&BytesMut],
+        flags: ListFlags,
     ) -> Result<ListAppendResult, SableError> {
         let mut list = match self.list_metadata(user_key)? {
             GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
-            GetListMetadataResult::NotFound => self.new_list(user_key)?,
+            GetListMetadataResult::NotFound => {
+                if flags.contains(ListFlags::ListMustExist) {
+                    return Ok(ListAppendResult::ListNotFound);
+                }
+                self.new_list(user_key)?
+            }
             GetListMetadataResult::Some(list) => list,
         };
 
         for value in values {
-            self.insert_internal(&mut list, value, InsertPosition::Last)?;
+            self.insert_internal(
+                &mut list,
+                value,
+                if flags.contains(ListFlags::FromLeft) {
+                    InsertPosition::First
+                } else {
+                    InsertPosition::Last
+                },
+            )?;
         }
-        Ok(ListAppendResult::Ok(list.len()))
-    }
-
-    /// Append items to the start of the list
-    pub fn lpush(
-        &mut self,
-        user_key: &BytesMut,
-        values: &[&BytesMut],
-    ) -> Result<ListAppendResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
-            GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
-            GetListMetadataResult::NotFound => self.new_list(user_key)?,
-            GetListMetadataResult::Some(list) => list,
-        };
-
-        for value in values {
-            self.insert_internal(&mut list, value, InsertPosition::First)?;
-        }
-        Ok(ListAppendResult::Ok(list.len()))
+        Ok(ListAppendResult::Some(list.len()))
     }
 
     /// Return the list length
     pub fn len(&self, user_key: &BytesMut) -> Result<ListLenResult, SableError> {
         Ok(match self.list_metadata(user_key)? {
-            GetListMetadataResult::Some(list) => ListLenResult::Ok(list.len()),
+            GetListMetadataResult::Some(list) => ListLenResult::Some(list.len()),
             GetListMetadataResult::WrongType => ListLenResult::WrongType,
             GetListMetadataResult::NotFound => ListLenResult::NotFound,
         })
@@ -376,7 +395,7 @@ impl<'a> ListDb<'a> {
     ) -> Result<ListRangeResult, SableError> {
         let list = match self.list_metadata(user_key)? {
             GetListMetadataResult::WrongType => return Ok(ListRangeResult::WrongType),
-            GetListMetadataResult::NotFound => return Ok(ListRangeResult::Ok(Vec::default())),
+            GetListMetadataResult::NotFound => return Ok(ListRangeResult::Some(Vec::default())),
             GetListMetadataResult::Some(list) => list,
         };
 
@@ -386,7 +405,7 @@ impl<'a> ListDb<'a> {
 
         if start > end || end < 0 {
             // empty array
-            Ok(ListRangeResult::Ok(Vec::default()))
+            Ok(ListRangeResult::Some(Vec::default()))
         } else {
             let start = if start < 0 { 0 } else { start };
 
@@ -402,8 +421,76 @@ impl<'a> ListDb<'a> {
                     Ok(true)
                 }
             })?;
-            Ok(ListRangeResult::Ok(result))
+            Ok(ListRangeResult::Some(result))
         }
+    }
+
+    /// Insert `value` after `pivot` item
+    pub fn insert_after(
+        &mut self,
+        user_key: &BytesMut,
+        value: &BytesMut,
+        pivot: &BytesMut,
+    ) -> Result<ListInsertResult, SableError> {
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListInsertResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListInsertResult::ListNotFound), // List not found
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        Ok(
+            match self.insert_internal(&mut list, value, InsertPosition::After(pivot.clone()))? {
+                ListInsertInternalResult::PivotNotFound => ListInsertResult::PivotNotFound,
+                ListInsertInternalResult::Some(newlen) => ListInsertResult::Some(newlen),
+            },
+        )
+    }
+
+    /// Insert `value` before `pivot` item
+    pub fn insert_before(
+        &mut self,
+        user_key: &BytesMut,
+        value: &BytesMut,
+        pivot: &BytesMut,
+    ) -> Result<ListInsertResult, SableError> {
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListInsertResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListInsertResult::ListNotFound), // List not found
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        Ok(
+            match self.insert_internal(&mut list, value, InsertPosition::Before(pivot.clone()))? {
+                ListInsertInternalResult::PivotNotFound => ListInsertResult::PivotNotFound,
+                ListInsertInternalResult::Some(newlen) => ListInsertResult::Some(newlen),
+            },
+        )
+    }
+
+    /// Return the item at the given index
+    pub fn item_at(&self, user_key: &BytesMut, index: isize) -> Result<ListItemAt, SableError> {
+        let list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListItemAt::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListItemAt::None),
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        let index = list.fix_index(index).try_into().unwrap_or(usize::MAX);
+        Ok(if index >= list.len() {
+            ListItemAt::None
+        } else {
+            // iterate
+            let mut value = BytesMut::default();
+            self.iterate(&list, |item, item_index| {
+                if item_index == index {
+                    value = item.user_value().clone();
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            })?;
+            ListItemAt::Some(value)
+        })
     }
 
     // ===-----------------------------
@@ -416,7 +503,7 @@ impl<'a> ListDb<'a> {
         list: &mut List,
         value: &BytesMut,
         pos: InsertPosition,
-    ) -> Result<ListInsertResult, SableError> {
+    ) -> Result<ListInsertInternalResult, SableError> {
         let new_item_key = ListItemKey::new(list.id(), self.store.generate_id());
         let new_item_value = ListItemValue::with_value(value.clone());
         let mut new_item = ListItem::new(new_item_key, new_item_value);
@@ -426,25 +513,25 @@ impl<'a> ListDb<'a> {
         match pos {
             InsertPosition::Last => {
                 self.push_back(list, &mut new_item)?;
-                Ok(ListInsertResult::Ok(list.len()))
+                Ok(ListInsertInternalResult::Some(list.len()))
             }
             InsertPosition::First => {
                 self.push_front(list, &mut new_item)?;
-                Ok(ListInsertResult::Ok(list.len()))
+                Ok(ListInsertInternalResult::Some(list.len()))
             }
             InsertPosition::Before(pivot) => {
                 let Some(mut pivot) = self.get_list_item_by_value(list, &pivot)? else {
-                    return Ok(ListInsertResult::PivotNotFound);
+                    return Ok(ListInsertInternalResult::PivotNotFound);
                 };
                 self.insert_before_item(list, &mut pivot, &mut new_item)?;
-                Ok(ListInsertResult::Ok(list.len()))
+                Ok(ListInsertInternalResult::Some(list.len()))
             }
             InsertPosition::After(pivot) => {
                 let Some(mut pivot) = self.get_list_item_by_value(list, &pivot)? else {
-                    return Ok(ListInsertResult::PivotNotFound);
+                    return Ok(ListInsertInternalResult::PivotNotFound);
                 };
                 self.insert_after_item(list, &mut pivot, &mut new_item)?;
-                Ok(ListInsertResult::Ok(list.len()))
+                Ok(ListInsertInternalResult::Some(list.len()))
             }
         }
     }
@@ -716,12 +803,12 @@ mod tests {
 
         let list_name = BytesMut::from("mylist");
         let values: Vec<&BytesMut> = values.iter().collect();
-        let res = db.lpush(&list_name, &values).unwrap();
-        assert_eq!(res, ListAppendResult::Ok(10));
+        let res = db.push(&list_name, &values, ListFlags::FromLeft).unwrap();
+        assert_eq!(res, ListAppendResult::Some(10));
 
         db.commit().unwrap();
 
-        let ListRangeResult::Ok(mut items) = db.range(&list_name, 0, -1).unwrap() else {
+        let ListRangeResult::Some(mut items) = db.range(&list_name, 0, -1).unwrap() else {
             panic!("Expected ListRangeResult::Ok");
         };
 
@@ -745,17 +832,121 @@ mod tests {
 
         let list_name = BytesMut::from("mylist");
         let values: Vec<&BytesMut> = values.iter().collect();
-        let res = db.rpush(&list_name, &values).unwrap();
-        assert_eq!(res, ListAppendResult::Ok(10));
+        let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        assert_eq!(res, ListAppendResult::Some(10));
 
         db.commit().unwrap();
 
-        let ListRangeResult::Ok(items) = db.range(&list_name, 0, -1).unwrap() else {
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
             panic!("Expected ListRangeResult::Ok");
         };
 
         println!("{:?}", items);
         assert_eq!(items.len(), values.len());
         assert_eq!(items, values);
+    }
+
+    #[test]
+    fn test_insert_after() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+
+        let mut values = Vec::<BytesMut>::new();
+        for i in 0..10 {
+            let key = format!("key_{}", i);
+            values.push(BytesMut::from(key.as_bytes()));
+        }
+
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        assert_eq!(res, ListAppendResult::Some(10));
+
+        db.commit().unwrap();
+
+        assert_eq!(
+            db.insert_after(
+                &list_name,
+                &BytesMut::from("new_value_1"),
+                &BytesMut::from("key_1")
+            )
+            .unwrap(),
+            ListInsertResult::Some(11)
+        );
+
+        assert_eq!(
+            db.insert_after(
+                &list_name,
+                &BytesMut::from("new_value_1"),
+                &BytesMut::from("non_existing")
+            )
+            .unwrap(),
+            ListInsertResult::PivotNotFound
+        );
+        db.commit().unwrap();
+
+        // The newly added item should be in position 2
+        assert_eq!(
+            db.item_at(&list_name, 2).unwrap(),
+            ListItemAt::Some(BytesMut::from("new_value_1"))
+        );
+
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        println!("{:?}", items);
+    }
+
+    #[test]
+    fn test_insert_before() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+
+        let mut values = Vec::<BytesMut>::new();
+        for i in 0..10 {
+            let key = format!("key_{}", i);
+            values.push(BytesMut::from(key.as_bytes()));
+        }
+
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        assert_eq!(res, ListAppendResult::Some(10));
+
+        db.commit().unwrap();
+
+        assert_eq!(
+            db.insert_before(
+                &list_name,
+                &BytesMut::from("new_value_1"),
+                &BytesMut::from("key_1")
+            )
+            .unwrap(),
+            ListInsertResult::Some(11)
+        );
+
+        assert_eq!(
+            db.insert_before(
+                &list_name,
+                &BytesMut::from("new_value_1"),
+                &BytesMut::from("non_existing")
+            )
+            .unwrap(),
+            ListInsertResult::PivotNotFound
+        );
+        db.commit().unwrap();
+
+        // The newly added item should be in position 2
+        assert_eq!(
+            db.item_at(&list_name, 1).unwrap(),
+            ListItemAt::Some(BytesMut::from("new_value_1"))
+        );
+
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        println!("{:?}", items);
     }
 }
