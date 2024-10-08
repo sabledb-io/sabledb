@@ -6,8 +6,8 @@ use crate::{
         Bookkeeping, CommonValueMetadata, FromRaw, KeyType, ListValueMetadata, PrimaryKeyMetadata,
         ValueType,
     },
-    storage::DbWriteCache,
     storage::PutFlags,
+    storage::{DbWriteCache, ListFlags},
     BatchUpdate, BytesMutUtils, RespBuilderV2, SableError, StorageAdapter, U8ArrayBuilder,
     U8ArrayReader,
 };
@@ -77,24 +77,6 @@ pub enum BlockingPopInternalResult {
     Some((BytesMut, Vec<Rc<ListItem>>)),
     /// Invalid input arguments
     InvalidArguments,
-}
-
-bitflags::bitflags! {
-pub struct ListFlags: u32  {
-    /// None: Actions are performed from the right side of the list
-    const None = 0;
-    /// For convenience, same as `None`
-    const FromRight = 0;
-    /// Before performing the operation, the list must exist
-    const ListMustExist = 1 << 0;
-    /// Perform the operation from the left side of the list (Lpush, Lpop)
-    /// if not set, perform from right side
-    const FromLeft = 1 << 1;
-    /// Insert element after pivot element
-    const InsertAfter = 1<< 2;
-    /// Insert element before pivot element
-    const InsertBefore = 1<< 3;
-}
 }
 
 impl<'a> List<'a> {

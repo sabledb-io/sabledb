@@ -1,9 +1,9 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
-    storage::{ListAppendResult, ListDb},
+    storage::{ListAppendResult, ListDb, ListFlags},
     to_number,
-    types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
+    types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
     SableError,
 };

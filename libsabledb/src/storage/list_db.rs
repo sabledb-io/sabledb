@@ -1,11 +1,28 @@
 use crate::{
     metadata::{Bookkeeping, ListValueMetadata, ValueType},
     storage::DbWriteCache,
-    types::ListFlags,
     CommonValueMetadata, FromBytes, FromU8Reader, PrimaryKeyMetadata, SableError, StorageAdapter,
     ToBytes, ToU8Writer, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
+
+bitflags::bitflags! {
+pub struct ListFlags: u32  {
+    /// None: Actions are performed from the right side of the list
+    const None = 0;
+    /// For convenience, same as `None`
+    const FromRight = 0;
+    /// Before performing the operation, the list must exist
+    const ListMustExist = 1 << 0;
+    /// Perform the operation from the left side of the list (Lpush, Lpop)
+    /// if not set, perform from right side
+    const FromLeft = 1 << 1;
+    /// Insert element after pivot element
+    const InsertAfter = 1<< 2;
+    /// Insert element before pivot element
+    const InsertBefore = 1<< 3;
+}
+}
 
 #[derive(Clone)]
 struct ListItemKey {
@@ -244,6 +261,14 @@ pub enum ListAppendResult {
 }
 
 #[derive(PartialEq, Eq, Debug)]
+pub enum ListPopResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Returns the items removed
+    Some(Vec<BytesMut>),
+}
+
+#[derive(PartialEq, Eq, Debug)]
 pub enum ListLenResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
@@ -369,6 +394,17 @@ impl<'a> ListDb<'a> {
             )?;
         }
         Ok(ListAppendResult::Some(list.len()))
+    }
+
+    /// Remove `count` elements from the head or tail of the list. If the list is empty after this call
+    /// the list itself is also deleted
+    pub fn pop(
+        &mut self,
+        _user_key: &BytesMut,
+        _count: usize,
+        _flags: ListFlags,
+    ) -> Result<ListPopResult, SableError> {
+        Ok(ListPopResult::Some(Vec::default()))
     }
 
     /// Return the list length
