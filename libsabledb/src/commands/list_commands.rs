@@ -1,7 +1,7 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
-    storage::{ListAppendResult, ListDb, ListFlags},
+    storage::{ListAppendResult, ListDb, ListFlags, ListPopResult},
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
@@ -60,10 +60,18 @@ impl ListCommands {
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lpop => {
-                Self::pop(client_state, command, response_buffer, ListFlags::FromLeft).await
+                Self::pop(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ListFlags::FromLeft,
+                )
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpop => {
-                Self::pop(client_state, command, response_buffer, ListFlags::None).await
+                Self::pop(client_state, command, &mut response_buffer, ListFlags::None).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Ltrim => Self::ltrim(client_state, command, response_buffer).await,
             RedisCommandName::Lrange => Self::lrange(client_state, command, response_buffer).await,
@@ -534,33 +542,56 @@ impl ListCommands {
     pub async fn pop(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
+        response_buffer: &mut BytesMut,
         flags: ListFlags,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            2,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
 
+        let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
-        let count = if command.arg_count() == 3 {
-            to_number!(
-                command_arg_at!(command, 2),
-                usize,
-                &mut response_buffer,
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            )
+        let (has_count, count) = if command.arg_count() == 3 {
+            let count = command_arg_at!(command, 2);
+            let Some(count) = BytesMutUtils::parse::<usize>(count) else {
+                builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
+                return Ok(());
+            };
+            (true, count)
         } else {
-            1usize
+            (false, 1usize)
         };
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.pop(key, count, &mut response_buffer, flags)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let items = match db.pop(key, count, flags)? {
+            ListPopResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListPopResult::Some(items) if items.is_empty() => {
+                // if count is provided, we return null array, else null string
+                if has_count {
+                    builder_return_null_array!(builder, response_buffer);
+                } else {
+                    builder_return_null_string!(builder, response_buffer);
+                }
+            }
+            ListPopResult::Some(items) => items,
+        };
+
+        if !has_count {
+            let item = items.first().ok_or(SableError::InternalError(
+                "Expected exactly 1 item in popped items!".into(),
+            ))?;
+            builder.add_bulk_string(response_buffer, item);
+        } else {
+            // when count is provided, we always return an array, even if it is a single element
+            builder.add_array_len(response_buffer, items.len());
+            for item in &items {
+                builder.add_bulk_string(response_buffer, item);
+            }
+        }
+        db.commit()?;
+        Ok(())
     }
 
     pub async fn blocking_pop(

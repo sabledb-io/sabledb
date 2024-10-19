@@ -319,6 +319,22 @@ macro_rules! builder_return_empty_array {
 }
 
 #[macro_export]
+macro_rules! builder_return_null_array {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.null_array($response_buffer);
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_null_string {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.null_string($response_buffer);
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! builder_return_syntax_error {
     ($builder:expr, $response_buffer:expr) => {
         $builder.error_string($response_buffer, Strings::SYNTAX_ERROR);
