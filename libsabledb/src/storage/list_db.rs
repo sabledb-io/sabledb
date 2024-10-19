@@ -85,12 +85,14 @@ impl List {
         buffer
     }
 
-    pub fn set_head(&mut self, item: &ListItem) {
-        self.md.set_head(item.id());
+    pub fn set_head(&mut self, item: Option<&ListItem>) {
+        let id = if let Some(item) = item { item.id() } else { 0 };
+        self.md.set_head(id);
     }
 
-    pub fn set_tail(&mut self, item: &ListItem) {
-        self.md.set_tail(item.id());
+    pub fn set_tail(&mut self, item: Option<&ListItem>) {
+        let id = if let Some(item) = item { item.id() } else { 0 };
+        self.md.set_tail(id);
     }
 
     pub fn set_len(&mut self, newlen: u64) {
@@ -109,6 +111,10 @@ impl List {
         self.md.set_len(self.md.len().saturating_add(n))
     }
 
+    pub fn decr_len_by(&mut self, n: u64) {
+        self.md.set_len(self.md.len().saturating_sub(n))
+    }
+
     pub fn fix_index(&self, index: isize) -> isize {
         if index < 0 {
             self.len()
@@ -118,6 +124,16 @@ impl List {
         } else {
             index
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn slot(&self) -> u16 {
+        self.key.slot()
+    }
+
+    #[allow(dead_code)]
+    pub fn database_id(&self) -> u16 {
+        self.key.database_id()
     }
 }
 
@@ -190,6 +206,14 @@ impl ListItem {
 
     pub fn right(&self) -> u64 {
         self.value.right
+    }
+
+    pub fn set_left(&mut self, left: u64) {
+        self.value.left = left;
+    }
+
+    pub fn set_right(&mut self, right: u64) {
+        self.value.right = right;
     }
 }
 
@@ -396,15 +420,42 @@ impl<'a> ListDb<'a> {
         Ok(ListAppendResult::Some(list.len()))
     }
 
-    /// Remove `count` elements from the head or tail of the list. If the list is empty after this call
-    /// the list itself is also deleted
+    /// Remove `count` elements from the head or tail of the list and return them.
+    /// If the list is empty after this call, the list itself is also deleted
     pub fn pop(
         &mut self,
-        _user_key: &BytesMut,
-        _count: usize,
-        _flags: ListFlags,
+        user_key: &BytesMut,
+        count: usize,
+        flags: ListFlags,
     ) -> Result<ListPopResult, SableError> {
-        Ok(ListPopResult::Some(Vec::default()))
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListPopResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListPopResult::Some(Vec::default())),
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        let mut result = Vec::<BytesMut>::with_capacity(count);
+        for _ in 0..count {
+            let item = if flags.contains(ListFlags::FromLeft) {
+                if let Some(value) = self.pop_front(&mut list)? {
+                    value
+                } else {
+                    break;
+                }
+            } else if let Some(value) = self.pop_back(&mut list)? {
+                value
+            } else {
+                break;
+            };
+            result.push(item);
+        }
+
+        if list.is_empty() {
+            self.delete_list(&list)?;
+        } else {
+            self.put_list_metadata(&list)?;
+        }
+        Ok(ListPopResult::Some(result))
     }
 
     /// Return the list length
@@ -419,6 +470,12 @@ impl<'a> ListDb<'a> {
     /// Apply changes to disk
     pub fn commit(&mut self) -> Result<(), SableError> {
         self.cache.flush()
+    }
+
+    /// Discard changes
+    pub fn discard(&mut self) -> Result<(), SableError> {
+        self.cache.clear();
+        Ok(())
     }
 
     /// Return list item starting from `start` -> `end`.
@@ -576,8 +633,8 @@ impl<'a> ListDb<'a> {
     fn push_front(&mut self, list: &mut List, new_item: &mut ListItem) -> Result<(), SableError> {
         if list.is_empty() {
             list.set_len(1);
-            list.set_head(new_item);
-            list.set_tail(new_item);
+            list.set_head(Some(new_item));
+            list.set_tail(Some(new_item));
         } else {
             let old_head_id = list.head();
             let mut old_head_item = self
@@ -585,7 +642,7 @@ impl<'a> ListDb<'a> {
                 .ok_or(SableError::NotFound)?;
             list.incr_len_by(1);
             // we are replacing the "head" of the list
-            list.set_head(new_item);
+            list.set_head(Some(new_item));
             new_item.insert_first(&mut old_head_item);
             self.put_list_item(new_item)?;
             self.put_list_item(&old_head_item)?;
@@ -598,8 +655,8 @@ impl<'a> ListDb<'a> {
     fn push_back(&mut self, list: &mut List, new_item: &mut ListItem) -> Result<(), SableError> {
         if list.is_empty() {
             list.set_len(1);
-            list.set_head(new_item);
-            list.set_tail(new_item);
+            list.set_head(Some(new_item));
+            list.set_tail(Some(new_item));
         } else {
             let old_head_id = list.tail();
             let mut old_tail_item = self
@@ -608,12 +665,70 @@ impl<'a> ListDb<'a> {
             list.incr_len_by(1);
             new_item.insert_last(&mut old_tail_item);
             // we are replacing the "tail" of the list
-            list.set_tail(new_item);
+            list.set_tail(Some(new_item));
             self.put_list_item(new_item)?;
             self.put_list_item(&old_tail_item)?;
         }
         self.put_list_metadata(list)?;
         Ok(())
+    }
+
+    fn pop_front(&mut self, list: &mut List) -> Result<Option<BytesMut>, SableError> {
+        let Some(item) = self.get_list_item_by_id(list, list.head())? else {
+            return Ok(None);
+        };
+
+        let right_item = item.right();
+        let value = item.user_value().clone();
+
+        // delete the item
+        self.cache.delete(&item.encode_key())?;
+        self.cache.put(&list.encode_key(), list.encode_value())?;
+        if let Some(mut next_item) = self.get_list_item_by_id(list, right_item)? {
+            // update the next_item's "prev" to 0 (i.e. this item is now the new "head")
+            next_item.set_left(0);
+            // update the new head of the list
+            list.set_head(Some(&next_item));
+            self.cache
+                .put(&next_item.encode_key(), next_item.encode_value())?;
+        } else {
+            // the list is now empty
+            list.set_head(None);
+            list.set_tail(None);
+        }
+
+        // update the list length
+        list.decr_len_by(1);
+        self.cache.put(&list.encode_key(), list.encode_value())?;
+        Ok(Some(value))
+    }
+
+    fn pop_back(&mut self, list: &mut List) -> Result<Option<BytesMut>, SableError> {
+        let Some(item) = self.get_list_item_by_id(list, list.tail())? else {
+            return Ok(None);
+        };
+
+        let left_item = item.left();
+        let value = item.user_value().clone();
+
+        // delete the item
+        self.cache.delete(&item.encode_key())?;
+        // Check if the deleted item had items to its left
+        if let Some(mut left_item) = self.get_list_item_by_id(list, left_item)? {
+            // update the next item to None
+            left_item.set_right(0);
+            // left_item is the new tail
+            list.set_tail(Some(&left_item));
+            self.cache
+                .put(&left_item.encode_key(), left_item.encode_value())?;
+        } else {
+            // The deleted item was the last item
+            list.set_head(None);
+            list.set_tail(None);
+        }
+        list.decr_len_by(1);
+        self.cache.put(&list.encode_key(), list.encode_value())?;
+        Ok(Some(value))
     }
 
     /// Insert `new_item` after the `pivot` item
@@ -730,6 +845,10 @@ impl<'a> ListDb<'a> {
         };
         let value = ListItemValue::from_bytes(&raw_value).ok_or(SableError::SerialisationError)?;
         Ok(Some(ListItem::new(key, value)))
+    }
+
+    fn delete_list(&mut self, list: &List) -> Result<(), SableError> {
+        self.cache.delete(&list.encode_key())
     }
 
     /// Iterate over the list, head -> tail and find the first item
@@ -984,5 +1103,140 @@ mod tests {
         };
 
         println!("{:?}", items);
+    }
+
+    #[test]
+    fn test_pop_item_with_list_of_len_1() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        let value = BytesMut::from("value");
+        let res = db
+            .push(&list_name, &vec![&value], ListFlags::FromRight)
+            .unwrap();
+        assert_eq!(res, ListAppendResult::Some(1));
+        db.commit().unwrap();
+
+        let res = db.pop(&list_name, 10, ListFlags::FromLeft).unwrap();
+        assert_eq!(res, ListPopResult::Some(vec![value.clone()]));
+        // Removing all items should have delete the list
+        let res = db.len(&list_name).unwrap();
+        assert_eq!(res, ListLenResult::NotFound);
+
+        db.discard().unwrap();
+
+        let res = db.pop(&list_name, 10, ListFlags::FromRight).unwrap();
+        assert_eq!(res, ListPopResult::Some(vec![value.clone()]));
+        // Removing all items should have delete the list
+        let res = db.len(&list_name).unwrap();
+        assert_eq!(res, ListLenResult::NotFound);
+        db.commit().unwrap();
+    }
+
+    #[test]
+    fn test_pop_items_from_left() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        populate_list(&mut db, &list_name, 10);
+
+        let _ = db.pop(&list_name, 2, ListFlags::FromLeft).unwrap();
+        db.commit().unwrap();
+
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(8));
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        // items needs to be reversed (we added them at the HEAD of the list)
+        println!("{:?}", items);
+        assert_eq!(items.len(), 8);
+        // after the removal, items are: [key_2,...,key_9]
+        assert_eq!(items.first().unwrap(), &BytesMut::from("key_2"));
+        assert_eq!(items.last().unwrap(), &BytesMut::from("key_9"));
+    }
+
+    #[test]
+    fn test_pop_items_from_right() {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+
+        populate_list(&mut db, &list_name, 10);
+
+        let _ = db.pop(&list_name, 2, ListFlags::FromRight).unwrap();
+        db.commit().unwrap();
+
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(8));
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        // items needs to be reversed (we added them at the HEAD of the list)
+        println!("{:?}", items);
+        assert_eq!(items.len(), 8);
+        // after the removal, items are: [key_0,...,key_7]
+        assert_eq!(items.first().unwrap(), &BytesMut::from("key_0"));
+        assert_eq!(items.last().unwrap(), &BytesMut::from("key_7"));
+    }
+
+    use test_case::test_case;
+
+    #[test_case(true; "pop from right")]
+    #[test_case(false; "pop from left")]
+    fn test_pop_1_item_from_list_of_size_2(from_right: bool) {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 2);
+        let list_name = BytesMut::from("mylist");
+
+        populate_list(&mut db, &list_name, 2);
+
+        let _ = db
+            .pop(
+                &list_name,
+                1,
+                if from_right {
+                    ListFlags::FromRight
+                } else {
+                    ListFlags::FromLeft
+                },
+            )
+            .unwrap();
+        db.commit().unwrap();
+
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(1));
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+
+        // items needs to be reversed (we added them at the HEAD of the list)
+        println!("{:?}", items);
+        assert_eq!(items.len(), 1);
+
+        let last_item = if from_right {
+            BytesMut::from("key_0")
+        } else {
+            BytesMut::from("key_1")
+        };
+        assert_eq!(items.first().unwrap(), &last_item);
+        assert_eq!(items.last().unwrap(), &last_item);
+
+        let GetListMetadataResult::Some(list) = db.list_metadata(&list_name).unwrap() else {
+            panic!("Expected GetListMetadataResult::Some");
+        };
+        assert_eq!(list.head(), list.tail());
+        assert!(list.head() != 0);
+    }
+
+    fn populate_list(db: &mut ListDb, name: &BytesMut, count: usize) {
+        let mut values = Vec::<BytesMut>::new();
+        for i in 0..count {
+            let key = format!("key_{}", i);
+            values.push(BytesMut::from(key.as_bytes()));
+        }
+
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let res = db.push(name, &values, ListFlags::FromRight).unwrap();
+        assert_eq!(res, ListAppendResult::Some(count));
     }
 }
