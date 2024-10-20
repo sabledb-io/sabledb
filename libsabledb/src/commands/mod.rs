@@ -326,6 +326,24 @@ macro_rules! builder_return_null_array {
     };
 }
 
+/// Return a null response.
+///
+/// Params:
+/// - `$builder` and instance of `RespBuilderV2`
+/// - `$response_buffer` the response will be written into this buffer
+/// - `$arr_null` if set to true, a null array is returned, else return a null string
+#[macro_export]
+macro_rules! builder_return_null_reply {
+    ($builder:expr, $response_buffer:expr, $arr_null:expr) => {
+        if $arr_null {
+            $builder.null_array($response_buffer);
+        } else {
+            $builder.null_string($response_buffer);
+        }
+        return Ok(());
+    };
+}
+
 #[macro_export]
 macro_rules! builder_return_null_string {
     ($builder:expr, $response_buffer:expr) => {

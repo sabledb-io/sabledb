@@ -568,12 +568,7 @@ impl ListCommands {
                 builder_return_wrong_type!(builder, response_buffer);
             }
             ListPopResult::Some(items) if items.is_empty() => {
-                // if count is provided, we return null array, else null string
-                if has_count {
-                    builder_return_null_array!(builder, response_buffer);
-                } else {
-                    builder_return_null_string!(builder, response_buffer);
-                }
+                builder_return_null_reply!(builder, response_buffer, has_count);
             }
             ListPopResult::Some(items) => items,
         };

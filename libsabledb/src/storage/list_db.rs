@@ -5,6 +5,7 @@ use crate::{
     ToBytes, ToU8Writer, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
+use std::cmp::Ordering;
 
 bitflags::bitflags! {
 pub struct ListFlags: u32  {
@@ -290,6 +291,14 @@ pub enum ListPopResult {
     WrongType,
     /// Returns the items removed
     Some(Vec<BytesMut>),
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListRemoveResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Returns the number of items removed
+    Some(usize),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -585,7 +594,61 @@ impl<'a> ListDb<'a> {
             ListItemAt::Some(value)
         })
     }
+    /// Removes the first `count` occurrences of elements equal to `element` from the list stored at `user_key`.
+    /// The `count` argument influences the operation in the following ways:
+    ///
+    /// - `count > 0`: Remove elements equal to `element` moving from head to tail.
+    /// - `count < 0`: Remove elements equal to `element` moving from tail to head.
+    /// - `count = 0`: Remove all elements equal to `element`.
+    pub fn remove_items(
+        &mut self,
+        user_key: &BytesMut,
+        count: isize,
+        value: &BytesMut,
+    ) -> Result<ListRemoveResult, SableError> {
+        let mut list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListRemoveResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListRemoveResult::Some(0)),
+            GetListMetadataResult::Some(list) => list,
+        };
 
+        let mut items_to_remove = Vec::<u64>::default();
+        match count.cmp(&0) {
+            Ordering::Equal => {
+                self.iterate(&list, |item, _index| {
+                    if item.user_value().eq(value) {
+                        items_to_remove.push(item.id());
+                    }
+                    Ok(true)
+                })?;
+            }
+            Ordering::Less => {
+                // Remove all items matching element from tail -> head
+                let count: usize = count.abs().try_into().unwrap_or(usize::MAX);
+                self.reverse_iterate(&list, |item, _index| {
+                    if item.user_value().eq(value) {
+                        items_to_remove.push(item.id());
+                    }
+                    Ok(items_to_remove.len() < count)
+                })?;
+            }
+            Ordering::Greater => {
+                // Remove all items matching element head -> tail
+                let count: usize = count.abs().try_into().unwrap_or(usize::MAX);
+                self.iterate(&list, |item, _index| {
+                    if item.user_value().eq(value) {
+                        items_to_remove.push(item.id());
+                    }
+                    Ok(items_to_remove.len() < count)
+                })?;
+            }
+        }
+
+        for item_id in &items_to_remove {
+            self.remove_internal(&mut list, *item_id)?;
+        }
+        Ok(ListRemoveResult::Some(items_to_remove.len()))
+    }
     // ===-----------------------------
     // Private helpers
     // ===-----------------------------
@@ -627,6 +690,53 @@ impl<'a> ListDb<'a> {
                 Ok(ListInsertInternalResult::Some(list.len()))
             }
         }
+    }
+
+    /// Remove `item` from `list`
+    fn remove_internal(&mut self, list: &mut List, item_id: u64) -> Result<(), SableError> {
+        let Some(item) = self.get_list_item_by_id(list, item_id)? else {
+            return Ok(());
+        };
+        self.cache.delete(&item.encode_key())?;
+        list.decr_len_by(1);
+
+        // update the remaining items
+        let left_item = self.get_list_item_by_id(list, item.left())?;
+        let right_item = self.get_list_item_by_id(list, item.right())?;
+
+        match (left_item, right_item) {
+            (Some(mut left), Some(mut right)) => {
+                left.set_right(right.id());
+                right.set_left(left.id());
+                self.cache.put(&left.encode_key(), left.encode_value())?;
+                self.cache.put(&right.encode_key(), right.encode_value())?;
+            }
+            (Some(mut left), None) => {
+                // Removing last item
+                left.set_right(0);
+                // update the list new tail
+                list.set_tail(Some(&left));
+                self.cache.put(&left.encode_key(), left.encode_value())?;
+            }
+            (None, Some(mut right)) => {
+                // Removing the list's head
+                right.set_left(0);
+                list.set_head(Some(&right));
+                self.cache.put(&right.encode_key(), right.encode_value())?;
+            }
+            (None, None) => {
+                // the removed item was the last item
+                list.set_head(None);
+                list.set_tail(None);
+            }
+        }
+
+        if list.is_empty() {
+            self.cache.delete(&list.encode_key())?;
+        } else {
+            self.cache.put(&list.encode_key(), list.encode_value())?;
+        }
+        Ok(())
     }
 
     /// Push item at the start of the list
@@ -872,14 +982,14 @@ impl<'a> ListDb<'a> {
 
     fn iterate<F>(&self, list: &List, callback: F) -> Result<(), SableError>
     where
-        F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
+        F: FnMut(ListItem, usize) -> Result<bool, SableError>,
     {
         self.iterate_internal(list, false, callback)
     }
 
     fn reverse_iterate<F>(&self, list: &List, callback: F) -> Result<(), SableError>
     where
-        F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
+        F: FnMut(ListItem, usize) -> Result<bool, SableError>,
     {
         self.iterate_internal(list, true, callback)
     }
@@ -907,7 +1017,7 @@ impl<'a> ListDb<'a> {
         mut callback: F,
     ) -> Result<(), SableError>
     where
-        F: FnMut(&ListItem, usize) -> Result<bool, SableError>,
+        F: FnMut(ListItem, usize) -> Result<bool, SableError>,
     {
         if list.is_empty() {
             return Ok(());
@@ -924,10 +1034,10 @@ impl<'a> ListDb<'a> {
                 counter
             };
 
-            if !callback(&item, index)? {
+            current_item_id = if reverse { item.left() } else { item.right() };
+            if !callback(item, index)? {
                 break;
             }
-            current_item_id = if reverse { item.left() } else { item.right() };
             counter = counter.saturating_add(1);
         }
         Ok(())
@@ -1226,6 +1336,39 @@ mod tests {
         };
         assert_eq!(list.head(), list.tail());
         assert!(list.head() != 0);
+    }
+
+    #[test_case(vec!["a", "b", "b", "a"], "b", -1, vec!["a", "b", "a"];"removing 'b' item from tail")]
+    #[test_case(vec!["a", "b", "b", "a"], "b", 1, vec!["a", "b", "a"];"removing 'b' item from head")]
+    #[test_case(vec!["a", "b", "b", "a"], "a", 1, vec!["b", "b", "a"];"removing 'a' item from head")]
+    #[test_case(vec!["a", "b", "b", "a"], "a", -1, vec!["a", "b", "b"];"removing 'a' item from tail")]
+    #[test_case(vec!["a", "b", "b", "a"], "a", 10, vec!["b", "b"];"removing all 'a' from head")]
+    #[test_case(vec!["a", "b", "b", "a"], "a", -10, vec!["b", "b"];"removing all 'a' from tail")]
+    fn test_remove_items(initial_list: Vec<&str>, value: &str, count: isize, expected: Vec<&str>) {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<BytesMut> = initial_list.iter().map(|s| BytesMut::from(*s)).collect();
+        let values: Vec<&BytesMut> = values.iter().collect();
+
+        let expected: Vec<BytesMut> = expected.iter().map(|s| BytesMut::from(*s)).collect();
+
+        db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        db.commit().unwrap();
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(4));
+
+        // Remove 1 item from last equal to "2"
+        let remove_me = BytesMut::from(value);
+        let ListRemoveResult::Some(_) = db.remove_items(&list_name, count, &remove_me).unwrap()
+        else {
+            panic!("Expected ListRemoveResult::Some");
+        };
+
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+        println!("{:?}", items);
+        assert_eq!(items, expected);
     }
 
     fn populate_list(db: &mut ListDb, name: &BytesMut, count: usize) {
