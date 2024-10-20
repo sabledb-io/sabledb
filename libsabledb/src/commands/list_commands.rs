@@ -1,7 +1,7 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
-    storage::{ListAppendResult, ListDb, ListFlags, ListPopResult},
+    storage::{ListAppendResult, ListDb, ListFlags, ListPopResult, ListRemoveResult},
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
@@ -82,7 +82,10 @@ impl ListCommands {
             }
             RedisCommandName::Lset => Self::lset(client_state, command, response_buffer).await,
             RedisCommandName::Lpos => Self::lpos(client_state, command, response_buffer).await,
-            RedisCommandName::Lrem => Self::lrem(client_state, command, response_buffer).await,
+            RedisCommandName::Lrem => {
+                Self::lrem(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lmove => Self::lmove(client_state, command, response_buffer).await,
             RedisCommandName::Lmpop => {
                 Self::lmpop(client_state, command, false, response_buffer).await
@@ -549,15 +552,11 @@ impl ListCommands {
 
         let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
-        let (has_count, count) = if command.arg_count() == 3 {
-            let count = command_arg_at!(command, 2);
-            let Some(count) = BytesMutUtils::parse::<usize>(count) else {
-                builder.error_string(response_buffer, Strings::VALUE_NOT_AN_INT_OR_OUT_OF_RANGE);
-                return Ok(());
-            };
-            (true, count)
+        let has_count = command.arg_count() == 3;
+        let count = if has_count {
+            to_number!(command_arg_at!(command, 2), usize, response_buffer, Ok(()))
         } else {
-            (false, 1usize)
+            1usize
         };
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
@@ -969,29 +968,29 @@ impl ListCommands {
     pub async fn lrem(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
         // extract variables from the command
         let key = command_arg_at!(command, 1);
-        let count = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let count = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
         let element = command_arg_at!(command, 3);
 
         // Lock and set
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.remove(key, Some(element), count, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        match db.remove_items(key, count, element)? {
+            ListRemoveResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListRemoveResult::Some(count) => {
+                builder.number_usize(response_buffer, count);
+            }
+        }
+        Ok(())
     }
 }
 
