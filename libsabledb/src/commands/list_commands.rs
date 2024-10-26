@@ -2,8 +2,8 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
     storage::{
-        ListAppendResult, ListDb, ListFlags, ListInsertResult, ListLenResult, ListPopResult,
-        ListRemoveResult,
+        ListAppendResult, ListDb, ListFlags, ListInsertResult, ListItemAt, ListLenResult,
+        ListPopResult, ListRemoveResult,
     },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
@@ -82,7 +82,10 @@ impl ListCommands {
                 Self::llen(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lindex => Self::lindex(client_state, command, response_buffer).await,
+            RedisCommandName::Lindex => {
+                Self::lindex(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Linsert => {
                 Self::linsert(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -810,6 +813,7 @@ impl ListCommands {
             }
         };
 
+        db.commit()?;
         match res {
             ListInsertResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
@@ -835,29 +839,29 @@ impl ListCommands {
     pub async fn lindex(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
-
-        let index = to_number!(
-            index,
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let index = to_number!(index, isize, response_buffer, Ok(()));
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.index(key, index, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.item_at(key, index)? {
+            ListItemAt::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListItemAt::ListNotFound | ListItemAt::OutOfRange => {
+                builder_return_null_string!(builder, response_buffer);
+            }
+            ListItemAt::Some(item) => {
+                builder.bulk_string(response_buffer, &item);
+            }
+        }
+        Ok(())
     }
 
     /// The command returns the index of matching elements inside a Redis list.
@@ -1010,6 +1014,7 @@ impl ListCommands {
                 builder.number_usize(response_buffer, count);
             }
         }
+        db.commit()?;
         Ok(())
     }
 }

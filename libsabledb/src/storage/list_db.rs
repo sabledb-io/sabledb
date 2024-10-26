@@ -144,6 +144,19 @@ struct ListItem {
     pub value: ListItemValue,
 }
 
+impl std::fmt::Display for ListItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{{ {} | Id: {}, Value: '{}' | {} }}",
+            self.value.left,
+            self.id(),
+            String::from_utf8_lossy(self.user_value()),
+            self.value.right
+        )
+    }
+}
+
 impl ListItem {
     pub fn new(key: ListItemKey, value: ListItemValue) -> Self {
         ListItem { key, value }
@@ -167,15 +180,22 @@ impl ListItem {
         left_item: Option<&mut ListItem>,
         right_item: Option<&mut ListItem>,
     ) {
-        if let Some(left_item) = left_item {
-            self.value.right = left_item.value.right;
-            left_item.value.right = self.id();
-            self.value.left = left_item.id();
-        }
-
-        if let Some(right_item) = right_item {
-            right_item.value.left = self.id();
-            self.value.right = right_item.id();
+        match (left_item, right_item) {
+            (Some(left_item), Some(right_item)) => {
+                self.set_right(right_item.id());
+                self.set_left(left_item.id());
+                left_item.set_right(self.id());
+                right_item.set_left(self.id());
+            }
+            (None, Some(right_item)) => {
+                self.set_right(right_item.id());
+                right_item.set_left(self.id());
+            }
+            (Some(left_item), None) => {
+                self.set_left(left_item.id());
+                left_item.set_right(self.id());
+            }
+            (None, None) => {}
         }
     }
 
@@ -337,8 +357,10 @@ pub enum ListItemAt {
     WrongType,
     /// Return the item at the given index
     Some(BytesMut),
-    /// Could not find the index
-    None,
+    /// Index is out of range
+    OutOfRange,
+    /// The list does not exist
+    ListNotFound,
 }
 
 // Private enumerators
@@ -573,13 +595,13 @@ impl<'a> ListDb<'a> {
     pub fn item_at(&self, user_key: &BytesMut, index: isize) -> Result<ListItemAt, SableError> {
         let list = match self.list_metadata(user_key)? {
             GetListMetadataResult::WrongType => return Ok(ListItemAt::WrongType),
-            GetListMetadataResult::NotFound => return Ok(ListItemAt::None),
+            GetListMetadataResult::NotFound => return Ok(ListItemAt::ListNotFound),
             GetListMetadataResult::Some(list) => list,
         };
 
         let index = list.fix_index(index).try_into().unwrap_or(usize::MAX);
         Ok(if index >= list.len() {
-            ListItemAt::None
+            ListItemAt::OutOfRange
         } else {
             // iterate
             let mut value = BytesMut::default();
@@ -851,10 +873,11 @@ impl<'a> ListDb<'a> {
         if let Some(mut right_item) = self.get_list_item_by_id(list, pivot.right())? {
             // pivot is pointing to a valid item in the list
             new_item.insert_between(Some(pivot), Some(&mut right_item));
+            list.incr_len_by(1);
             self.put_list_item(new_item)?;
             self.put_list_item(pivot)?;
             self.put_list_item(&right_item)?;
-            list.incr_len_by(1);
+            self.put_list_metadata(list)?;
         } else {
             // pivot is the last item
             self.push_back(list, new_item)?;
@@ -872,10 +895,11 @@ impl<'a> ListDb<'a> {
         if let Some(mut left_item) = self.get_list_item_by_id(list, pivot.left())? {
             // pivot is pointing to a valid item in the list
             new_item.insert_between(Some(&mut left_item), Some(pivot));
+            list.incr_len_by(1);
             self.put_list_item(new_item)?;
             self.put_list_item(pivot)?;
             self.put_list_item(&left_item)?;
-            list.incr_len_by(1);
+            self.put_list_metadata(list)?;
         } else {
             // pivot is the first item
             self.push_front(list, new_item)?;
@@ -1112,110 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_after() {
-        let (_deleter, db) = crate::tests::open_store();
-        let mut db = ListDb::with_storage(&db, 0);
-
-        let mut values = Vec::<BytesMut>::new();
-        for i in 0..10 {
-            let key = format!("key_{}", i);
-            values.push(BytesMut::from(key.as_bytes()));
-        }
-
-        let list_name = BytesMut::from("mylist");
-        let values: Vec<&BytesMut> = values.iter().collect();
-        let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
-        assert_eq!(res, ListAppendResult::Some(10));
-
-        db.commit().unwrap();
-
-        assert_eq!(
-            db.insert_after(
-                &list_name,
-                &BytesMut::from("new_value_1"),
-                &BytesMut::from("key_1")
-            )
-            .unwrap(),
-            ListInsertResult::Some(11)
-        );
-
-        assert_eq!(
-            db.insert_after(
-                &list_name,
-                &BytesMut::from("new_value_1"),
-                &BytesMut::from("non_existing")
-            )
-            .unwrap(),
-            ListInsertResult::PivotNotFound
-        );
-        db.commit().unwrap();
-
-        // The newly added item should be in position 2
-        assert_eq!(
-            db.item_at(&list_name, 2).unwrap(),
-            ListItemAt::Some(BytesMut::from("new_value_1"))
-        );
-
-        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
-            panic!("Expected ListRangeResult::Ok");
-        };
-
-        println!("{:?}", items);
-    }
-
-    #[test]
-    fn test_insert_before() {
-        let (_deleter, db) = crate::tests::open_store();
-        let mut db = ListDb::with_storage(&db, 0);
-
-        let mut values = Vec::<BytesMut>::new();
-        for i in 0..10 {
-            let key = format!("key_{}", i);
-            values.push(BytesMut::from(key.as_bytes()));
-        }
-
-        let list_name = BytesMut::from("mylist");
-        let values: Vec<&BytesMut> = values.iter().collect();
-        let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
-        assert_eq!(res, ListAppendResult::Some(10));
-
-        db.commit().unwrap();
-
-        assert_eq!(
-            db.insert_before(
-                &list_name,
-                &BytesMut::from("new_value_1"),
-                &BytesMut::from("key_1")
-            )
-            .unwrap(),
-            ListInsertResult::Some(11)
-        );
-
-        assert_eq!(
-            db.insert_before(
-                &list_name,
-                &BytesMut::from("new_value_1"),
-                &BytesMut::from("non_existing")
-            )
-            .unwrap(),
-            ListInsertResult::PivotNotFound
-        );
-        db.commit().unwrap();
-
-        // The newly added item should be in position 2
-        assert_eq!(
-            db.item_at(&list_name, 1).unwrap(),
-            ListItemAt::Some(BytesMut::from("new_value_1"))
-        );
-
-        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
-            panic!("Expected ListRangeResult::Ok");
-        };
-
-        println!("{:?}", items);
-    }
-
-    #[test]
     fn test_pop_item_with_list_of_len_1() {
         let (_deleter, db) = crate::tests::open_store();
         let mut db = ListDb::with_storage(&db, 0);
@@ -1364,6 +1284,72 @@ mod tests {
             panic!("Expected ListRemoveResult::Some");
         };
 
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+        println!("{:?}", items);
+        assert_eq!(items, expected);
+    }
+
+    #[test_case(vec!["a", "b", "c", "d"], "a", vec!["new_item", "a", "b", "c", "d"]; "insert before first item")]
+    #[test_case(vec!["a", "b", "c", "d"], "b", vec!["a", "new_item", "b", "c", "d"]; "insert in the middle 1")]
+    #[test_case(vec!["a", "b", "c", "d"], "c", vec!["a", "b", "new_item", "c", "d"]; "insert in the middle 2")]
+    #[test_case(vec!["a", "b", "c", "d"], "d", vec!["a", "b", "c", "new_item", "d"]; "insert before last item")]
+    fn test_insert_before(initial_list: Vec<&str>, pivot: &str, expected: Vec<&str>) {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<BytesMut> = initial_list.iter().map(|s| BytesMut::from(*s)).collect();
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let pivot = BytesMut::from(pivot);
+        let expected: Vec<BytesMut> = expected.iter().map(|s| BytesMut::from(*s)).collect();
+
+        db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        db.commit().unwrap();
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(4));
+
+        // insert new item "new_item" before pivot
+        let insert_me = BytesMut::from("new_item");
+        let ListInsertResult::Some(new_len) =
+            db.insert_before(&list_name, &insert_me, &pivot).unwrap()
+        else {
+            panic!("Expected ListRemoveResult::Some");
+        };
+
+        assert_eq!(new_len, expected.len());
+        let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
+            panic!("Expected ListRangeResult::Ok");
+        };
+        println!("{:?}", items);
+        assert_eq!(items, expected);
+    }
+
+    #[test_case(vec!["a", "b", "c", "d"], "a", vec!["a", "new_item", "b", "c", "d"]; "insert after first item")]
+    #[test_case(vec!["a", "b", "c", "d"], "b", vec!["a", "b", "new_item", "c", "d"]; "insert after second item")]
+    #[test_case(vec!["a", "b", "c", "d"], "c", vec!["a", "b", "c", "new_item", "d"]; "insert after third item")]
+    #[test_case(vec!["a", "b", "c", "d"], "d", vec!["a", "b", "c", "d", "new_item"]; "insert after last item")]
+    fn test_insert_after(initial_list: Vec<&str>, pivot: &str, expected: Vec<&str>) {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<BytesMut> = initial_list.iter().map(|s| BytesMut::from(*s)).collect();
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let pivot = BytesMut::from(pivot);
+        let expected: Vec<BytesMut> = expected.iter().map(|s| BytesMut::from(*s)).collect();
+
+        db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        db.commit().unwrap();
+        assert_eq!(db.len(&list_name).unwrap(), ListLenResult::Some(4));
+
+        // insert new item "new_item" before pivot
+        let insert_me = BytesMut::from("new_item");
+        let ListInsertResult::Some(new_len) =
+            db.insert_after(&list_name, &insert_me, &pivot).unwrap()
+        else {
+            panic!("Expected ListRemoveResult::Some");
+        };
+
+        assert_eq!(new_len, expected.len());
         let ListRangeResult::Some(items) = db.range(&list_name, 0, -1).unwrap() else {
             panic!("Expected ListRangeResult::Ok");
         };
