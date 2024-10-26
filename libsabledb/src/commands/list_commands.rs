@@ -1,7 +1,9 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
-    storage::{ListAppendResult, ListDb, ListFlags, ListPopResult, ListRemoveResult},
+    storage::{
+        ListAppendResult, ListDb, ListFlags, ListLenResult, ListPopResult, ListRemoveResult,
+    },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
@@ -75,7 +77,10 @@ impl ListCommands {
             }
             RedisCommandName::Ltrim => Self::ltrim(client_state, command, response_buffer).await,
             RedisCommandName::Lrange => Self::lrange(client_state, command, response_buffer).await,
-            RedisCommandName::Llen => Self::llen(client_state, command, response_buffer).await,
+            RedisCommandName::Llen => {
+                Self::llen(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lindex => Self::lindex(client_state, command, response_buffer).await,
             RedisCommandName::Linsert => {
                 Self::linsert(client_state, command, response_buffer).await
@@ -755,21 +760,25 @@ impl ListCommands {
     pub async fn llen(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            2,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.len(key, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.len(key)? {
+            ListLenResult::Some(len) => builder.number_usize(response_buffer, len),
+            ListLenResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListLenResult::NotFound => {
+                builder.number_usize(response_buffer, 0);
+            }
+        }
+        Ok(())
     }
 
     /// Inserts element in the list stored at key either before or after the reference value pivot.
