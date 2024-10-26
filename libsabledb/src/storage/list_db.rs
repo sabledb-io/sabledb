@@ -325,7 +325,7 @@ pub enum ListInsertResult {
     WrongType,
     /// The reference pivot element was not found in the list
     PivotNotFound,
-    /// The reference pivot element was not found in the list
+    /// The list does not exist
     ListNotFound,
     /// Insert was successful
     Some(usize),

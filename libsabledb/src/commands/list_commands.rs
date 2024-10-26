@@ -2,7 +2,8 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
     storage::{
-        ListAppendResult, ListDb, ListFlags, ListLenResult, ListPopResult, ListRemoveResult,
+        ListAppendResult, ListDb, ListFlags, ListInsertResult, ListLenResult, ListPopResult,
+        ListRemoveResult,
     },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
@@ -83,7 +84,8 @@ impl ListCommands {
             }
             RedisCommandName::Lindex => Self::lindex(client_state, command, response_buffer).await,
             RedisCommandName::Linsert => {
-                Self::linsert(client_state, command, response_buffer).await
+                Self::linsert(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lset => Self::lset(client_state, command, response_buffer).await,
             RedisCommandName::Lpos => Self::lpos(client_state, command, response_buffer).await,
@@ -788,32 +790,41 @@ impl ListCommands {
     pub async fn linsert(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            5,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 5, response_buffer);
+
         let key = command_arg_at!(command, 1);
         let orientation = command_arg_at_as_str!(command, 2);
         let pivot = command_arg_at!(command, 3);
         let element = command_arg_at!(command, 4);
 
-        let flags = match orientation.as_str() {
-            "after" => ListFlags::InsertAfter,
-            "before" => ListFlags::InsertBefore,
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        let res = match orientation.as_str() {
+            "after" => db.insert_after(key, element, pivot)?,
+            "before" => db.insert_before(key, element, pivot)?,
             _ => {
-                let builder = RespBuilderV2::default();
-                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                builder_return_syntax_error!(builder, response_buffer);
             }
         };
-        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.linsert(key, element, pivot, &mut response_buffer, flags)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+
+        match res {
+            ListInsertResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListInsertResult::PivotNotFound => {
+                builder.number_i64(response_buffer, -1);
+            }
+            ListInsertResult::ListNotFound => {
+                builder.number_i64(response_buffer, 0);
+            }
+            ListInsertResult::Some(len) => {
+                builder.number_usize(response_buffer, len);
+            }
+        }
+        Ok(())
     }
 
     /// Returns the element at index index in the list stored at key.
