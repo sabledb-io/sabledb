@@ -2,8 +2,8 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
     storage::{
-        ListAppendResult, ListDb, ListFlags, ListInsertResult, ListItemAt, ListLenResult,
-        ListPopResult, ListRemoveResult,
+        ListAppendResult, ListDb, ListFlags, ListIndexOfResult, ListInsertResult, ListItemAt,
+        ListLenResult, ListPopResult, ListRemoveResult,
     },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
@@ -91,7 +91,10 @@ impl ListCommands {
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lset => Self::lset(client_state, command, response_buffer).await,
-            RedisCommandName::Lpos => Self::lpos(client_state, command, response_buffer).await,
+            RedisCommandName::Lpos => {
+                Self::lpos(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lrem => {
                 Self::lrem(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -872,14 +875,9 @@ impl ListCommands {
     pub async fn lpos(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let value = command_arg_at!(command, 2);
@@ -889,7 +887,7 @@ impl ListCommands {
         iter.next(); // key
         iter.next(); // element
 
-        let mut rank: Option<i32> = None;
+        let mut rank: Option<isize> = None;
         let mut count: Option<usize> = None;
         let mut maxlen: Option<usize> = None;
 
@@ -899,60 +897,63 @@ impl ListCommands {
             let keyword_lowercase = BytesMutUtils::to_string(arg);
             match keyword_lowercase.as_str() {
                 "rank" => {
-                    let value = to_number!(
-                        value,
-                        i32,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
-
-                    // rank can not be 0
-                    if value == 0 {
-                        builder.error_string(&mut response_buffer, Strings::LIST_RANK_INVALID);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
-                    }
-                    rank = Some(value);
+                    rank = Some(to_number!(value, isize, response_buffer, Ok(())));
                 }
                 "count" => {
-                    let value = to_number!(
-                        value,
-                        i64,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
+                    let value = to_number!(value, i64, response_buffer, Ok(()));
                     if value < 0 {
-                        builder.error_string(&mut response_buffer, Strings::COUNT_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                        builder.error_string(response_buffer, Strings::COUNT_CANT_BE_NEGATIVE);
+                        return Ok(());
                     }
                     count = Some(value.try_into().unwrap_or(1));
                 }
                 "maxlen" => {
-                    let value = to_number!(
-                        value,
-                        i64,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
-
+                    let value = to_number!(value, i64, response_buffer, Ok(()));
                     if value < 0 {
-                        builder
-                            .error_string(&mut response_buffer, Strings::MAXLNE_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                        builder.error_string(response_buffer, Strings::MAXLNE_CANT_BE_NEGATIVE);
+                        return Ok(());
                     }
                     maxlen = Some(value.try_into().unwrap_or(0));
                 }
                 _ => {
-                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                    builder_return_syntax_error!(builder, response_buffer);
                 }
             }
         }
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
 
-        list.lpos(key, value, rank, count, maxlen, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        match db.index_of(key, value, rank, count, maxlen)? {
+            ListIndexOfResult::InvalidRank => {
+                builder.error_string(response_buffer, Strings::LIST_RANK_INVALID);
+                return Ok(());
+            }
+            ListIndexOfResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListIndexOfResult::None if count.is_some() => {
+                builder_return_null_array!(builder, response_buffer);
+            }
+            ListIndexOfResult::None => {
+                builder_return_null_string!(builder, response_buffer);
+            }
+            ListIndexOfResult::Some(indexes) if count.is_some() => {
+                builder.add_array_len(response_buffer, indexes.len());
+                for indx in indexes {
+                    builder.add_number(response_buffer, indx, false);
+                }
+            }
+            ListIndexOfResult::Some(indexes) => {
+                let Some(index) = indexes.first() else {
+                    return Err(SableError::InternalError(
+                        "Expected at least one index".into(),
+                    ));
+                };
+                builder.number_usize(response_buffer, *index);
+            }
+        }
+        Ok(())
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
