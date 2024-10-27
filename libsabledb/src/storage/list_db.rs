@@ -41,7 +41,7 @@ impl ListItemKey {
 struct ListItemValue {
     pub left: u64,
     pub right: u64,
-    pub value: BytesMut,
+    pub user_value: BytesMut,
 }
 
 impl ListItemValue {
@@ -49,7 +49,7 @@ impl ListItemValue {
         ListItemValue {
             left: 0,
             right: 0,
-            value,
+            user_value: value,
         }
     }
 }
@@ -200,7 +200,11 @@ impl ListItem {
     }
 
     pub fn user_value(&self) -> &BytesMut {
-        &self.value.value
+        &self.value.user_value
+    }
+
+    pub fn set_user_value(&mut self, value: &BytesMut) {
+        self.value.user_value = value.clone();
     }
 
     /// Make this item the first item.
@@ -242,7 +246,7 @@ impl ToU8Writer for ListItemValue {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
         self.left.to_writer(builder);
         self.right.to_writer(builder);
-        builder.write_bytes(&self.value);
+        builder.write_bytes(&self.user_value);
     }
 }
 
@@ -261,7 +265,7 @@ impl FromU8Reader for ListItemValue {
         Some(ListItemValue {
             left: u64::from_reader(reader)?,
             right: u64::from_reader(reader)?,
-            value: reader.remaining()?,
+            user_value: reader.remaining()?,
         })
     }
 }
@@ -375,6 +379,18 @@ pub enum ListIndexOfResult {
     InvalidRank,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListInsertAtResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// List not found
+    NotFound,
+    /// Item inserted successfully
+    Ok,
+    /// Invalid index was provided
+    InvalidIndex,
+}
+
 // Private enumerators
 
 #[derive(PartialEq, Eq, Debug)]
@@ -401,7 +417,7 @@ enum GetListMetadataResult {
 enum InsertPosition {
     /// Append item
     Last,
-    /// Prepend item
+    /// Prepends item
     First,
     /// Insert item after pivot
     After(BytesMut),
@@ -434,17 +450,17 @@ impl<'a> ListDb<'a> {
     /// Append items to the end or start of the list
     pub fn push(
         &mut self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         values: &[&BytesMut],
         flags: ListFlags,
     ) -> Result<ListAppendResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
+        let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
             GetListMetadataResult::NotFound => {
                 if flags.contains(ListFlags::ListMustExist) {
                     return Ok(ListAppendResult::ListNotFound);
                 }
-                self.new_list(user_key)?
+                self.new_list(list_name)?
             }
             GetListMetadataResult::Some(list) => list,
         };
@@ -467,11 +483,11 @@ impl<'a> ListDb<'a> {
     /// If the list is empty after this call, the list itself is also deleted
     pub fn pop(
         &mut self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         count: usize,
         flags: ListFlags,
     ) -> Result<ListPopResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
+        let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListPopResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListPopResult::Some(Vec::default())),
             GetListMetadataResult::Some(list) => list,
@@ -502,8 +518,8 @@ impl<'a> ListDb<'a> {
     }
 
     /// Return the list length
-    pub fn len(&self, user_key: &BytesMut) -> Result<ListLenResult, SableError> {
-        Ok(match self.list_metadata(user_key)? {
+    pub fn len(&self, list_name: &BytesMut) -> Result<ListLenResult, SableError> {
+        Ok(match self.list_metadata(list_name)? {
             GetListMetadataResult::Some(list) => ListLenResult::Some(list.len()),
             GetListMetadataResult::WrongType => ListLenResult::WrongType,
             GetListMetadataResult::NotFound => ListLenResult::NotFound,
@@ -525,11 +541,11 @@ impl<'a> ListDb<'a> {
     /// If `start` > `end` this
     pub fn range(
         &self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         start: isize,
         end: isize,
     ) -> Result<ListRangeResult, SableError> {
-        let list = match self.list_metadata(user_key)? {
+        let list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListRangeResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListRangeResult::Some(Vec::default())),
             GetListMetadataResult::Some(list) => list,
@@ -564,11 +580,11 @@ impl<'a> ListDb<'a> {
     /// Insert `value` after `pivot` item
     pub fn insert_after(
         &mut self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         value: &BytesMut,
         pivot: &BytesMut,
     ) -> Result<ListInsertResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
+        let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListInsertResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListInsertResult::ListNotFound), // List not found
             GetListMetadataResult::Some(list) => list,
@@ -585,11 +601,11 @@ impl<'a> ListDb<'a> {
     /// Insert `value` before `pivot` item
     pub fn insert_before(
         &mut self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         value: &BytesMut,
         pivot: &BytesMut,
     ) -> Result<ListInsertResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
+        let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListInsertResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListInsertResult::ListNotFound), // List not found
             GetListMetadataResult::Some(list) => list,
@@ -604,14 +620,14 @@ impl<'a> ListDb<'a> {
     }
 
     /// Return the item at the given index
-    pub fn item_at(&self, user_key: &BytesMut, index: isize) -> Result<ListItemAt, SableError> {
-        let list = match self.list_metadata(user_key)? {
+    pub fn item_at(&self, list_name: &BytesMut, index: isize) -> Result<ListItemAt, SableError> {
+        let list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListItemAt::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListItemAt::ListNotFound),
             GetListMetadataResult::Some(list) => list,
         };
 
-        let index = list.fix_index(index).try_into().unwrap_or(usize::MAX);
+        let index = list.fix_index(index).unsigned_abs();
         Ok(if index >= list.len() {
             ListItemAt::OutOfRange
         } else {
@@ -636,11 +652,11 @@ impl<'a> ListDb<'a> {
     /// - `count = 0`: Remove all elements equal to `element`.
     pub fn remove_items(
         &mut self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         count: isize,
         value: &BytesMut,
     ) -> Result<ListRemoveResult, SableError> {
-        let mut list = match self.list_metadata(user_key)? {
+        let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListRemoveResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListRemoveResult::Some(0)),
             GetListMetadataResult::Some(list) => list,
@@ -690,13 +706,13 @@ impl<'a> ListDb<'a> {
     /// provided, ensure that only `maxlen` items are compared
     pub fn index_of(
         &self,
-        user_key: &BytesMut,
+        list_name: &BytesMut,
         value: &BytesMut,
         rank: Option<isize>,
         count: Option<usize>,
         maxlen: Option<usize>,
     ) -> Result<ListIndexOfResult, SableError> {
-        let list = match self.list_metadata(user_key)? {
+        let list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListIndexOfResult::WrongType),
             GetListMetadataResult::NotFound => return Ok(ListIndexOfResult::None),
             GetListMetadataResult::Some(list) => list,
@@ -746,6 +762,27 @@ impl<'a> ListDb<'a> {
         } else {
             ListIndexOfResult::Some(indexes)
         })
+    }
+
+    /// Update the value at a given position
+    pub fn update_by_index(
+        &mut self,
+        list_name: &BytesMut,
+        value: &BytesMut,
+        index: isize,
+    ) -> Result<ListInsertAtResult, SableError> {
+        let list = match self.list_metadata(list_name)? {
+            GetListMetadataResult::WrongType => return Ok(ListInsertAtResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListInsertAtResult::NotFound),
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        let Some(mut item) = self.get_list_item_by_index(&list, index)? else {
+            return Ok(ListInsertAtResult::InvalidIndex);
+        };
+        item.set_user_value(value);
+        self.put_list_item(&item)?;
+        Ok(ListInsertAtResult::Ok)
     }
 
     // ===-----------------------------
@@ -1056,6 +1093,31 @@ impl<'a> ListDb<'a> {
         };
         let value = ListItemValue::from_bytes(&raw_value).ok_or(SableError::SerialisationError)?;
         Ok(Some(ListItem::new(key, value)))
+    }
+
+    /// Iterate and return the item at a given `index`.
+    /// If `index` is out of bounds, return `None`
+    fn get_list_item_by_index(
+        &self,
+        list: &List,
+        index: isize,
+    ) -> Result<Option<ListItem>, SableError> {
+        let index = list.fix_index(index).unsigned_abs();
+        if index >= list.len() {
+            return Ok(None);
+        }
+
+        // iterate
+        let mut ret: Option<ListItem> = None;
+        self.iterate(list, |item, item_index| {
+            if item_index == index {
+                ret = Some(item);
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })?;
+        Ok(ret)
     }
 
     fn delete_list(&mut self, list: &List) -> Result<(), SableError> {
