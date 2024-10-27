@@ -363,6 +363,18 @@ pub enum ListItemAt {
     ListNotFound,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListIndexOfResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// Return the list of indexes found
+    Some(Vec<usize>),
+    /// No match was found
+    None,
+    /// Invalid rank provided
+    InvalidRank,
+}
+
 // Private enumerators
 
 #[derive(PartialEq, Eq, Debug)]
@@ -671,6 +683,71 @@ impl<'a> ListDb<'a> {
         }
         Ok(ListRemoveResult::Some(items_to_remove.len()))
     }
+
+    /// Return the index(s) of `value` inside list `user_key`. If `rank` is provided, return the index of the `rank`'s
+    /// item, i.e. if `rank = Some(2)` return the position of the 2nd item, if `rank` is negative, return the `rank`'s
+    /// item from the end of the list. If `count` is provided, return the position of the `count` items. If `maxlen` is
+    /// provided, ensure that only `maxlen` items are compared
+    pub fn index_of(
+        &self,
+        user_key: &BytesMut,
+        value: &BytesMut,
+        rank: Option<isize>,
+        count: Option<usize>,
+        maxlen: Option<usize>,
+    ) -> Result<ListIndexOfResult, SableError> {
+        let list = match self.list_metadata(user_key)? {
+            GetListMetadataResult::WrongType => return Ok(ListIndexOfResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListIndexOfResult::None),
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        // fix the rank
+        let (reverse, rank) = if let Some(rank) = rank {
+            match rank.cmp(&0) {
+                Ordering::Equal => return Ok(ListIndexOfResult::InvalidRank),
+                Ordering::Less => (true, rank.unsigned_abs()),
+                Ordering::Greater => (false, rank.unsigned_abs()),
+            }
+        } else {
+            (false, 1usize)
+        };
+
+        // Adjust the number of items to find
+        let count = match count {
+            Some(0) => usize::MAX, // 0 means - all items
+            Some(count) => count,
+            None => 1usize,
+        };
+
+        // Adjust the number of comparisons to perform
+        let maxlen = match maxlen {
+            Some(0) | None => usize::MAX, // 0 or not provided maxlen means: scan the entire list
+            Some(maxlen) => maxlen,
+        };
+
+        let mut current_rank = 1usize;
+        let mut indexes: Vec<usize> = Vec::default();
+        let mut loop_counter = 0usize;
+
+        self.iterate_internal(&list, reverse, |item, index| {
+            loop_counter = loop_counter.saturating_add(1);
+            if item.user_value().eq(value) {
+                if current_rank >= rank {
+                    indexes.push(index);
+                }
+                current_rank = current_rank.saturating_add(1);
+            }
+            Ok(loop_counter < maxlen && indexes.len() < count)
+        })?;
+
+        Ok(if indexes.is_empty() {
+            ListIndexOfResult::None
+        } else {
+            ListIndexOfResult::Some(indexes)
+        })
+    }
+
     // ===-----------------------------
     // Private helpers
     // ===-----------------------------
@@ -1355,6 +1432,41 @@ mod tests {
         };
         println!("{:?}", items);
         assert_eq!(items, expected);
+    }
+
+    #[test_case("a b c d 1 2 3 4 3 3 3", "a", None, None, None, ListIndexOfResult::Some(vec![0]); "common case")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "3", None, None, None, ListIndexOfResult::Some(vec![6]); "find in the middle")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "3", Some(0), Some(2), None, ListIndexOfResult::Some(vec![8, 9, 10]); "find last three items")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "1", None, Some(2), None, ListIndexOfResult::None; "out of range rank")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "1", None, Some(0), None, ListIndexOfResult::InvalidRank; "zero rank")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "3", Some(0), Some(2), Some(0), ListIndexOfResult::Some(vec![8, 9, 10]); "find last three items with maxlen 0")]
+    #[test_case("a b c d 1 2 3 4 3 3 3", "3", Some(0), Some(2), Some(9), ListIndexOfResult::Some(vec![8]); "find last three items with maxlen 9")]
+    fn test_index_of(
+        initial_list: &str,
+        value: &str,
+        count: Option<usize>,
+        rank: Option<isize>,
+        maxlen: Option<usize>,
+        expected: ListIndexOfResult,
+    ) {
+        let (_deleter, db) = crate::tests::open_store();
+        let mut db = ListDb::with_storage(&db, 0);
+        let list_name = BytesMut::from("mylist");
+        let values: Vec<BytesMut> = initial_list.split(' ').map(|s| BytesMut::from(s)).collect();
+        let values: Vec<&BytesMut> = values.iter().collect();
+        let value = BytesMut::from(value);
+
+        db.push(&list_name, &values, ListFlags::FromRight).unwrap();
+        db.commit().unwrap();
+        assert_eq!(
+            db.len(&list_name).unwrap(),
+            ListLenResult::Some(values.len())
+        );
+        assert_eq!(
+            db.index_of(&list_name, &value, rank, count, maxlen)
+                .unwrap(),
+            expected
+        );
     }
 
     fn populate_list(db: &mut ListDb, name: &BytesMut, count: usize) {
