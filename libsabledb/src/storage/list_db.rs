@@ -116,14 +116,15 @@ impl List {
         self.md.set_len(self.md.len().saturating_sub(n))
     }
 
-    pub fn fix_index(&self, index: isize) -> isize {
+    pub fn fix_index(&self, index: isize) -> Option<usize> {
         if index < 0 {
-            self.len()
-                .try_into()
-                .unwrap_or(isize::MAX)
-                .saturating_add(index)
+            // index is from the end of the list -1 is the last item etc
+            // Example:
+            // Len: 10, Inedx: -1 => 10 - 1 => Some(9)
+            // Len: 4, Index: -6 => 4 - 6 => None
+            self.len().checked_sub(index.unsigned_abs())
         } else {
-            index
+            Some(index.unsigned_abs())
         }
     }
 
@@ -341,6 +342,8 @@ pub enum ListRangeResult {
     WrongType,
     /// Returns the requested range
     Some(Vec<BytesMut>),
+    /// Invalid range provided
+    InvalidRange,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -552,18 +555,18 @@ impl<'a> ListDb<'a> {
         };
 
         // convert indices
-        let start = list.fix_index(start);
-        let end = list.fix_index(end);
+        let Some(start) = list.fix_index(start) else {
+            return Ok(ListRangeResult::InvalidRange);
+        };
+        let Some(end) = list.fix_index(end) else {
+            return Ok(ListRangeResult::InvalidRange);
+        };
 
-        if start > end || end < 0 {
+        if start > end {
             // empty array
             Ok(ListRangeResult::Some(Vec::default()))
         } else {
-            let start = if start < 0 { 0 } else { start };
-
             // At this point, both indices are positive, so go ahead and convert them into usize
-            let start = start.try_into().unwrap_or(0usize);
-            let end = end.try_into().unwrap_or(0usize);
             let mut result = Vec::<BytesMut>::new();
             self.iterate(&list, |item, index| {
                 if index >= start && index <= end {
@@ -627,7 +630,10 @@ impl<'a> ListDb<'a> {
             GetListMetadataResult::Some(list) => list,
         };
 
-        let index = list.fix_index(index).unsigned_abs();
+        let Some(index) = list.fix_index(index) else {
+            return Ok(ListItemAt::OutOfRange);
+        };
+
         Ok(if index >= list.len() {
             ListItemAt::OutOfRange
         } else {
@@ -1102,7 +1108,10 @@ impl<'a> ListDb<'a> {
         list: &List,
         index: isize,
     ) -> Result<Option<ListItem>, SableError> {
-        let index = list.fix_index(index).unsigned_abs();
+        let Some(index) = list.fix_index(index) else {
+            return Ok(None);
+        };
+
         if index >= list.len() {
             return Ok(None);
         }
