@@ -8,6 +8,7 @@ use bytes::BytesMut;
 use std::cmp::Ordering;
 
 bitflags::bitflags! {
+#[derive(Clone)]
 pub struct ListFlags: u32  {
     /// None: Actions are performed from the right side of the list
     const None = 0;
@@ -316,6 +317,8 @@ pub enum ListPopResult {
     WrongType,
     /// Returns the items removed
     Some(Vec<BytesMut>),
+    /// Not items were removed (either the list does not exist or there were no items to be removed)
+    None,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -492,7 +495,7 @@ impl<'a> ListDb<'a> {
     ) -> Result<ListPopResult, SableError> {
         let mut list = match self.list_metadata(list_name)? {
             GetListMetadataResult::WrongType => return Ok(ListPopResult::WrongType),
-            GetListMetadataResult::NotFound => return Ok(ListPopResult::Some(Vec::default())),
+            GetListMetadataResult::NotFound => return Ok(ListPopResult::None),
             GetListMetadataResult::Some(list) => list,
         };
 
@@ -517,7 +520,11 @@ impl<'a> ListDb<'a> {
         } else {
             self.put_list_metadata(&list)?;
         }
-        Ok(ListPopResult::Some(result))
+        Ok(if result.is_empty() {
+            ListPopResult::None
+        } else {
+            ListPopResult::Some(result)
+        })
     }
 
     /// Return the list length

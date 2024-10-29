@@ -7,7 +7,7 @@ use crate::{
         ListRemoveResult,
     },
     to_number,
-    types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
+    types::{BlockingCommandResult, List, MoveResult},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
     SableError,
 };
@@ -495,7 +495,7 @@ impl ListCommands {
                             if elements_to_pop == 0 {
                                 builder.error_string(
                                     &mut response_buffer,
-                                    "ERR count should be greater than 0",
+                                    "ERR numkeys should be greater than 0",
                                 );
                                 return Ok(HandleCommandResult::ResponseBufferUpdated(
                                     response_buffer,
@@ -524,37 +524,43 @@ impl ListCommands {
         };
 
         let _unused = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        match list.multi_pop(&keys, count, list_flags)? {
-            MultiPopResult::WrongType => {
-                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            }
-            MultiPopResult::Some((list_name, values)) => {
-                builder.add_array_len(&mut response_buffer, 2);
-                builder.add_bulk_string(&mut response_buffer, &list_name);
-                builder.add_array_len(&mut response_buffer, values.len());
-                for v in values {
-                    builder.add_bulk_string(&mut response_buffer, &v.user_data);
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        // Check the first lists
+        for list_name in &keys {
+            match db.pop(list_name, count, list_flags.clone())? {
+                ListPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            }
-            MultiPopResult::None => {
-                // block the client here
-                let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
-                if allow_blocking {
-                    let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
-                    let rx = block_client_for_keys!(client_state, keys, response_buffer);
-                    Ok(HandleCommandResult::Blocked((
-                        rx,
-                        Duration::from_millis(timeout_ms as u64),
-                        TimeoutResponse::NullArrray,
-                    )))
-                } else {
-                    builder.null_array(&mut response_buffer);
-                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                ListPopResult::Some(items_removed) => {
+                    builder.add_array_len(&mut response_buffer, 2);
+                    builder.add_bulk_string(&mut response_buffer, list_name);
+                    builder.add_array_len(&mut response_buffer, items_removed.len());
+                    for v in &items_removed {
+                        builder.add_bulk_string(&mut response_buffer, v);
+                    }
+                    db.commit()?;
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
+                ListPopResult::None => {}
             }
+        }
+
+        // If we got here, there were no lists that we could "pop" items from
+        let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
+        if allow_blocking {
+            let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
+            let rx = block_client_for_keys!(client_state, keys, response_buffer);
+            Ok(HandleCommandResult::Blocked((
+                rx,
+                Duration::from_millis(timeout_ms as u64),
+                TimeoutResponse::NullArrray,
+            )))
+        } else {
+            // Blocking is not allowed - return null array
+            builder.null_array(&mut response_buffer);
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         }
     }
 
@@ -586,7 +592,7 @@ impl ListCommands {
             ListPopResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            ListPopResult::Some(items) if items.is_empty() => {
+            ListPopResult::None => {
                 builder_return_null_reply!(builder, response_buffer, has_count);
             }
             ListPopResult::Some(items) => items,

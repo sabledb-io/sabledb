@@ -409,6 +409,14 @@ macro_rules! builder_return_at_least_1_key {
 }
 
 #[macro_export]
+macro_rules! builder_return_keys_must_be_gt_0 {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::ERR_NUM_KEYS_MUST_BE_GT_ZERO);
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! builder_return_min_max_not_float {
     ($builder:expr, $response_buffer:expr) => {
         $builder.error_string($response_buffer, Strings::ZERR_MIN_MAX_NOT_FLOAT);

@@ -33,4 +33,5 @@ impl Strings {
     pub const ZERR_TIMEOUT_NOT_FLOAT: &'static str = "ERR timeout is not a float or out of range";
     pub const ERR_NUMKEYS: &'static str = "ERR Number of keys can't be greater than number of args";
     pub const NO_SUCH_KEY: &'static str = "ERR no such key";
+    pub const ERR_NUM_KEYS_MUST_BE_GT_ZERO: &'static str = "ERR numkeys should be greater than 0";
 }

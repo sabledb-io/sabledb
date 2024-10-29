@@ -187,7 +187,6 @@ impl<'a> List<'a> {
         count: usize,
         flags: ListFlags,
     ) -> Result<MultiPopResult, SableError> {
-        let _builder = RespBuilderV2::default();
         // identical behavior to `blocking_pop_internal`
         // we just need to translate the return value
         match self.blocking_pop_internal(list_names, count, flags)? {
