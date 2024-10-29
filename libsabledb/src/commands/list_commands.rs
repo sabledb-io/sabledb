@@ -2,8 +2,8 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
     storage::{
-        ListAppendResult, ListDb, ListFlags, ListIndexOfResult, ListInsertResult, ListItemAt,
-        ListLenResult, ListPopResult, ListRemoveResult,
+        ListAppendResult, ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult,
+        ListInsertResult, ListItemAt, ListLenResult, ListPopResult, ListRemoveResult,
     },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
@@ -90,7 +90,10 @@ impl ListCommands {
                 Self::linsert(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lset => Self::lset(client_state, command, response_buffer).await,
+            RedisCommandName::Lset => {
+                Self::lset(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lpos => {
                 Self::lpos(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -961,31 +964,36 @@ impl ListCommands {
     pub async fn lset(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
         // extract variables from the command
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
         let value = command_arg_at!(command, 3);
-
-        let index = to_number!(
-            index,
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let index = to_number!(index, isize, response_buffer, Ok(()));
 
         // Lock and set
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.set(key, index, value.clone(), &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.update_by_index(key, value, index)? {
+            ListInsertAtResult::Ok => builder.ok(response_buffer),
+            ListInsertAtResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListInsertAtResult::NotFound => {
+                builder.error_string(response_buffer, Strings::NO_SUCH_KEY);
+                return Ok(());
+            }
+            ListInsertAtResult::InvalidIndex => {
+                builder.error_string(response_buffer, Strings::INDEX_OUT_OF_BOUNDS);
+                return Ok(());
+            }
+        }
+        db.commit()?;
+        Ok(())
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.

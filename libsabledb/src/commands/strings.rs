@@ -32,4 +32,5 @@ impl Strings {
         "ERR value is out of range, must be positive";
     pub const ZERR_TIMEOUT_NOT_FLOAT: &'static str = "ERR timeout is not a float or out of range";
     pub const ERR_NUMKEYS: &'static str = "ERR Number of keys can't be greater than number of args";
+    pub const NO_SUCH_KEY: &'static str = "ERR no such key";
 }
