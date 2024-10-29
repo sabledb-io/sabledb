@@ -3,7 +3,8 @@ use crate::{
     server::ClientState,
     storage::{
         ListAppendResult, ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult,
-        ListInsertResult, ListItemAt, ListLenResult, ListPopResult, ListRemoveResult,
+        ListInsertResult, ListItemAt, ListLenResult, ListPopResult, ListRangeResult,
+        ListRemoveResult,
     },
     to_number,
     types::{BlockingCommandResult, List, MoveResult, MultiPopResult},
@@ -77,7 +78,10 @@ impl ListCommands {
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Ltrim => Self::ltrim(client_state, command, response_buffer).await,
-            RedisCommandName::Lrange => Self::lrange(client_state, command, response_buffer).await,
+            RedisCommandName::Lrange => {
+                Self::lrange(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Llen => {
                 Self::llen(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -736,33 +740,30 @@ impl ListCommands {
     pub async fn lrange(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
-
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
         let key = command_arg_at!(command, 1);
-        let start = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
-        let end = to_number!(
-            command_arg_at!(command, 3),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let start = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
+        let end = to_number!(command_arg_at!(command, 3), isize, response_buffer, Ok(()));
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.lrange(key, start, end, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.range(key, start, end)? {
+            ListRangeResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListRangeResult::InvalidRange => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            ListRangeResult::Some(items) => {
+                builder.add_array_len(response_buffer, items.len());
+                for item in &items {
+                    builder.add_bulk_string(response_buffer, item);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns the length of the list stored at key. If key does not exist, it is interpreted
@@ -1135,13 +1136,13 @@ mod tests {
         (vec!["ltrim", "ltrim_list_not_existing", "1", "2"], "+OK\r\n"),
         ], "ltrim"; "ltrim")]
     #[test_case(vec![
-        (vec!["lrange", "no_such_list", "0", "-1"], "*-1\r\n"),
+        (vec!["lrange", "no_such_list", "0", "-1"], "*0\r\n"),
         (vec!["rpush", "lrange_list", "one", "two", "three"], ":3\r\n"),
         (vec!["lrange", "lrange_list", "1", "-1"], "*2\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
         (vec!["lrange", "lrange_list"], "-ERR wrong number of arguments for 'lrange' command\r\n"),
         (vec!["llen", "lrange_list"], ":3\r\n"),
         (vec!["lpos", "lrange_list", "one"], ":0\r\n"),
-        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "*-1\r\n"),
+        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "*0\r\n"),
         ], "lrange"; "lrange")]
     #[test_case(vec![
         (vec!["rpush", "lmove_list1", "a", "b", "c"], ":3\r\n"),
