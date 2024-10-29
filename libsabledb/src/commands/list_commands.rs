@@ -2,12 +2,11 @@ use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
     storage::{
-        ListAppendResult, ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult,
-        ListInsertResult, ListItemAt, ListLenResult, ListPopResult, ListRangeResult,
-        ListRemoveResult,
+        ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult, ListInsertResult, ListItemAt,
+        ListLenResult, ListPopResult, ListPushResult, ListRangeResult, ListRemoveResult,
     },
     to_number,
-    types::{BlockingCommandResult, List, MoveResult},
+    types::{BlockingCommandResult, List},
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
     SableError,
 };
@@ -155,7 +154,7 @@ impl ListCommands {
         let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
         let builder = RespBuilderV2::default();
         match db.push(key, &values, flags)? {
-            ListAppendResult::Some(list_len) => {
+            ListPushResult::Some(list_len) => {
                 // Commit the changes
                 db.commit()?;
 
@@ -168,10 +167,10 @@ impl ListCommands {
                     .wakeup_clients(key, values.len())
                     .await;
             }
-            ListAppendResult::WrongType => {
+            ListPushResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            ListAppendResult::ListNotFound => builder.number_usize(response_buffer, 0),
+            ListPushResult::ListNotFound => builder.number_usize(response_buffer, 0),
         }
         Ok(())
     }
@@ -339,13 +338,13 @@ impl ListCommands {
         mut response_buffer: BytesMut,
         blocking_duration: Option<Duration>,
     ) -> Result<HandleCommandResult, SableError> {
+        let builder = RespBuilderV2::default();
         let (src_flags, target_flags) = match (src_left_or_right, target_left_or_right) {
             ("left", "left") => (ListFlags::FromLeft, ListFlags::FromLeft),
             ("right", "right") => (ListFlags::FromRight, ListFlags::FromLeft),
             ("left", "right") => (ListFlags::FromLeft, ListFlags::FromRight),
             ("right", "left") => (ListFlags::FromRight, ListFlags::FromLeft),
             (_, _) => {
-                let builder = RespBuilderV2::default();
                 builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
@@ -355,40 +354,63 @@ impl ListCommands {
         let keys = vec![src_list_name, target_list_name];
         let _unused = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        let res = list
-            .move_item(src_list_name, target_list_name, src_flags, target_flags)
-            .await?;
-
-        let builder = RespBuilderV2::default();
-        match res {
-            MoveResult::WrongType => {
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let moved_item = match db.pop(src_list_name, 1, src_flags)? {
+            ListPopResult::WrongType => {
                 builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
-            MoveResult::Some(popped_item) => {
-                client_state
-                    .server_inner_state()
-                    .wakeup_clients(target_list_name, 1)
-                    .await;
-                builder.bulk_string(&mut response_buffer, &popped_item.user_data);
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            ListPopResult::Some(mut elements) => {
+                // we are popping from the back, but since the vector is expected to be of size 1
+                // it has the same effect
+                let Some(item) = elements.pop() else {
+                    return Err(SableError::InternalError(
+                        "Expected at least 1 value in array".into(),
+                    ));
+                };
+                item
             }
-            MoveResult::None => {
+            ListPopResult::None => {
                 if let Some(blocking_duration) = blocking_duration {
+                    // blocking is requested
                     let interersting_keys: Vec<BytesMut> =
                         keys.iter().map(|e| (*e).clone()).collect();
                     let rx =
                         block_client_for_keys!(client_state, interersting_keys, response_buffer);
-                    Ok(HandleCommandResult::Blocked((
+                    return Ok(HandleCommandResult::Blocked((
                         rx,
                         blocking_duration,
                         TimeoutResponse::NullArrray,
-                    )))
+                    )));
                 } else {
-                    builder.null_array(&mut response_buffer);
-                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                    builder.null_string(&mut response_buffer);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
+            }
+        };
+
+        // Place it in the target source
+        match db.push(target_list_name, &[&moved_item], target_flags)? {
+            ListPushResult::WrongType => {
+                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            ListPushResult::ListNotFound => {
+                /* cant happen */
+                Err(SableError::InternalError(
+                    "Unexpected return value: `ListNotFound`".into(),
+                ))
+            }
+            ListPushResult::Some(_) => {
+                builder.bulk_string(&mut response_buffer, &moved_item);
+                db.commit()?;
+
+                // And wakeup any pending client
+                client_state
+                    .server_inner_state()
+                    .wakeup_clients(target_list_name, 1)
+                    .await;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
         }
     }
@@ -630,7 +652,7 @@ impl ListCommands {
         let mut iter = command.args_vec().iter().peekable(); // points to the command
         iter.next(); // blpop
 
-        // Parse the arguments, extracting the lists + timeout
+        // Parse the arguments, extracting the lists + time-out
         let mut lists = Vec::<&BytesMut>::new();
         let mut timeout: Option<&BytesMut> = None;
         loop {
@@ -638,7 +660,7 @@ impl ListCommands {
             match (key1, key2) {
                 (Some(key1), Some(_)) => lists.push(key1),
                 (Some(key1), None) => {
-                    // last item, this is our timeout
+                    // last item, this is our time-out
                     timeout = Some(key1);
                     break;
                 }

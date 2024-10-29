@@ -302,7 +302,7 @@ impl ToBytes for ListItemKey {
 //
 
 #[derive(PartialEq, Eq, Debug)]
-pub enum ListAppendResult {
+pub enum ListPushResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// Returns the list length
@@ -459,12 +459,12 @@ impl<'a> ListDb<'a> {
         list_name: &BytesMut,
         values: &[&BytesMut],
         flags: ListFlags,
-    ) -> Result<ListAppendResult, SableError> {
+    ) -> Result<ListPushResult, SableError> {
         let mut list = match self.list_metadata(list_name)? {
-            GetListMetadataResult::WrongType => return Ok(ListAppendResult::WrongType),
+            GetListMetadataResult::WrongType => return Ok(ListPushResult::WrongType),
             GetListMetadataResult::NotFound => {
                 if flags.contains(ListFlags::ListMustExist) {
-                    return Ok(ListAppendResult::ListNotFound);
+                    return Ok(ListPushResult::ListNotFound);
                 }
                 self.new_list(list_name)?
             }
@@ -482,7 +482,7 @@ impl<'a> ListDb<'a> {
                 },
             )?;
         }
-        Ok(ListAppendResult::Some(list.len()))
+        Ok(ListPushResult::Some(list.len()))
     }
 
     /// Remove `count` elements from the head or tail of the list and return them.
@@ -1248,7 +1248,7 @@ mod tests {
         let list_name = BytesMut::from("mylist");
         let values: Vec<&BytesMut> = values.iter().collect();
         let res = db.push(&list_name, &values, ListFlags::FromLeft).unwrap();
-        assert_eq!(res, ListAppendResult::Some(10));
+        assert_eq!(res, ListPushResult::Some(10));
 
         db.commit().unwrap();
 
@@ -1277,7 +1277,7 @@ mod tests {
         let list_name = BytesMut::from("mylist");
         let values: Vec<&BytesMut> = values.iter().collect();
         let res = db.push(&list_name, &values, ListFlags::FromRight).unwrap();
-        assert_eq!(res, ListAppendResult::Some(10));
+        assert_eq!(res, ListPushResult::Some(10));
 
         db.commit().unwrap();
 
@@ -1299,7 +1299,7 @@ mod tests {
         let res = db
             .push(&list_name, &vec![&value], ListFlags::FromRight)
             .unwrap();
-        assert_eq!(res, ListAppendResult::Some(1));
+        assert_eq!(res, ListPushResult::Some(1));
         db.commit().unwrap();
 
         let res = db.pop(&list_name, 10, ListFlags::FromLeft).unwrap();
@@ -1556,6 +1556,6 @@ mod tests {
 
         let values: Vec<&BytesMut> = values.iter().collect();
         let res = db.push(name, &values, ListFlags::FromRight).unwrap();
-        assert_eq!(res, ListAppendResult::Some(count));
+        assert_eq!(res, ListPushResult::Some(count));
     }
 }
