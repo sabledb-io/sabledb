@@ -55,7 +55,7 @@ impl ListItemValue {
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq, Clone)]
 struct List {
     pub key: PrimaryKeyMetadata,
     pub md: ListValueMetadata,
@@ -395,6 +395,16 @@ pub enum ListInsertAtResult {
     Ok,
     /// Invalid index was provided
     InvalidIndex,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum ListTrimResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// List not found
+    NotFound,
+    /// List trimmed successfully
+    Ok,
 }
 
 // Private enumerators
@@ -796,6 +806,44 @@ impl<'a> ListDb<'a> {
         item.set_user_value(value);
         self.put_list_item(&item)?;
         Ok(ListInsertAtResult::Ok)
+    }
+
+    pub fn trim(
+        &mut self,
+        list_name: &BytesMut,
+        start: isize,
+        end: isize,
+    ) -> Result<ListTrimResult, SableError> {
+        let mut list = match self.list_metadata(list_name)? {
+            GetListMetadataResult::WrongType => return Ok(ListTrimResult::WrongType),
+            GetListMetadataResult::NotFound => return Ok(ListTrimResult::NotFound),
+            GetListMetadataResult::Some(list) => list,
+        };
+
+        let (start, end) = self.convert_trim_indices(&list, start, end);
+        #[derive(PartialEq, Eq, Debug)]
+        enum State {
+            Keep = 0,
+            Delete = 1,
+        }
+
+        let mut ids_to_delete: Vec<u64> = Vec::default();
+        self.iterate(&list, |list_item, index| {
+            let state = if index < start || index > end {
+                State::Delete
+            } else {
+                State::Keep
+            };
+            if state == State::Delete {
+                ids_to_delete.push(list_item.id());
+            }
+            Ok(true)
+        })?;
+
+        for item_id in ids_to_delete.into_iter() {
+            self.remove_internal(&mut list, item_id)?;
+        }
+        Ok(ListTrimResult::Ok)
     }
 
     // ===-----------------------------
@@ -1220,6 +1268,34 @@ impl<'a> ListDb<'a> {
             counter = counter.saturating_add(1);
         }
         Ok(())
+    }
+
+    /// Convert range `start,end` into positive indices
+    fn convert_trim_indices(
+        &self,
+        list: &List,
+        start_isize: isize,
+        end_isize: isize,
+    ) -> (usize, usize) {
+        /* convert negative indexes */
+        let start = list.fix_index(start_isize);
+        let end = list.fix_index(end_isize);
+
+        match (start, end) {
+            (None, None) | (Some(_), None) => {
+                // delete everything
+                (usize::MAX, usize::MAX)
+            }
+            (None, Some(end)) => (0, end),
+            (Some(start), Some(end)) => {
+                if start > end || start > list.len() {
+                    // delete everything
+                    (usize::MAX, usize::MAX)
+                } else {
+                    (start, end)
+                }
+            }
+        }
     }
 }
 

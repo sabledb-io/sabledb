@@ -4,11 +4,10 @@ use crate::{
     storage::{
         ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult, ListInsertResult, ListItemAt,
         ListLenResult, ListPopResult, ListPushResult, ListRangeResult, ListRemoveResult,
+        ListTrimResult,
     },
-    to_number,
-    types::List,
-    BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
-    SableError,
+    to_number, BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
+    RespBuilderV2, SableError,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
@@ -77,7 +76,10 @@ impl ListCommands {
                 Self::pop(client_state, command, &mut response_buffer, ListFlags::None).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Ltrim => Self::ltrim(client_state, command, response_buffer).await,
+            RedisCommandName::Ltrim => {
+                Self::ltrim(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lrange => {
                 Self::lrange(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
@@ -758,33 +760,30 @@ impl ListCommands {
     pub async fn ltrim(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
 
         let key = command_arg_at!(command, 1);
-        let start = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
-        let end = to_number!(
-            command_arg_at!(command, 3),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let start = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
+        let end = to_number!(command_arg_at!(command, 3), isize, response_buffer, Ok(()));
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.ltrim(key, start, end, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.trim(key, start, end)? {
+            ListTrimResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListTrimResult::NotFound => {
+                builder.ok(response_buffer);
+            }
+            ListTrimResult::Ok => {
+                builder.ok(response_buffer);
+                db.commit()?;
+            }
+        }
+        Ok(())
     }
 
     /// Returns the specified elements of the list stored at key. The offsets start and stop are zero-based indexes,
