@@ -6,13 +6,14 @@ use crate::{
         ListLenResult, ListPopResult, ListPushResult, ListRangeResult, ListRemoveResult,
     },
     to_number,
-    types::{BlockingCommandResult, List},
+    types::List,
     BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
     SableError,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::time::Duration;
 
 #[allow(dead_code)]
@@ -328,6 +329,9 @@ impl ListCommands {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Move **one** element from `src_list_name` list to `target_list_name`.
+    /// If `blocking_duration` is not `None` and there are no elements to be moved in the source list
+    /// the client is blocked for the duration of specified in `blocking_duration`
     async fn lmove_internal(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -373,19 +377,19 @@ impl ListCommands {
             ListPopResult::None => {
                 if let Some(blocking_duration) = blocking_duration {
                     // blocking is requested
-                    let interersting_keys: Vec<BytesMut> =
-                        keys.iter().map(|e| (*e).clone()).collect();
-                    let rx =
-                        block_client_for_keys!(client_state, interersting_keys, response_buffer);
-                    return Ok(HandleCommandResult::Blocked((
-                        rx,
-                        blocking_duration,
-                        TimeoutResponse::NullArrray,
-                    )));
-                } else {
-                    builder.null_string(&mut response_buffer);
-                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                    let keys: Vec<BytesMut> = keys.iter().map(|e| (*e).clone()).collect();
+                    if let Some(rx) = Self::block_client_for_keys(client_state.clone(), &keys).await
+                    {
+                        return Ok(HandleCommandResult::Blocked((
+                            rx,
+                            blocking_duration,
+                            TimeoutResponse::NullString,
+                        )));
+                    }
                 }
+                // None blocking or failed to block -> return null string
+                builder.null_string(&mut response_buffer);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
         };
 
@@ -573,17 +577,18 @@ impl ListCommands {
         let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
         if allow_blocking {
             let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
-            let rx = block_client_for_keys!(client_state, keys, response_buffer);
-            Ok(HandleCommandResult::Blocked((
-                rx,
-                Duration::from_millis(timeout_ms as u64),
-                TimeoutResponse::NullArrray,
-            )))
-        } else {
-            // Blocking is not allowed - return null array
-            builder.null_array(&mut response_buffer);
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            if let Some(rx) = Self::block_client_for_keys(client_state, &keys).await {
+                return Ok(HandleCommandResult::Blocked((
+                    rx,
+                    Duration::from_millis(timeout_ms as u64),
+                    TimeoutResponse::NullArrray,
+                )));
+            }
         }
+
+        // Blocking is not allowed - return null string
+        builder.null_array(&mut response_buffer);
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Removes and returns the first elements of the list stored at key.
@@ -668,21 +673,35 @@ impl ListCommands {
             }
         }
 
-        // Sanity, shouldn't happen but...
+        // Sanity, should not happen but...
+        let builder = RespBuilderV2::default();
         let Some(timeout) = timeout else {
-            let builder = RespBuilderV2::default();
             builder.error_string(
                 &mut response_buffer,
-                "ERR wrong number of arguments for 'blpop' command",
+                &format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    command.main_command()
+                ),
             );
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
+        // Check that a valid number was provided
+        let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
+            builder.error_string(&mut response_buffer, Strings::ZERR_TIMEOUT_NOT_FLOAT);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        // convert to milliseconds and round it
+        let timeout_ms = (timeout_secs * 1000.0) as u64;
+
         if lists.is_empty() {
-            let builder = RespBuilderV2::default();
             builder.error_string(
                 &mut response_buffer,
-                "ERR wrong number of arguments for 'blpop' command",
+                &format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    command.main_command()
+                ),
             );
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
@@ -691,38 +710,45 @@ impl ListCommands {
         // if all the lists are empty, block the client
         let _unused =
             LockManager::lock_multi(&lists, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        if let BlockingCommandResult::Ok =
-            list.blocking_pop(&lists, 1, &mut response_buffer, flags)?
-        {
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        } else {
-            if client_state.is_txn_state_exec() {
-                // do not block the client
-                let builder = RespBuilderV2::default();
-                builder.null_array(&mut response_buffer);
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        for list_name in &lists {
+            match db.pop(list_name, 1, flags.clone())? {
+                ListPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                ListPopResult::Some(items_removed) => {
+                    // Array of 2 elements is expected. the list name + the popped item
+                    builder.add_array_len(&mut response_buffer, 2);
+                    builder.add_bulk_string(&mut response_buffer, list_name);
+                    let Some(item) = items_removed.first() else {
+                        return Err(SableError::InternalError(
+                            "Expected at least 1 value in array".into(),
+                        ));
+                    };
+                    builder.add_bulk_string(&mut response_buffer, item);
+                    db.commit()?;
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                ListPopResult::None => {}
             }
-            // Block the client
-            let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
-            let rx = block_client_for_keys!(client_state, keys, response_buffer);
+        }
 
-            // Notify the caller
-            let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
-                let builder = RespBuilderV2::default();
-                builder.error_string(
-                    &mut response_buffer,
-                    "ERR timeout is not a float or out of range",
-                );
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
-            };
-
-            let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
+        // If we reached here, it means that we failed to pop any item from any list => block the client
+        let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
+        if let Some(rx) = Self::block_client_for_keys(client_state, &keys).await {
+            // client is successfully blocked
             Ok(HandleCommandResult::Blocked((
                 rx,
                 std::time::Duration::from_millis(timeout_ms),
                 TimeoutResponse::NullArrray,
             )))
+        } else {
+            // failed to block the client (e.g. active txn in the current client)
+            // return null array
+            builder.null_array(&mut response_buffer);
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         }
     }
 
@@ -1055,6 +1081,25 @@ impl ListCommands {
         db.commit()?;
         Ok(())
     }
+
+    /// Block `client_state` for `keys` and return the channel on which the client should wait
+    async fn block_client_for_keys(
+        client_state: Rc<ClientState>,
+        keys: &[BytesMut],
+    ) -> Option<TokioReceiver<u8>> {
+        let client_state_clone = client_state.clone();
+        match client_state
+            .server_inner_state()
+            .block_client(client_state.id(), keys, client_state_clone)
+            .await
+        {
+            BlockClientResult::Blocked(rx) => Some(rx),
+            BlockClientResult::TxnActive => {
+                // can't block the client due to an active transaction
+                None
+            }
+        }
+    }
 }
 
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
@@ -1234,7 +1279,7 @@ mod tests {
         (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "sdsd"], "-ERR timeout is not a float or out of range\r\n"),
         (vec!["llen", "brpoplpush_new_list"], ":3\r\n"),
         (vec!["lrange", "brpoplpush_new_list", "0", "-1"], "*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"),
-        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "*-1\r\n"),
+        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "$-1\r\n"),
         ], "brpoplpush"; "brpoplpush")]
     #[test_case(vec![
         (vec!["rpush", "blpop_list1", "a", "b", "c"], ":3\r\n"),
@@ -1278,13 +1323,13 @@ mod tests {
         (vec!["lrange", "list1", "0", "-1"], "*6\r\n$1\r\n_\r\n$1\r\na\r\n$1\r\nb\r\n$3\r\nb.1\r\n$1\r\nc\r\n$1\r\nd\r\n"),
         ], "linsert"; "linsert")]
     #[test_case(vec![
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"),
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"),
         (vec!["rpush", "blmove_src", "a", "b", "c"], ":3\r\n"),
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\na\r\n"), // a
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nb\r\n"), // b
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nc\r\n"), // c
         (vec!["lrange", "blmove_target", "0", "-1"], "*3\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n"),
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"), // timeout
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"), // timeout
         ], "blmove"; "blmove")]
     #[test_case(vec![
         (vec!["rpush", "blmpop_list1", "a", "b", "c"], ":3\r\n"),
