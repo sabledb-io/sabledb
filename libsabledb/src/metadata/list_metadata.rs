@@ -4,7 +4,7 @@ use crate::{
 };
 
 /// Contains information regarding the String type metadata
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct ListValueMetadata {
     common: CommonValueMetadata,
@@ -13,9 +13,36 @@ pub struct ListValueMetadata {
     list_size: u64,
 }
 
+#[derive(Default)]
+pub struct ListValueMetadataBuilder {
+    list_id: u64,
+}
+
+impl ListValueMetadataBuilder {
+    pub fn with_list_id(mut self, list_id: u64) -> Self {
+        self.list_id = list_id;
+        self
+    }
+
+    pub fn build(self) -> ListValueMetadata {
+        ListValueMetadata {
+            common: CommonValueMetadata::default()
+                .set_list()
+                .with_uid(self.list_id),
+            head_id: 0,
+            tail_id: 0,
+            list_size: 0,
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl ListValueMetadata {
     pub const SIZE: usize = 3 * std::mem::size_of::<u64>() + CommonValueMetadata::SIZE;
+
+    pub fn builder() -> ListValueMetadataBuilder {
+        ListValueMetadataBuilder::default()
+    }
 
     pub fn new() -> Self {
         ListValueMetadata {

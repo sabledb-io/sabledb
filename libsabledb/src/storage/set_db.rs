@@ -1,4 +1,3 @@
-/// A database accessor that does not really care about the value
 use crate::{
     metadata::{Bookkeeping, SetMemberKey, SetValueMetadata, ValueType},
     storage::DbWriteCache,
@@ -83,7 +82,7 @@ pub enum SetExistsResult {
 enum PutMemberResult {
     /// Ok...
     Inserted,
-    /// Already exists in hash
+    /// Already exists in set
     AlreadyExists,
 }
 
@@ -98,8 +97,8 @@ pub enum FindSmallestResult<'a> {
     Some(&'a BytesMut),
 }
 
-/// Hash DB wrapper. This class is specialized in reading/writing hash
-/// (commands from the `HSET`, `HLEN` etc family)
+/// Set DB wrapper. This class is specialized in reading/writing SET
+/// (commands from the `SADD`, `SMEMBERS` etc family)
 ///
 /// Locking strategy: this class does not lock anything and relies on the caller
 /// to obtain the locks if needed

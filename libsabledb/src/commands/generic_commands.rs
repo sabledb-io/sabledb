@@ -1,18 +1,13 @@
 use crate::commands::Strings;
-#[allow(unused_imports)]
 use crate::{
-    check_args_count, check_value_type, command_arg_at,
-    commands::{HandleCommandResult, StringCommands},
-    io::RespWriter,
+    commands::HandleCommandResult,
     metadata::CommonValueMetadata,
     metadata::{KeyType, ValueType},
-    parse_string_to_number,
     server::ClientState,
     storage::{GenericDb, ScanCursor},
-    types::List,
     utils::{PatternMatcher, RespBuilderV2},
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder,
+    BytesMutUtils, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName, SableError,
+    U8ArrayBuilder,
 };
 
 use bytes::BytesMut;
@@ -461,7 +456,9 @@ impl GenericCommands {
         matcher: &PatternMatcher,
         requested_obj_type: &Option<ValueType>,
     ) -> Result<Option<BytesMut>, SableError> {
-        let (_key_metadata, user_key) = PrimaryKeyMetadata::from_raw(encoded_key)?;
+        let user_key = PrimaryKeyMetadata::from_raw(encoded_key)?
+            .user_key()
+            .clone();
 
         // Filter by object type if needed
         if let Some(requested_obj_type) = requested_obj_type {

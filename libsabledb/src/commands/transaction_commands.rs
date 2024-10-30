@@ -432,35 +432,35 @@ mod test {
                 "blpop mylist 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
-            .await;
+            .await; // Null array
 
             check_command(
                 myclient.inner(),
                 "brpop mylist 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
-            .await;
+            .await; // Null array
 
             check_command(
                 myclient.inner(),
                 "brpoplpush mylist mylist2 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
-            .await;
+            .await; // Null string
 
             check_command(
                 myclient.inner(),
                 "blmove mylist mylist2 LEFT LEFT 100",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
-            .await;
+            .await; // Null string
 
             check_command(
                 myclient.inner(),
                 "blmpop 100 2 mylist2 mylist3 LEFT COUNT 1",
                 RedisObject::Status(Strings::QUEUED.into()),
             )
-            .await;
+            .await; // Null array
             assert_eq!(myclient.inner().txn_commands_vec_len(), 5);
 
             check_command(
@@ -469,8 +469,8 @@ mod test {
                 RedisObject::Array(vec![
                     RedisObject::NullArray,
                     RedisObject::NullArray,
-                    RedisObject::NullArray,
-                    RedisObject::NullArray,
+                    RedisObject::NullString,
+                    RedisObject::NullString,
                     RedisObject::NullArray,
                 ]),
             )

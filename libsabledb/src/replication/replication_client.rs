@@ -23,12 +23,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
-
-#[cfg(not(test))]
 use tracing::{debug, error, info};
-
-#[cfg(test)]
-use std::{println as info, println as debug, println as error};
 
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
@@ -82,11 +77,12 @@ impl ReplicationClient {
             tracing::info!("Replication client started");
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
+                let primary_address = Server::state().persistent_state().primary_address();
+                tracing::info!("Connecting to primary at: {}", primary_address);
                 loop {
                     let mut stream = match Self::connect_to_primary() {
                         Err(e) => {
-                            tracing::error!("Failed to connect to primary. {:?}", e);
-
+                            tracing::info!("Connect failed. {e}");
                             // Check whether we should attempt to reconnect
                             if let Err(e) =  cluster_manager::fail_over_if_needed(options.clone(), &store).await {
                                 tracing::warn!("Cluster manager error. {:?}", e);
@@ -108,7 +104,6 @@ impl ReplicationClient {
                                 }
                             }
                             tracing::info!("Trying again...");
-                            std::thread::sleep(std::time::Duration::from_secs(1));
                             continue;
                         }
                         Ok(stream) => stream,
@@ -197,11 +192,8 @@ impl ReplicationClient {
 
     fn connect_to_primary() -> Result<TcpStream, SableError> {
         let primary_address = Server::state().persistent_state().primary_address();
-        info!("Connecting to primary at: {}", primary_address);
-
         let addr = primary_address.parse::<SocketAddr>()?;
-        let stream = TcpStream::connect(addr)?;
-        info!("Successfully connected to primary at: {}", primary_address);
+        let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1))?;
         Ok(stream)
     }
 

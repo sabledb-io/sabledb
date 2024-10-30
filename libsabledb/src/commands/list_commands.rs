@@ -1,14 +1,18 @@
 use crate::{
     commands::{HandleCommandResult, Strings, TimeoutResponse},
     server::ClientState,
-    to_number,
-    types::{BlockingCommandResult, List, ListFlags, MoveResult, MultiPopResult},
-    BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, RespBuilderV2,
-    SableError,
+    storage::{
+        ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult, ListInsertResult, ListItemAt,
+        ListLenResult, ListPopResult, ListPushResult, ListRangeResult, ListRemoveResult,
+        ListTrimResult,
+    },
+    to_number, BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
+    RespBuilderV2, SableError,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::time::Duration;
 
 #[allow(dead_code)]
@@ -22,48 +26,88 @@ impl ListCommands {
         command: Rc<RedisCommand>,
         _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
-        let response_buffer = BytesMut::with_capacity(256);
+        let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
             RedisCommandName::Lpush => {
-                Self::push(client_state, command, response_buffer, ListFlags::FromLeft).await
+                Self::push(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ListFlags::FromLeft,
+                )
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lpushx => {
                 Self::push(
                     client_state,
                     command,
-                    response_buffer,
+                    &mut response_buffer,
                     ListFlags::FromLeft | ListFlags::ListMustExist,
                 )
-                .await
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpush => {
-                Self::push(client_state, command, response_buffer, ListFlags::None).await
+                Self::push(client_state, command, &mut response_buffer, ListFlags::None).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpushx => {
                 Self::push(
                     client_state,
                     command,
-                    response_buffer,
+                    &mut response_buffer,
                     ListFlags::ListMustExist,
                 )
-                .await
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Lpop => {
-                Self::pop(client_state, command, response_buffer, ListFlags::FromLeft).await
+                Self::pop(
+                    client_state,
+                    command,
+                    &mut response_buffer,
+                    ListFlags::FromLeft,
+                )
+                .await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
             RedisCommandName::Rpop => {
-                Self::pop(client_state, command, response_buffer, ListFlags::None).await
+                Self::pop(client_state, command, &mut response_buffer, ListFlags::None).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Ltrim => Self::ltrim(client_state, command, response_buffer).await,
-            RedisCommandName::Lrange => Self::lrange(client_state, command, response_buffer).await,
-            RedisCommandName::Llen => Self::llen(client_state, command, response_buffer).await,
-            RedisCommandName::Lindex => Self::lindex(client_state, command, response_buffer).await,
+            RedisCommandName::Ltrim => {
+                Self::ltrim(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            RedisCommandName::Lrange => {
+                Self::lrange(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            RedisCommandName::Llen => {
+                Self::llen(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            RedisCommandName::Lindex => {
+                Self::lindex(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Linsert => {
-                Self::linsert(client_state, command, response_buffer).await
+                Self::linsert(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lset => Self::lset(client_state, command, response_buffer).await,
-            RedisCommandName::Lpos => Self::lpos(client_state, command, response_buffer).await,
-            RedisCommandName::Lrem => Self::lrem(client_state, command, response_buffer).await,
+            RedisCommandName::Lset => {
+                Self::lset(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            RedisCommandName::Lpos => {
+                Self::lpos(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
+            RedisCommandName::Lrem => {
+                Self::lrem(client_state, command, &mut response_buffer).await?;
+                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+            }
             RedisCommandName::Lmove => Self::lmove(client_state, command, response_buffer).await,
             RedisCommandName::Lmpop => {
                 Self::lmpop(client_state, command, false, response_buffer).await
@@ -101,38 +145,37 @@ impl ListCommands {
     pub async fn push(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
+        response_buffer: &mut BytesMut,
         flags: ListFlags,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
-
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
         let key = command_arg_at!(command, 1);
 
-        let mut iter = command.args_vec().iter();
-        iter.next(); // lpush
-        iter.next(); // key
-
-        // collect the values
-        let mut values = Vec::<&BytesMut>::with_capacity(command.arg_count());
-        for value in iter {
-            values.push(value);
-        }
-
+        let values: Vec<&BytesMut> = command.args_vec()[2..].iter().collect();
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.push(key, &values, &mut response_buffer, flags)?;
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.push(key, &values, flags)? {
+            ListPushResult::Some(list_len) => {
+                // Commit the changes
+                db.commit()?;
 
-        client_state
-            .server_inner_state()
-            .wakeup_clients(key, values.len())
-            .await;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                // Build the response (integer reply)
+                builder.number_usize(response_buffer, list_len);
+
+                // And wakeup any waiting clients
+                client_state
+                    .server_inner_state()
+                    .wakeup_clients(key, values.len())
+                    .await;
+            }
+            ListPushResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListPushResult::ListNotFound => builder.number_usize(response_buffer, 0),
+        }
+        Ok(())
     }
 
     /// Atomically returns and removes the last element (tail) of the list stored at source, and
@@ -288,6 +331,9 @@ impl ListCommands {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Move **one** element from `src_list_name` list to `target_list_name`.
+    /// If `blocking_duration` is not `None` and there are no elements to be moved in the source list
+    /// the client is blocked for the duration of specified in `blocking_duration`
     async fn lmove_internal(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
@@ -298,13 +344,13 @@ impl ListCommands {
         mut response_buffer: BytesMut,
         blocking_duration: Option<Duration>,
     ) -> Result<HandleCommandResult, SableError> {
+        let builder = RespBuilderV2::default();
         let (src_flags, target_flags) = match (src_left_or_right, target_left_or_right) {
             ("left", "left") => (ListFlags::FromLeft, ListFlags::FromLeft),
             ("right", "right") => (ListFlags::FromRight, ListFlags::FromLeft),
             ("left", "right") => (ListFlags::FromLeft, ListFlags::FromRight),
             ("right", "left") => (ListFlags::FromRight, ListFlags::FromLeft),
             (_, _) => {
-                let builder = RespBuilderV2::default();
                 builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
                 return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
             }
@@ -314,40 +360,63 @@ impl ListCommands {
         let keys = vec![src_list_name, target_list_name];
         let _unused = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        let res = list
-            .move_item(src_list_name, target_list_name, src_flags, target_flags)
-            .await?;
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let moved_item = match db.pop(src_list_name, 1, src_flags)? {
+            ListPopResult::WrongType => {
+                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+            }
+            ListPopResult::Some(mut elements) => {
+                // we are popping from the back, but since the vector is expected to be of size 1
+                // it has the same effect
+                let Some(item) = elements.pop() else {
+                    return Err(SableError::InternalError(
+                        "Expected at least 1 value in array".into(),
+                    ));
+                };
+                item
+            }
+            ListPopResult::None => {
+                if let Some(blocking_duration) = blocking_duration {
+                    // blocking is requested
+                    let keys: Vec<BytesMut> = keys.iter().map(|e| (*e).clone()).collect();
+                    if let Some(rx) = Self::block_client_for_keys(client_state.clone(), &keys).await
+                    {
+                        return Ok(HandleCommandResult::Blocked((
+                            rx,
+                            blocking_duration,
+                            TimeoutResponse::NullString,
+                        )));
+                    }
+                }
+                // None blocking or failed to block -> return null string
+                builder.null_string(&mut response_buffer);
+                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+            }
+        };
 
-        let builder = RespBuilderV2::default();
-        match res {
-            MoveResult::WrongType => {
+        // Place it in the target source
+        match db.push(target_list_name, &[&moved_item], target_flags)? {
+            ListPushResult::WrongType => {
                 builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            MoveResult::Some(popped_item) => {
+            ListPushResult::ListNotFound => {
+                /* cant happen */
+                Err(SableError::InternalError(
+                    "Unexpected return value: `ListNotFound`".into(),
+                ))
+            }
+            ListPushResult::Some(_) => {
+                builder.bulk_string(&mut response_buffer, &moved_item);
+                db.commit()?;
+
+                // And wakeup any pending client
                 client_state
                     .server_inner_state()
                     .wakeup_clients(target_list_name, 1)
                     .await;
-                builder.bulk_string(&mut response_buffer, &popped_item.user_data);
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            }
-            MoveResult::None => {
-                if let Some(blocking_duration) = blocking_duration {
-                    let interersting_keys: Vec<BytesMut> =
-                        keys.iter().map(|e| (*e).clone()).collect();
-                    let rx =
-                        block_client_for_keys!(client_state, interersting_keys, response_buffer);
-                    Ok(HandleCommandResult::Blocked((
-                        rx,
-                        blocking_duration,
-                        TimeoutResponse::NullArrray,
-                    )))
-                } else {
-                    builder.null_array(&mut response_buffer);
-                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                }
             }
         }
     }
@@ -454,7 +523,7 @@ impl ListCommands {
                             if elements_to_pop == 0 {
                                 builder.error_string(
                                     &mut response_buffer,
-                                    "ERR count should be greater than 0",
+                                    "ERR numkeys should be greater than 0",
                                 );
                                 return Ok(HandleCommandResult::ResponseBufferUpdated(
                                     response_buffer,
@@ -483,38 +552,45 @@ impl ListCommands {
         };
 
         let _unused = LockManager::lock_multi(&keys, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        match list.multi_pop(&keys, count, list_flags)? {
-            MultiPopResult::WrongType => {
-                builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            }
-            MultiPopResult::Some((list_name, values)) => {
-                builder.add_array_len(&mut response_buffer, 2);
-                builder.add_bulk_string(&mut response_buffer, &list_name);
-                builder.add_array_len(&mut response_buffer, values.len());
-                for v in values {
-                    builder.add_bulk_string(&mut response_buffer, &v.user_data);
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        // Check the first lists
+        for list_name in &keys {
+            match db.pop(list_name, count, list_flags.clone())? {
+                ListPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            }
-            MultiPopResult::None => {
-                // block the client here
-                let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
-                if allow_blocking {
-                    let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
-                    let rx = block_client_for_keys!(client_state, keys, response_buffer);
-                    Ok(HandleCommandResult::Blocked((
-                        rx,
-                        Duration::from_millis(timeout_ms as u64),
-                        TimeoutResponse::NullArrray,
-                    )))
-                } else {
-                    builder.null_array(&mut response_buffer);
-                    Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+                ListPopResult::Some(items_removed) => {
+                    builder.add_array_len(&mut response_buffer, 2);
+                    builder.add_bulk_string(&mut response_buffer, list_name);
+                    builder.add_array_len(&mut response_buffer, items_removed.len());
+                    for v in &items_removed {
+                        builder.add_bulk_string(&mut response_buffer, v);
+                    }
+                    db.commit()?;
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
                 }
+                ListPopResult::None => {}
             }
         }
+
+        // If we got here, there were no lists that we could "pop" items from
+        let allow_blocking = allow_blocking && !client_state.is_txn_state_exec();
+        if allow_blocking {
+            let keys: Vec<BytesMut> = keys.iter().map(|x| (*x).clone()).collect();
+            if let Some(rx) = Self::block_client_for_keys(client_state, &keys).await {
+                return Ok(HandleCommandResult::Blocked((
+                    rx,
+                    Duration::from_millis(timeout_ms as u64),
+                    TimeoutResponse::NullArrray,
+                )));
+            }
+        }
+
+        // Blocking is not allowed - return null string
+        builder.null_array(&mut response_buffer);
+        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
     }
 
     /// Removes and returns the first elements of the list stored at key.
@@ -524,33 +600,47 @@ impl ListCommands {
     pub async fn pop(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
+        response_buffer: &mut BytesMut,
         flags: ListFlags,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            2,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
 
+        let builder = RespBuilderV2::default();
         let key = command_arg_at!(command, 1);
-        let count = if command.arg_count() == 3 {
-            to_number!(
-                command_arg_at!(command, 2),
-                usize,
-                &mut response_buffer,
-                Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-            )
+        let has_count = command.arg_count() == 3;
+        let count = if has_count {
+            to_number!(command_arg_at!(command, 2), usize, response_buffer, Ok(()))
         } else {
             1usize
         };
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.pop(key, count, &mut response_buffer, flags)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let items = match db.pop(key, count, flags)? {
+            ListPopResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListPopResult::None => {
+                builder_return_null_reply!(builder, response_buffer, has_count);
+            }
+            ListPopResult::Some(items) => items,
+        };
+
+        if !has_count {
+            let item = items.first().ok_or(SableError::InternalError(
+                "Expected exactly 1 item in popped items!".into(),
+            ))?;
+            builder.add_bulk_string(response_buffer, item);
+        } else {
+            // when count is provided, we always return an array, even if it is a single element
+            builder.add_array_len(response_buffer, items.len());
+            for item in &items {
+                builder.add_bulk_string(response_buffer, item);
+            }
+        }
+        db.commit()?;
+        Ok(())
     }
 
     pub async fn blocking_pop(
@@ -569,7 +659,7 @@ impl ListCommands {
         let mut iter = command.args_vec().iter().peekable(); // points to the command
         iter.next(); // blpop
 
-        // Parse the arguments, extracting the lists + timeout
+        // Parse the arguments, extracting the lists + time-out
         let mut lists = Vec::<&BytesMut>::new();
         let mut timeout: Option<&BytesMut> = None;
         loop {
@@ -577,7 +667,7 @@ impl ListCommands {
             match (key1, key2) {
                 (Some(key1), Some(_)) => lists.push(key1),
                 (Some(key1), None) => {
-                    // last item, this is our timeout
+                    // last item, this is our time-out
                     timeout = Some(key1);
                     break;
                 }
@@ -585,21 +675,35 @@ impl ListCommands {
             }
         }
 
-        // Sanity, shouldn't happen but...
+        // Sanity, should not happen but...
+        let builder = RespBuilderV2::default();
         let Some(timeout) = timeout else {
-            let builder = RespBuilderV2::default();
             builder.error_string(
                 &mut response_buffer,
-                "ERR wrong number of arguments for 'blpop' command",
+                &format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    command.main_command()
+                ),
             );
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         };
 
+        // Check that a valid number was provided
+        let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
+            builder.error_string(&mut response_buffer, Strings::ZERR_TIMEOUT_NOT_FLOAT);
+            return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        };
+
+        // convert to milliseconds and round it
+        let timeout_ms = (timeout_secs * 1000.0) as u64;
+
         if lists.is_empty() {
-            let builder = RespBuilderV2::default();
             builder.error_string(
                 &mut response_buffer,
-                "ERR wrong number of arguments for 'blpop' command",
+                &format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    command.main_command()
+                ),
             );
             return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
         }
@@ -608,38 +712,45 @@ impl ListCommands {
         // if all the lists are empty, block the client
         let _unused =
             LockManager::lock_multi(&lists, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        if let BlockingCommandResult::Ok =
-            list.blocking_pop(&lists, 1, &mut response_buffer, flags)?
-        {
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        } else {
-            if client_state.is_txn_state_exec() {
-                // do not block the client
-                let builder = RespBuilderV2::default();
-                builder.null_array(&mut response_buffer);
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        for list_name in &lists {
+            match db.pop(list_name, 1, flags.clone())? {
+                ListPopResult::WrongType => {
+                    builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                ListPopResult::Some(items_removed) => {
+                    // Array of 2 elements is expected. the list name + the popped item
+                    builder.add_array_len(&mut response_buffer, 2);
+                    builder.add_bulk_string(&mut response_buffer, list_name);
+                    let Some(item) = items_removed.first() else {
+                        return Err(SableError::InternalError(
+                            "Expected at least 1 value in array".into(),
+                        ));
+                    };
+                    builder.add_bulk_string(&mut response_buffer, item);
+                    db.commit()?;
+                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                }
+                ListPopResult::None => {}
             }
-            // Block the client
-            let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
-            let rx = block_client_for_keys!(client_state, keys, response_buffer);
+        }
 
-            // Notify the caller
-            let Some(timeout_secs) = BytesMutUtils::parse::<f64>(timeout) else {
-                let builder = RespBuilderV2::default();
-                builder.error_string(
-                    &mut response_buffer,
-                    "ERR timeout is not a float or out of range",
-                );
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
-            };
-
-            let timeout_ms = (timeout_secs * 1000.0) as u64; // convert to milliseconds and round it
+        // If we reached here, it means that we failed to pop any item from any list => block the client
+        let keys: Vec<BytesMut> = lists.iter().map(|e| (*e).clone()).collect();
+        if let Some(rx) = Self::block_client_for_keys(client_state, &keys).await {
+            // client is successfully blocked
             Ok(HandleCommandResult::Blocked((
                 rx,
                 std::time::Duration::from_millis(timeout_ms),
                 TimeoutResponse::NullArrray,
             )))
+        } else {
+            // failed to block the client (e.g. active txn in the current client)
+            // return null array
+            builder.null_array(&mut response_buffer);
+            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
         }
     }
 
@@ -649,33 +760,30 @@ impl ListCommands {
     pub async fn ltrim(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
 
         let key = command_arg_at!(command, 1);
-        let start = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
-        let end = to_number!(
-            command_arg_at!(command, 3),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let start = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
+        let end = to_number!(command_arg_at!(command, 3), isize, response_buffer, Ok(()));
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.ltrim(key, start, end, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.trim(key, start, end)? {
+            ListTrimResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListTrimResult::NotFound => {
+                builder.ok(response_buffer);
+            }
+            ListTrimResult::Ok => {
+                builder.ok(response_buffer);
+                db.commit()?;
+            }
+        }
+        Ok(())
     }
 
     /// Returns the specified elements of the list stored at key. The offsets start and stop are zero-based indexes,
@@ -685,33 +793,30 @@ impl ListCommands {
     pub async fn lrange(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
-
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
         let key = command_arg_at!(command, 1);
-        let start = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
-        let end = to_number!(
-            command_arg_at!(command, 3),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let start = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
+        let end = to_number!(command_arg_at!(command, 3), isize, response_buffer, Ok(()));
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.lrange(key, start, end, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.range(key, start, end)? {
+            ListRangeResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListRangeResult::InvalidRange => {
+                builder_return_empty_array!(builder, response_buffer);
+            }
+            ListRangeResult::Some(items) => {
+                builder.add_array_len(response_buffer, items.len());
+                for item in &items {
+                    builder.add_bulk_string(response_buffer, item);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns the length of the list stored at key. If key does not exist, it is interpreted
@@ -720,21 +825,25 @@ impl ListCommands {
     pub async fn llen(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            2,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 2, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
 
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.len(key, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.len(key)? {
+            ListLenResult::Some(len) => builder.number_usize(response_buffer, len),
+            ListLenResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListLenResult::NotFound => {
+                builder.number_usize(response_buffer, 0);
+            }
+        }
+        Ok(())
     }
 
     /// Inserts element in the list stored at key either before or after the reference value pivot.
@@ -744,32 +853,42 @@ impl ListCommands {
     pub async fn linsert(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            5,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 5, response_buffer);
+
         let key = command_arg_at!(command, 1);
         let orientation = command_arg_at_as_str!(command, 2);
         let pivot = command_arg_at!(command, 3);
         let element = command_arg_at!(command, 4);
 
-        let flags = match orientation.as_str() {
-            "after" => ListFlags::InsertAfter,
-            "before" => ListFlags::InsertBefore,
+        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        let res = match orientation.as_str() {
+            "after" => db.insert_after(key, element, pivot)?,
+            "before" => db.insert_before(key, element, pivot)?,
             _ => {
-                let builder = RespBuilderV2::default();
-                builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                builder_return_syntax_error!(builder, response_buffer);
             }
         };
-        let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.linsert(key, element, pivot, &mut response_buffer, flags)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+
+        db.commit()?;
+        match res {
+            ListInsertResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListInsertResult::PivotNotFound => {
+                builder.number_i64(response_buffer, -1);
+            }
+            ListInsertResult::ListNotFound => {
+                builder.number_i64(response_buffer, 0);
+            }
+            ListInsertResult::Some(len) => {
+                builder.number_usize(response_buffer, len);
+            }
+        }
+        Ok(())
     }
 
     /// Returns the element at index index in the list stored at key.
@@ -780,29 +899,29 @@ impl ListCommands {
     pub async fn lindex(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
-
-        let index = to_number!(
-            index,
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let index = to_number!(index, isize, response_buffer, Ok(()));
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.index(key, index, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.item_at(key, index)? {
+            ListItemAt::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListItemAt::ListNotFound | ListItemAt::OutOfRange => {
+                builder_return_null_string!(builder, response_buffer);
+            }
+            ListItemAt::Some(item) => {
+                builder.bulk_string(response_buffer, &item);
+            }
+        }
+        Ok(())
     }
 
     /// The command returns the index of matching elements inside a Redis list.
@@ -813,14 +932,9 @@ impl ListCommands {
     pub async fn lpos(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            3,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
 
         let key = command_arg_at!(command, 1);
         let value = command_arg_at!(command, 2);
@@ -830,7 +944,7 @@ impl ListCommands {
         iter.next(); // key
         iter.next(); // element
 
-        let mut rank: Option<i32> = None;
+        let mut rank: Option<isize> = None;
         let mut count: Option<usize> = None;
         let mut maxlen: Option<usize> = None;
 
@@ -840,60 +954,63 @@ impl ListCommands {
             let keyword_lowercase = BytesMutUtils::to_string(arg);
             match keyword_lowercase.as_str() {
                 "rank" => {
-                    let value = to_number!(
-                        value,
-                        i32,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
-
-                    // rank can not be 0
-                    if value == 0 {
-                        builder.error_string(&mut response_buffer, Strings::LIST_RANK_INVALID);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
-                    }
-                    rank = Some(value);
+                    rank = Some(to_number!(value, isize, response_buffer, Ok(())));
                 }
                 "count" => {
-                    let value = to_number!(
-                        value,
-                        i64,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
+                    let value = to_number!(value, i64, response_buffer, Ok(()));
                     if value < 0 {
-                        builder.error_string(&mut response_buffer, Strings::COUNT_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                        builder.error_string(response_buffer, Strings::COUNT_CANT_BE_NEGATIVE);
+                        return Ok(());
                     }
                     count = Some(value.try_into().unwrap_or(1));
                 }
                 "maxlen" => {
-                    let value = to_number!(
-                        value,
-                        i64,
-                        &mut response_buffer,
-                        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-                    );
-
+                    let value = to_number!(value, i64, response_buffer, Ok(()));
                     if value < 0 {
-                        builder
-                            .error_string(&mut response_buffer, Strings::MAXLNE_CANT_BE_NEGATIVE);
-                        return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                        builder.error_string(response_buffer, Strings::MAXLNE_CANT_BE_NEGATIVE);
+                        return Ok(());
                     }
                     maxlen = Some(value.try_into().unwrap_or(0));
                 }
                 _ => {
-                    builder.error_string(&mut response_buffer, Strings::SYNTAX_ERROR);
-                    return Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer));
+                    builder_return_syntax_error!(builder, response_buffer);
                 }
             }
         }
 
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
+        let db = ListDb::with_storage(client_state.database(), client_state.database_id());
 
-        list.lpos(key, value, rank, count, maxlen, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        match db.index_of(key, value, rank, count, maxlen)? {
+            ListIndexOfResult::InvalidRank => {
+                builder.error_string(response_buffer, Strings::LIST_RANK_INVALID);
+                return Ok(());
+            }
+            ListIndexOfResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListIndexOfResult::None if count.is_some() => {
+                builder_return_null_array!(builder, response_buffer);
+            }
+            ListIndexOfResult::None => {
+                builder_return_null_string!(builder, response_buffer);
+            }
+            ListIndexOfResult::Some(indexes) if count.is_some() => {
+                builder.add_array_len(response_buffer, indexes.len());
+                for indx in indexes {
+                    builder.add_number(response_buffer, indx, false);
+                }
+            }
+            ListIndexOfResult::Some(indexes) => {
+                let Some(index) = indexes.first() else {
+                    return Err(SableError::InternalError(
+                        "Expected at least one index".into(),
+                    ));
+                };
+                builder.number_usize(response_buffer, *index);
+            }
+        }
+        Ok(())
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
@@ -901,31 +1018,36 @@ impl ListCommands {
     pub async fn lset(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
         // extract variables from the command
         let key = command_arg_at!(command, 1);
         let index = command_arg_at!(command, 2);
         let value = command_arg_at!(command, 3);
-
-        let index = to_number!(
-            index,
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let index = to_number!(index, isize, response_buffer, Ok(()));
 
         // Lock and set
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.set(key, index, value.clone(), &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+        let builder = RespBuilderV2::default();
+        match db.update_by_index(key, value, index)? {
+            ListInsertAtResult::Ok => builder.ok(response_buffer),
+            ListInsertAtResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListInsertAtResult::NotFound => {
+                builder.error_string(response_buffer, Strings::NO_SUCH_KEY);
+                return Ok(());
+            }
+            ListInsertAtResult::InvalidIndex => {
+                builder.error_string(response_buffer, Strings::INDEX_OUT_OF_BOUNDS);
+                return Ok(());
+            }
+        }
+        db.commit()?;
+        Ok(())
     }
 
     /// Sets the list element at index to element. For more information on the index argument, see `lindex`.
@@ -933,29 +1055,49 @@ impl ListCommands {
     pub async fn lrem(
         client_state: Rc<ClientState>,
         command: Rc<RedisCommand>,
-        mut response_buffer: BytesMut,
-    ) -> Result<HandleCommandResult, SableError> {
-        expect_args_count!(
-            command,
-            4,
-            &mut response_buffer,
-            HandleCommandResult::ResponseBufferUpdated(response_buffer)
-        );
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 4, response_buffer);
+
         // extract variables from the command
         let key = command_arg_at!(command, 1);
-        let count = to_number!(
-            command_arg_at!(command, 2),
-            i32,
-            &mut response_buffer,
-            Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
-        );
+        let count = to_number!(command_arg_at!(command, 2), isize, response_buffer, Ok(()));
         let element = command_arg_at!(command, 3);
 
         // Lock and set
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
-        let mut list = List::with_storage(client_state.database(), client_state.database_id());
-        list.remove(key, Some(element), count, &mut response_buffer)?;
-        Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
+        let mut db = ListDb::with_storage(client_state.database(), client_state.database_id());
+
+        let builder = RespBuilderV2::default();
+        match db.remove_items(key, count, element)? {
+            ListRemoveResult::WrongType => {
+                builder_return_wrong_type!(builder, response_buffer);
+            }
+            ListRemoveResult::Some(count) => {
+                builder.number_usize(response_buffer, count);
+            }
+        }
+        db.commit()?;
+        Ok(())
+    }
+
+    /// Block `client_state` for `keys` and return the channel on which the client should wait
+    async fn block_client_for_keys(
+        client_state: Rc<ClientState>,
+        keys: &[BytesMut],
+    ) -> Option<TokioReceiver<u8>> {
+        let client_state_clone = client_state.clone();
+        match client_state
+            .server_inner_state()
+            .block_client(client_state.id(), keys, client_state_clone)
+            .await
+        {
+            BlockClientResult::Blocked(rx) => Some(rx),
+            BlockClientResult::TxnActive => {
+                // can't block the client due to an active transaction
+                None
+            }
+        }
     }
 }
 
@@ -1066,13 +1208,13 @@ mod tests {
         (vec!["ltrim", "ltrim_list_not_existing", "1", "2"], "+OK\r\n"),
         ], "ltrim"; "ltrim")]
     #[test_case(vec![
-        (vec!["lrange", "no_such_list", "0", "-1"], "*-1\r\n"),
+        (vec!["lrange", "no_such_list", "0", "-1"], "*0\r\n"),
         (vec!["rpush", "lrange_list", "one", "two", "three"], ":3\r\n"),
         (vec!["lrange", "lrange_list", "1", "-1"], "*2\r\n$3\r\ntwo\r\n$5\r\nthree\r\n"),
         (vec!["lrange", "lrange_list"], "-ERR wrong number of arguments for 'lrange' command\r\n"),
         (vec!["llen", "lrange_list"], ":3\r\n"),
         (vec!["lpos", "lrange_list", "one"], ":0\r\n"),
-        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "*-1\r\n"),
+        (vec!["lrange", "lrange_list_not_existing", "1", "2"], "*0\r\n"),
         ], "lrange"; "lrange")]
     #[test_case(vec![
         (vec!["rpush", "lmove_list1", "a", "b", "c"], ":3\r\n"),
@@ -1136,7 +1278,7 @@ mod tests {
         (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "sdsd"], "-ERR timeout is not a float or out of range\r\n"),
         (vec!["llen", "brpoplpush_new_list"], ":3\r\n"),
         (vec!["lrange", "brpoplpush_new_list", "0", "-1"], "*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"),
-        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "*-1\r\n"),
+        (vec!["brpoplpush", "brpoplpush_list1", "brpoplpush_new_list", "1"], "$-1\r\n"),
         ], "brpoplpush"; "brpoplpush")]
     #[test_case(vec![
         (vec!["rpush", "blpop_list1", "a", "b", "c"], ":3\r\n"),
@@ -1180,13 +1322,13 @@ mod tests {
         (vec!["lrange", "list1", "0", "-1"], "*6\r\n$1\r\n_\r\n$1\r\na\r\n$1\r\nb\r\n$3\r\nb.1\r\n$1\r\nc\r\n$1\r\nd\r\n"),
         ], "linsert"; "linsert")]
     #[test_case(vec![
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"),
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"),
         (vec!["rpush", "blmove_src", "a", "b", "c"], ":3\r\n"),
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\na\r\n"), // a
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nb\r\n"), // b
         (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$1\r\nc\r\n"), // c
         (vec!["lrange", "blmove_target", "0", "-1"], "*3\r\n$1\r\nc\r\n$1\r\nb\r\n$1\r\na\r\n"),
-        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "*-1\r\n"), // timeout
+        (vec!["blmove", "blmove_src", "blmove_target", "left", "left", "0.1"], "$-1\r\n"), // timeout
         ], "blmove"; "blmove")]
     #[test_case(vec![
         (vec!["rpush", "blmpop_list1", "a", "b", "c"], ":3\r\n"),

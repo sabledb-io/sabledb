@@ -5,7 +5,6 @@ pub mod net;
 pub mod replication;
 pub mod server;
 pub mod storage;
-pub mod types;
 pub mod utils;
 pub mod integtests;
 

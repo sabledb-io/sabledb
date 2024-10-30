@@ -319,6 +319,40 @@ macro_rules! builder_return_empty_array {
 }
 
 #[macro_export]
+macro_rules! builder_return_null_array {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.null_array($response_buffer);
+        return Ok(());
+    };
+}
+
+/// Return a null response.
+///
+/// Params:
+/// - `$builder` and instance of `RespBuilderV2`
+/// - `$response_buffer` the response will be written into this buffer
+/// - `$arr_null` if set to true, a null array is returned, else return a null string
+#[macro_export]
+macro_rules! builder_return_null_reply {
+    ($builder:expr, $response_buffer:expr, $arr_null:expr) => {
+        if $arr_null {
+            $builder.null_array($response_buffer);
+        } else {
+            $builder.null_string($response_buffer);
+        }
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_null_string {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.null_string($response_buffer);
+        return Ok(());
+    };
+}
+
+#[macro_export]
 macro_rules! builder_return_syntax_error {
     ($builder:expr, $response_buffer:expr) => {
         $builder.error_string($response_buffer, Strings::SYNTAX_ERROR);
@@ -370,6 +404,14 @@ macro_rules! builder_return_at_least_1_key {
             )
             .as_str(),
         );
+        return Ok(());
+    };
+}
+
+#[macro_export]
+macro_rules! builder_return_keys_must_be_gt_0 {
+    ($builder:expr, $response_buffer:expr) => {
+        $builder.error_string($response_buffer, Strings::ERR_NUM_KEYS_MUST_BE_GT_ZERO);
         return Ok(());
     };
 }
@@ -479,28 +521,6 @@ macro_rules! zset_md_or_0_builder {
             ZSetGetMetadataResult::Some(md) => md,
         };
         md
-    }};
-}
-
-/// Block `$client_state` for keys `$interersting_keys`. In case of failure to block
-/// the client, return `NullArray`
-macro_rules! block_client_for_keys {
-    ($client_state:expr, $interersting_keys:expr, $response_buffer:expr) => {{
-        let client_state_clone = $client_state.clone();
-        let rx = match $client_state
-            .server_inner_state()
-            .block_client($client_state.id(), &$interersting_keys, client_state_clone)
-            .await
-        {
-            BlockClientResult::Blocked(rx) => rx,
-            BlockClientResult::TxnActive => {
-                // can't block the client due to an active transaction
-                let builder = RespBuilderV2::default();
-                builder.null_array(&mut $response_buffer);
-                return Ok(HandleCommandResult::ResponseBufferUpdated($response_buffer));
-            }
-        };
-        rx
     }};
 }
 

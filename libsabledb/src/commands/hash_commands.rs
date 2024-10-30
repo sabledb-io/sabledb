@@ -9,7 +9,6 @@ use crate::{
         GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
         HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
-    types::List,
     utils::{PatternMatcher, RespBuilderV2},
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
     SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
