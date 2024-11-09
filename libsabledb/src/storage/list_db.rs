@@ -28,13 +28,20 @@ pub struct ListFlags: u32  {
 
 #[derive(Clone)]
 struct ListItemKey {
+    pub db_id: u16,
+    pub slot: u16,
     pub list_id: u64,
     pub item_id: u64,
 }
 
 impl ListItemKey {
-    pub fn new(list_id: u64, item_id: u64) -> Self {
-        ListItemKey { list_id, item_id }
+    pub fn new(list: &List, item_id: u64) -> Self {
+        ListItemKey {
+            db_id: list.database_id(),
+            slot: list.slot(),
+            list_id: list.id(),
+            item_id,
+        }
     }
 }
 
@@ -283,6 +290,8 @@ impl FromBytes for ListItemValue {
 impl ToU8Writer for ListItemKey {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
         builder.write_key_type(crate::KeyType::ListItem);
+        self.db_id.to_writer(builder);
+        self.slot.to_writer(builder);
         self.list_id.to_writer(builder);
         self.item_id.to_writer(builder);
     }
@@ -857,7 +866,7 @@ impl<'a> ListDb<'a> {
         value: &BytesMut,
         pos: InsertPosition,
     ) -> Result<ListInsertInternalResult, SableError> {
-        let new_item_key = ListItemKey::new(list.id(), self.store.generate_id());
+        let new_item_key = ListItemKey::new(list, self.store.generate_id());
         let new_item_value = ListItemValue::with_value(value.clone());
         let mut new_item = ListItem::new(new_item_key, new_item_value);
 
@@ -1148,7 +1157,7 @@ impl<'a> ListDb<'a> {
         list: &List,
         item_id: u64,
     ) -> Result<Option<ListItem>, SableError> {
-        let key = ListItemKey::new(list.id(), item_id);
+        let key = ListItemKey::new(list, item_id);
         let Some(raw_value) = self.cache.get(&key.to_bytes())? else {
             return Ok(None);
         };
