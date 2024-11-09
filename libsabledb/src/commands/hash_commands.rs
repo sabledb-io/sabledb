@@ -6,7 +6,7 @@ use crate::{
     parse_string_to_number,
     server::ClientState,
     storage::{
-        GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
+        FindHashResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
         HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
     utils::{PatternMatcher, RespBuilderV2},
@@ -399,22 +399,22 @@ impl HashCommands {
         // multiple db access -> use exclusive lock
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
-        let hash_md = match hash_db.hash_metadata(key)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match hash_db.find_hash(key)? {
+            FindHashResult::WrongType => {
                 writer.error_string(Strings::WRONGTYPE).await?;
                 writer.flush().await?;
                 return Ok(());
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 writer.empty_array().await?;
                 writer.flush().await?;
                 return Ok(());
             }
-            GetHashMetadataResult::Some(hash_md) => hash_md,
+            FindHashResult::Some(hash_md) => hash_md,
         };
 
         // empty hash? empty array
-        if hash_md.is_empty() {
+        if hash.is_empty() {
             writer.empty_array().await?;
             writer.flush().await?;
             return Ok(());
@@ -423,8 +423,7 @@ impl HashCommands {
         // Write the length
         writer
             .add_array_len(
-                hash_md
-                    .len()
+                hash.len()
                     .saturating_mul(if output_type == HGetAllOutput::Both {
                         2
                     } else {
@@ -435,7 +434,7 @@ impl HashCommands {
             )
             .await?;
 
-        let prefix = hash_md.prefix();
+        let prefix = hash.item_prefix();
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         while db_iter.valid() {
             // get the key & value
@@ -448,16 +447,19 @@ impl HashCommands {
             }
 
             // extract the key from the row data
-            let hash_field_key = HashFieldKey::from_bytes(key)?;
+            let Ok(hash_field_key) = HashFieldKey::from_bytes(key) else {
+                panic!("failed to construct hashfieldkey!");
+            };
+
             match output_type {
                 HGetAllOutput::Keys => {
-                    writer.add_bulk_string(hash_field_key.key()).await?;
+                    writer.add_bulk_string(hash_field_key.user_key()).await?;
                 }
                 HGetAllOutput::Values => {
                     writer.add_bulk_string(value).await?;
                 }
                 HGetAllOutput::Both => {
-                    writer.add_bulk_string(hash_field_key.key()).await?;
+                    writer.add_bulk_string(hash_field_key.user_key()).await?;
                     writer.add_bulk_string(value).await?;
                 }
             }
@@ -666,14 +668,14 @@ impl HashCommands {
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
         // determine the array length
-        let hash_md = match hash_db.hash_metadata(key)? {
-            GetHashMetadataResult::Some(hash_md) => hash_md,
-            GetHashMetadataResult::NotFound => {
+        let hash = match hash_db.find_hash(key)? {
+            FindHashResult::Some(hash_md) => hash_md,
+            FindHashResult::NotFound => {
                 builder.null_string(&mut response_buffer);
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
             }
-            GetHashMetadataResult::WrongType => {
+            FindHashResult::WrongType => {
                 builder.error_string(&mut response_buffer, Strings::WRONGTYPE);
                 tx.write_all(&response_buffer).await?;
                 return Ok(());
@@ -684,7 +686,7 @@ impl HashCommands {
         let count = if allow_dups {
             count
         } else {
-            std::cmp::min(count, hash_md.len() as i64)
+            std::cmp::min(count, hash.len() as i64)
         };
 
         // fast bail out
@@ -694,7 +696,7 @@ impl HashCommands {
             return Ok(());
         }
 
-        let possible_indexes = (0..hash_md.len() as usize).collect::<Vec<usize>>();
+        let possible_indexes = (0..hash.len() as usize).collect::<Vec<usize>>();
 
         // select the indices we want to pick
         let mut indices =
@@ -714,7 +716,7 @@ impl HashCommands {
 
         // create an iterator and place at at the start of the hash fields
         let mut curidx = 0usize;
-        let prefix = hash_md.prefix();
+        let prefix = hash.item_prefix();
 
         let max_response_buffer = client_state
             .server_inner_state()
@@ -744,7 +746,7 @@ impl HashCommands {
 
             while let Some(wanted_index) = indices.front() {
                 if curidx.eq(wanted_index) {
-                    builder.add_bulk_string(&mut response_buffer, hash_field_key.key());
+                    builder.add_bulk_string(&mut response_buffer, hash_field_key.user_key());
                     if with_values {
                         builder.add_bulk_string(&mut response_buffer, value);
                     }
@@ -845,20 +847,20 @@ impl HashCommands {
         let _unused = LockManager::lock(hash_name, client_state.clone(), command.clone()).await?;
         let hash_db = HashDb::with_storage(client_state.database(), client_state.database_id());
 
-        let hash_md = match hash_db.hash_metadata(hash_name)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match hash_db.find_hash(hash_name)? {
+            FindHashResult::WrongType => {
                 resp_writer.error_string(Strings::WRONGTYPE).await?;
                 resp_writer.flush().await?;
                 return Ok(());
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 resp_writer.add_array_len(2).await?;
                 resp_writer.add_number(0).await?;
                 resp_writer.add_empty_array().await?;
                 resp_writer.flush().await?;
                 return Ok(());
             }
-            GetHashMetadataResult::Some(md) => md,
+            FindHashResult::Some(md) => md,
         };
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
@@ -883,10 +885,10 @@ impl HashCommands {
         let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
             BytesMut::from(saved_prefix)
         } else {
-            hash_md.prefix()
+            hash.item_prefix()
         };
 
-        let hash_prefix = hash_md.prefix();
+        let hash_prefix = hash.item_prefix();
 
         let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
         let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
@@ -903,7 +905,7 @@ impl HashCommands {
 
             // extract the key from the row data
             let hash_field_key = HashFieldKey::from_bytes(key)?;
-            let item_user_key = hash_field_key.key();
+            let item_user_key = hash_field_key.user_key();
             let item_user_value = value;
 
             // Collect matches

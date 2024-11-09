@@ -63,6 +63,11 @@ impl FromU8Reader for PrimaryKeyMetadata {
 impl PrimaryKeyMetadata {
     pub const SIZE: usize = KeyPrefix::SIZE;
 
+    /// Return the common (type: `KeyPrefix`) property of this primary key
+    pub fn common(&self) -> &KeyPrefix {
+        &self.common
+    }
+
     pub fn from_bytes(buf: &[u8]) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
         Self::from_reader(&mut reader).ok_or(SableError::SerialisationError)
@@ -95,6 +100,14 @@ impl PrimaryKeyMetadata {
     pub fn new(user_key: &BytesMut, db_id: u16) -> PrimaryKeyMetadata {
         PrimaryKeyMetadata::default()
             .with_type(KeyType::PrimaryKey)
+            .with_db_id(db_id)
+            .with_key(user_key)
+    }
+
+    /// Create a new primary key
+    pub fn new_with_type(key_type: KeyType, user_key: &BytesMut, db_id: u16) -> PrimaryKeyMetadata {
+        PrimaryKeyMetadata::default()
+            .with_type(key_type)
             .with_db_id(db_id)
             .with_key(user_key)
     }

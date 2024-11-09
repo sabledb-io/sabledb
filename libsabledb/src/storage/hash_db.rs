@@ -2,20 +2,40 @@
 use crate::{
     metadata::{Bookkeeping, HashFieldKey, HashValueMetadata, ValueType},
     storage::DbWriteCache,
-    CommonValueMetadata, PrimaryKeyMetadata, SableError, StorageAdapter, U8ArrayBuilder,
-    U8ArrayReader,
+    CommonValueMetadata, KeyType, PrimaryKeyMetadata, SableError, StorageAdapter, ToU8Writer,
+    U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
-// Internal enum
-#[derive(Debug, PartialEq, Eq)]
-pub enum GetHashMetadataResult {
-    /// An entry exists in the db for the given key, but for a different type
-    WrongType,
-    /// A match was found
-    Some(HashValueMetadata),
-    /// No entry exist
-    NotFound,
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Hash {
+    pub key: PrimaryKeyMetadata,
+    pub value: HashValueMetadata,
+}
+
+impl Hash {
+    /// Return a prefix suitable for iterating all items owned by this hash
+    pub fn item_prefix(&self) -> BytesMut {
+        let mut buf = BytesMut::with_capacity(crate::metadata::KeyPrefix::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buf);
+        self.key.common().to_writer(&mut builder);
+        buf
+    }
+
+    /// Does this hash has items?
+    pub fn is_empty(&self) -> bool {
+        self.value.is_empty()
+    }
+
+    /// Return the hash length
+    pub fn len(&self) -> u64 {
+        self.value.len()
+    }
+
+    /// Return the hash UID
+    pub fn id(&self) -> u64 {
+        self.value.id()
+    }
 }
 
 /// `HashDb::put` result
@@ -87,6 +107,17 @@ enum PutFieldResult {
     Updated,
 }
 
+// Internal
+#[derive(Debug, PartialEq, Eq)]
+pub enum FindHashResult {
+    /// An entry exists in the db for the given key, but for a different type
+    WrongType,
+    /// A match was found
+    Some(Hash),
+    /// No entry exist
+    NotFound,
+}
+
 /// Hash DB wrapper. This class is specialized in reading/writing hash
 /// (commands from the `HSET`, `HLEN` etc family)
 ///
@@ -120,26 +151,26 @@ impl<'a> HashDb<'a> {
         }
 
         // locate the hash
-        let mut hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => return Ok(HashPutResult::WrongType),
-            GetHashMetadataResult::NotFound => {
+        let mut hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => return Ok(HashPutResult::WrongType),
+            FindHashResult::NotFound => {
                 // Create a entry
-                self.create_hash_metadata(user_key)?
+                self.create_hash(user_key)?
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
 
         let mut items_added = 0usize;
         for (key, value) in field_vals {
             // we overide the field's value
-            match self.put_hash_field_value(hash.id(), key, value)? {
+            match self.put_hash_field_value(&hash, key, value)? {
                 PutFieldResult::Updated => {}
                 PutFieldResult::Inserted => items_added = items_added.saturating_add(1),
             }
         }
 
-        hash.incr_len_by(items_added as u64);
-        self.put_hash_metadata(user_key, &hash)?;
+        hash.value.incr_len_by(items_added as u64);
+        self.put_hash(user_key, &hash)?;
 
         // flush the changes
         self.flush_cache()?;
@@ -158,19 +189,19 @@ impl<'a> HashDb<'a> {
         }
 
         // locate the hash
-        let hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => {
                 return Ok(HashGetMultiResult::WrongType);
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 return Ok(HashGetMultiResult::None);
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
 
         let mut values = Vec::<Option<BytesMut>>::with_capacity(fields.len());
         for field in fields {
-            values.push(self.get_hash_field_value(hash.id(), field)?);
+            values.push(self.get_hash_field_value(&hash, field)?);
         }
 
         Ok(HashGetMultiResult::Some(values))
@@ -179,17 +210,17 @@ impl<'a> HashDb<'a> {
     /// Return the value of a hash field
     pub fn get(&self, user_key: &BytesMut, field: &BytesMut) -> Result<HashGetResult, SableError> {
         // locate the hash
-        let hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => {
                 return Ok(HashGetResult::WrongType);
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 return Ok(HashGetResult::NotFound);
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
 
-        let Some(value) = self.get_hash_field_value(hash.id(), field)? else {
+        let Some(value) = self.get_hash_field_value(&hash, field)? else {
             return Ok(HashGetResult::FieldNotFound);
         };
 
@@ -203,30 +234,30 @@ impl<'a> HashDb<'a> {
         fields: &[&BytesMut],
     ) -> Result<HashDeleteResult, SableError> {
         // locate the hash
-        let mut hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => {
+        let mut hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => {
                 return Ok(HashDeleteResult::WrongType);
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 return Ok(HashDeleteResult::Some(0));
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
 
         let mut items_deleted = 0usize;
         for field in fields {
-            if self.contains_hash_field(hash.id(), field)? {
-                self.delete_hash_field_key(hash.id(), field)?;
+            if self.contains_hash_field(&hash, field)? {
+                self.delete_hash_field_key(&hash, field)?;
                 items_deleted = items_deleted.saturating_add(1);
             }
         }
 
         // update the hash metadata
-        hash.decr_len_by(items_deleted as u64);
-        if hash.is_empty() {
-            self.delete_hash_metadata(user_key, &hash)?;
+        hash.value.decr_len_by(items_deleted as u64);
+        if hash.value.is_empty() {
+            self.delete_hash(user_key, &hash)?;
         } else {
-            self.put_hash_metadata(user_key, &hash)?;
+            self.put_hash(user_key, &hash)?;
         }
 
         // flush the changes
@@ -237,14 +268,14 @@ impl<'a> HashDb<'a> {
 
     /// Return the size of the hash
     pub fn len(&self, user_key: &BytesMut) -> Result<HashLenResult, SableError> {
-        let hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => {
                 return Ok(HashLenResult::WrongType);
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 return Ok(HashLenResult::Some(0));
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
         Ok(HashLenResult::Some(hash.len() as usize))
     }
@@ -256,39 +287,42 @@ impl<'a> HashDb<'a> {
         user_field: &BytesMut,
     ) -> Result<HashExistsResult, SableError> {
         // locate the hash
-        let hash = match self.hash_metadata(user_key)? {
-            GetHashMetadataResult::WrongType => {
+        let hash = match self.find_hash(user_key)? {
+            FindHashResult::WrongType => {
                 return Ok(HashExistsResult::WrongType);
             }
-            GetHashMetadataResult::NotFound => {
+            FindHashResult::NotFound => {
                 return Ok(HashExistsResult::NotExists);
             }
-            GetHashMetadataResult::Some(hash) => hash,
+            FindHashResult::Some(hash) => hash,
         };
 
-        if self.contains_hash_field(hash.id(), user_field)? {
+        if self.contains_hash_field(&hash, user_field)? {
             Ok(HashExistsResult::Exists)
         } else {
             Ok(HashExistsResult::NotExists)
         }
     }
 
-    /// Load hash value metadata from the store
-    pub fn hash_metadata(&self, user_key: &BytesMut) -> Result<GetHashMetadataResult, SableError> {
-        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(GetHashMetadataResult::NotFound);
-        };
-
-        match self.try_decode_hash_value_metadata(&value)? {
-            None => Ok(GetHashMetadataResult::WrongType),
-            Some(hash_md) => Ok(GetHashMetadataResult::Some(hash_md)),
-        }
-    }
-
     ///=======================================================
     /// Internal API for this class
     ///=======================================================
+
+    /// Return a "Hash" data structure
+    pub fn find_hash(&self, user_key: &BytesMut) -> Result<FindHashResult, SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        let Some(value) = self.cache.get(&encoded_key)? else {
+            return Ok(FindHashResult::NotFound);
+        };
+
+        match self.try_decode_hash_value_metadata(&value)? {
+            None => Ok(FindHashResult::WrongType),
+            Some(hash_md) => Ok(FindHashResult::Some(Hash {
+                key: PrimaryKeyMetadata::new_with_type(KeyType::HashItem, user_key, self.db_id),
+                value: hash_md,
+            })),
+        }
+    }
 
     /// Apply the changes to the store and clear the cache
     fn flush_cache(&mut self) -> Result<(), SableError> {
@@ -312,6 +346,18 @@ impl<'a> HashDb<'a> {
         Ok(())
     }
 
+    /// Put a hash entry in the database
+    fn put_hash(&mut self, user_key: &BytesMut, hash: &Hash) -> Result<(), SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+
+        // serialise the hash value into bytes
+        let mut buffer = BytesMut::with_capacity(HashValueMetadata::SIZE);
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+        hash.value.to_bytes(&mut builder);
+        self.cache.put(&encoded_key, buffer)?;
+        Ok(())
+    }
+
     /// Delete the hash metadata
     fn delete_hash_metadata(
         &mut self,
@@ -324,6 +370,20 @@ impl<'a> HashDb<'a> {
         // Delete the bookkeeping record
         let bookkeeping_record = Bookkeeping::new(self.db_id)
             .with_uid(hash_md.id())
+            .with_value_type(ValueType::Hash)
+            .to_bytes();
+        self.cache.delete(&bookkeeping_record)?;
+        Ok(())
+    }
+
+    /// Delete the hash metadata
+    fn delete_hash(&mut self, user_key: &BytesMut, hash: &Hash) -> Result<(), SableError> {
+        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
+        self.cache.delete(&encoded_key)?;
+
+        // Delete the bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(hash.value.id())
             .with_value_type(ValueType::Hash)
             .to_bytes();
         self.cache.delete(&bookkeeping_record)?;
@@ -349,15 +409,36 @@ impl<'a> HashDb<'a> {
         Ok(hash_md)
     }
 
+    /// Create or replace a hash entry in the database
+    /// If `hash_id_opt` is `None`, create a new id and put it
+    /// else, override the existing entry
+    fn create_hash(&mut self, user_key: &BytesMut) -> Result<Hash, SableError> {
+        let key = PrimaryKeyMetadata::new(user_key, self.db_id);
+        let hash_md = HashValueMetadata::with_id(self.store.generate_id());
+        self.put_hash_metadata(user_key, &hash_md)?;
+
+        // Add a bookkeeping record
+        let bookkeeping_record = Bookkeeping::new(self.db_id)
+            .with_uid(hash_md.id())
+            .with_value_type(ValueType::Hash)
+            .to_bytes();
+        self.cache.put(&bookkeeping_record, user_key.clone())?;
+        Ok(Hash {
+            key,
+            value: hash_md,
+        })
+    }
+
     /// Encode an hash field key from user field
     fn encode_hash_field_key(
         &self,
-        hash_id: u64,
+        hash: &Hash,
         user_field: &BytesMut,
     ) -> Result<BytesMut, SableError> {
         let mut buffer = BytesMut::with_capacity(256);
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        let field_key = HashFieldKey::with_user_key(hash_id, user_field);
+        let field_key =
+            HashFieldKey::with_user_key(hash.value.id(), self.db_id, hash.key.slot(), user_field);
         field_key.to_bytes(&mut builder);
         Ok(buffer)
     }
@@ -365,10 +446,10 @@ impl<'a> HashDb<'a> {
     /// Delete hash field from the database
     fn delete_hash_field_key(
         &mut self,
-        hash_id: u64,
+        hash: &Hash,
         user_field: &BytesMut,
     ) -> Result<(), SableError> {
-        let key = self.encode_hash_field_key(hash_id, user_field)?;
+        let key = self.encode_hash_field_key(hash, user_field)?;
         self.cache.delete(&key)?;
         Ok(())
     }
@@ -376,27 +457,27 @@ impl<'a> HashDb<'a> {
     /// Return the value of hash field
     fn get_hash_field_value(
         &self,
-        hash_id: u64,
+        hash: &Hash,
         user_field: &BytesMut,
     ) -> Result<Option<BytesMut>, SableError> {
-        let key = self.encode_hash_field_key(hash_id, user_field)?;
+        let key = self.encode_hash_field_key(hash, user_field)?;
         self.cache.get(&key)
     }
 
     /// Return the value of hash field
-    fn contains_hash_field(&self, hash_id: u64, user_field: &BytesMut) -> Result<bool, SableError> {
-        let key = self.encode_hash_field_key(hash_id, user_field)?;
+    fn contains_hash_field(&self, hash: &Hash, user_field: &BytesMut) -> Result<bool, SableError> {
+        let key = self.encode_hash_field_key(hash, user_field)?;
         self.cache.contains(&key)
     }
 
     /// Put the value for a hash field
     fn put_hash_field_value(
         &mut self,
-        hash_id: u64,
+        hash: &Hash,
         user_field: &BytesMut,
         user_value: &BytesMut,
     ) -> Result<PutFieldResult, SableError> {
-        let key = self.encode_hash_field_key(hash_id, user_field)?;
+        let key = self.encode_hash_field_key(hash, user_field)?;
         let updating = self.cache.contains(&key)?;
         self.cache.put(&key, user_value.clone())?;
         Ok(if updating {
@@ -480,8 +561,8 @@ mod tests {
         );
 
         // confirm that we have a bookkeeping record
-        let hash_id = match hash_db.hash_metadata(&hash_name).unwrap() {
-            GetHashMetadataResult::Some(md) => md.id(),
+        let hash_id = match hash_db.find_hash(&hash_name).unwrap() {
+            FindHashResult::Some(hash) => hash.id(),
             _ => {
                 panic!("Expected to find the hash MD in the database");
             }

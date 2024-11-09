@@ -14,8 +14,8 @@ pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
 pub use crate::storage::storage_adapter::*;
 pub use generic_db::GenericDb;
 pub use hash_db::{
-    GetHashMetadataResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult,
-    HashGetResult, HashLenResult, HashPutResult,
+    FindHashResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult, HashGetResult,
+    HashLenResult, HashPutResult,
 };
 pub use list_db::*;
 pub use scan_cursor::ScanCursor;

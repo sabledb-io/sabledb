@@ -53,7 +53,7 @@ impl KeyPrefix {
 
 impl ToU8Writer for KeyPrefix {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_key_type(self.key_type);
+        self.key_type.to_writer(builder);
         self.db_id.to_writer(builder);
         self.key_slot.to_writer(builder);
     }

@@ -89,6 +89,12 @@ impl crate::FromU8Reader for KeyType {
     }
 }
 
+impl crate::ToU8Writer for KeyType {
+    fn to_writer(&self, builder: &mut crate::U8ArrayBuilder) {
+        (*self as u8).to_writer(builder)
+    }
+}
+
 impl FromRaw for KeyType {
     type Item = KeyType;
     fn from_u8(v: u8) -> Option<Self::Item> {
