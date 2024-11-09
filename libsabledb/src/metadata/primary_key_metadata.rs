@@ -1,5 +1,5 @@
 use crate::{
-    metadata::KeyType,
+    metadata::{KeyPrefix, KeyType},
     utils::{FromU8Reader, ToU8Writer},
     SableError, ToBytes, U8ArrayBuilder, U8ArrayReader,
 };
@@ -29,24 +29,14 @@ pub fn db_version_key() -> BytesMut {
 ///
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PrimaryKeyMetadata {
-    /// The key type. For primary key, this will always be `0`
-    /// This field must come first
-    key_type: KeyType,
-    /// Database ID
-    db_id: u16,
-    /// Keep the slot number as part of the key encoding
-    /// with `<key-type><key_slot>` we can discover all keys belonged
-    /// to a given slot by using a prefix iterator
-    key_slot: u16,
+    common: KeyPrefix,
     /// The user key
     key: BytesMut,
 }
 
 impl ToU8Writer for PrimaryKeyMetadata {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_key_type(self.key_type);
-        builder.write_u16(self.db_id);
-        builder.write_u16(self.key_slot);
+        self.common.to_writer(builder);
         builder.write_bytes(&self.key);
     }
 }
@@ -64,9 +54,7 @@ impl FromU8Reader for PrimaryKeyMetadata {
     type Item = PrimaryKeyMetadata;
     fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
         Some(PrimaryKeyMetadata {
-            key_type: KeyType::from_reader(reader)?,
-            db_id: u16::from_reader(reader)?,
-            key_slot: u16::from_reader(reader)?,
+            common: KeyPrefix::from_reader(reader)?,
             key: reader.remaining()?,
         })
     }
@@ -83,19 +71,19 @@ impl PrimaryKeyMetadata {
 
     /// Set the key type
     pub fn with_type(mut self, key_type: KeyType) -> Self {
-        self.key_type = key_type;
+        self.common.set_key_type(key_type);
         self
     }
 
     /// Set the database ID
     pub fn with_db_id(mut self, db_id: u16) -> Self {
-        self.db_id = db_id;
+        self.common.set_db_id(db_id);
         self
     }
 
     pub fn with_key(mut self, key: &BytesMut) -> Self {
         self.key = key.clone();
-        self.key_slot = crate::utils::calculate_slot(key);
+        self.common.set_key_slot(crate::utils::calculate_slot(key));
         self
     }
 
@@ -128,20 +116,20 @@ impl PrimaryKeyMetadata {
     }
 
     pub fn is_primary_key(&self) -> bool {
-        self.key_type == KeyType::PrimaryKey
+        self.common.key_type().eq(&KeyType::PrimaryKey)
     }
 
     /// Return the key type: Primary or Secondary
-    pub fn key_type(&self) -> KeyType {
-        self.key_type
+    pub fn key_type(&self) -> &KeyType {
+        self.common.key_type()
     }
 
     pub fn database_id(&self) -> u16 {
-        self.db_id
+        self.common.db_id()
     }
 
     pub fn slot(&self) -> u16 {
-        self.key_slot
+        self.common.key_slot()
     }
 
     pub fn user_key(&self) -> &BytesMut {
@@ -171,9 +159,9 @@ mod tests {
         let pk = PrimaryKeyMetadata::from_raw(&pk_as_bytes).unwrap();
 
         // Check that the slot serialised + deserialised properly
-        assert_eq!(pk.key_slot, slot);
+        assert_eq!(pk.slot(), slot);
         assert!(pk.is_primary_key());
-        assert_eq!(pk.db_id, 5);
+        assert_eq!(pk.database_id(), 5);
         assert_eq!(BytesMutUtils::to_string(pk.user_key()), "My Key");
     }
 
@@ -191,12 +179,12 @@ mod tests {
         let pk2 = PrimaryKeyMetadata::from_raw(&pk2_as_bytes).unwrap();
 
         // Check that the slot serialised + deserialised properly
-        assert_eq!(pk1.key_slot, slot);
-        assert_eq!(pk2.key_slot, slot);
+        assert_eq!(pk1.slot(), slot);
+        assert_eq!(pk2.slot(), slot);
         assert!(pk1.is_primary_key());
         assert!(pk2.is_primary_key());
-        assert_eq!(pk1.db_id, 1);
-        assert_eq!(pk2.db_id, 2);
+        assert_eq!(pk1.database_id(), 1);
+        assert_eq!(pk2.database_id(), 2);
         assert_eq!(BytesMutUtils::to_string(&pk1.user_key()), "My Key");
         assert_eq!(BytesMutUtils::to_string(&pk2.user_key()), "My Key");
     }

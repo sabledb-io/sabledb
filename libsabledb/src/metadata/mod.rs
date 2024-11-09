@@ -2,6 +2,7 @@ mod bookkeeping;
 mod encoding;
 mod expiration;
 mod hash_metadata;
+mod keyprefix;
 mod list_metadata;
 mod primary_key_metadata;
 mod set_metadata;
@@ -17,6 +18,7 @@ pub use hash_metadata::{HashFieldKey, HashValueMetadata};
 pub use set_metadata::*;
 pub use zset_metadata::*;
 
+pub use keyprefix::*;
 #[allow(unused_imports)]
 pub use list_metadata::ListValueMetadata;
 pub use primary_key_metadata::*;
