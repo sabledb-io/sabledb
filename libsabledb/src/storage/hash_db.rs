@@ -364,7 +364,7 @@ impl<'a> HashDb<'a> {
         self.cache.delete(&encoded_key)?;
 
         // Delete the bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
+        let bookkeeping_record = Bookkeeping::new(self.db_id, hash.key.slot())
             .with_uid(hash.value.id())
             .with_value_type(ValueType::Hash)
             .to_bytes();
@@ -381,7 +381,7 @@ impl<'a> HashDb<'a> {
         self.put_hash_metadata(user_key, &hash_md)?;
 
         // Add a bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
+        let bookkeeping_record = Bookkeeping::new(self.db_id, key.slot())
             .with_uid(hash_md.id())
             .with_value_type(ValueType::Hash)
             .to_bytes();
@@ -531,7 +531,7 @@ mod tests {
             }
         };
 
-        let bookkeeping_record_key = Bookkeeping::new(0)
+        let bookkeeping_record_key = Bookkeeping::new(0, crate::utils::calculate_slot(&hash_name))
             .with_uid(hash_id)
             .with_value_type(ValueType::Hash)
             .to_bytes();

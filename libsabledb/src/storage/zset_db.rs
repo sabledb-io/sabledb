@@ -8,11 +8,67 @@ use crate::{
 use bytes::BytesMut;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ZSetGetMetadataResult {
+pub struct SortedSet {
+    pub key: PrimaryKeyMetadata,
+    pub metadata: ZSetValueMetadata,
+}
+
+impl SortedSet {
+    pub fn slot(&self) -> u16 {
+        self.key.slot()
+    }
+
+    pub fn database_id(&self) -> u16 {
+        self.key.database_id()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.metadata.id()
+    }
+
+    pub fn len(&self) -> u64 {
+        self.metadata.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.metadata.is_empty()
+    }
+
+    pub fn incr_len_by(&mut self, n: u64) {
+        self.metadata.incr_len_by(n);
+    }
+
+    pub fn decr_len_by(&mut self, n: u64) {
+        self.metadata.decr_len_by(n);
+    }
+
+    /// Return a prefix for iterating over all items in the set with optional score
+    pub fn prefix_by_score(&self, score: Option<f64>) -> BytesMut {
+        ZSetScoreItem::prefix(self.id(), self.database_id(), self.slot(), score)
+    }
+
+    /// Create an upper bound prefix for this set (for iterating over scores)
+    pub fn score_upper_bound_prefix(&self) -> BytesMut {
+        ZSetScoreItem::prefix(
+            self.id().saturating_add(1),
+            self.database_id(),
+            self.slot(),
+            None,
+        )
+    }
+
+    /// Create a prefix for iterating all items belonged to this zset by member
+    pub fn prefix_by_member(&self, member: Option<&[u8]>) -> BytesMut {
+        ZSetMemberItem::prefix(self.id(), self.database_id(), self.slot(), member)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FindZSetResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// A match was found
-    Some(ZSetValueMetadata),
+    Some(SortedSet),
     /// No entry exist
     NotFound,
 }
@@ -119,14 +175,14 @@ impl<'a> ZSetDb<'a> {
 
     /// Return the size of the set
     pub fn len(&self, user_key: &BytesMut) -> Result<ZSetLenResult, SableError> {
-        let zset = match self.get_metadata(user_key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let zset = match self.find_set(user_key)? {
+            FindZSetResult::WrongType => {
                 return Ok(ZSetLenResult::WrongType);
             }
-            ZSetGetMetadataResult::NotFound => {
+            FindZSetResult::NotFound => {
                 return Ok(ZSetLenResult::Some(0));
             }
-            ZSetGetMetadataResult::Some(zset) => zset,
+            FindZSetResult::Some(zset) => zset,
         };
         Ok(ZSetLenResult::Some(zset.len() as usize))
     }
@@ -142,20 +198,20 @@ impl<'a> ZSetDb<'a> {
         flush_cache: bool,
     ) -> Result<ZSetAddMemberResult, SableError> {
         // locate the hash
-        let mut md = match self.get_metadata(user_key)? {
-            ZSetGetMetadataResult::WrongType => return Ok(ZSetAddMemberResult::WrongType),
-            ZSetGetMetadataResult::NotFound => {
+        let mut set = match self.find_set(user_key)? {
+            FindZSetResult::WrongType => return Ok(ZSetAddMemberResult::WrongType),
+            FindZSetResult::NotFound => {
                 // Create a new set
-                self.create_metadata(user_key)?
+                self.create_set(user_key)?
             }
-            ZSetGetMetadataResult::Some(hash) => hash,
+            FindZSetResult::Some(set) => set,
         };
 
         let mut items_added = 0usize;
         let mut return_value = 0usize;
 
         let new_score = if flags.intersects(ZWriteFlags::Incr) {
-            match self.get_member_score(md.id(), member)? {
+            match self.get_member_score(&set, member)? {
                 Some(mut old_value) => {
                     old_value += score;
                     old_value
@@ -166,7 +222,7 @@ impl<'a> ZSetDb<'a> {
             score
         };
 
-        match self.put_member(md.id(), member, new_score, flags)? {
+        match self.put_member(&set, member, new_score, flags)? {
             PutMemberResult::Updated(_) => {
                 if flags.intersects(ZWriteFlags::Ch) {
                     return_value = return_value.saturating_add(1);
@@ -180,8 +236,8 @@ impl<'a> ZSetDb<'a> {
         }
 
         if items_added > 0 {
-            md.incr_len_by(items_added as u64);
-            self.put_metadata(user_key, &md)?;
+            set.incr_len_by(items_added as u64);
+            self.put_metadata(user_key, &set.metadata)?;
         }
 
         // flush the changes
@@ -208,17 +264,17 @@ impl<'a> ZSetDb<'a> {
         user_key: &BytesMut,
         member: &[u8],
     ) -> Result<ZSetGetScoreResult, SableError> {
-        let md = match self.get_metadata(user_key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let set = match self.find_set(user_key)? {
+            FindZSetResult::WrongType => {
                 return Ok(ZSetGetScoreResult::WrongType);
             }
-            ZSetGetMetadataResult::NotFound => {
+            FindZSetResult::NotFound => {
                 return Ok(ZSetGetScoreResult::NotFound);
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            FindZSetResult::Some(md) => md,
         };
 
-        if let Some(score) = self.get_member_score(md.id(), member)? {
+        if let Some(score) = self.get_member_score(&set, member)? {
             Ok(ZSetGetScoreResult::Score(score))
         } else {
             Ok(ZSetGetScoreResult::NotFound)
@@ -230,16 +286,19 @@ impl<'a> ZSetDb<'a> {
         self.flush_cache()
     }
 
-    /// Load zset value metadata from the store
-    pub fn get_metadata(&self, user_key: &BytesMut) -> Result<ZSetGetMetadataResult, SableError> {
+    /// Load SortedSet from the database
+    pub fn find_set(&self, user_key: &BytesMut) -> Result<FindZSetResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(ZSetGetMetadataResult::NotFound);
+            return Ok(FindZSetResult::NotFound);
         };
 
         match self.try_decode_zset_value_metadata(&value)? {
-            None => Ok(ZSetGetMetadataResult::WrongType),
-            Some(zset_md) => Ok(ZSetGetMetadataResult::Some(zset_md)),
+            None => Ok(FindZSetResult::WrongType),
+            Some(zset_md) => Ok(FindZSetResult::Some(SortedSet {
+                key: PrimaryKeyMetadata::new(user_key, self.db_id),
+                metadata: zset_md,
+            })),
         }
     }
 
@@ -291,20 +350,20 @@ impl<'a> ZSetDb<'a> {
         member: &[u8],
         flush_cache: bool,
     ) -> Result<ZSetDeleteMemberResult, SableError> {
-        let mut md = match self.get_metadata(user_key)? {
-            ZSetGetMetadataResult::WrongType => return Ok(ZSetDeleteMemberResult::WrongType),
-            ZSetGetMetadataResult::NotFound => {
+        let mut set = match self.find_set(user_key)? {
+            FindZSetResult::WrongType => return Ok(ZSetDeleteMemberResult::WrongType),
+            FindZSetResult::NotFound => {
                 return Ok(ZSetDeleteMemberResult::SetNotFound);
             }
-            ZSetGetMetadataResult::Some(set) => set,
+            FindZSetResult::Some(set) => set,
         };
 
-        if self.delete_member_internal(md.id(), member)? {
-            md.decr_len_by(1);
-            if md.is_empty() {
-                self.delete_metadata(user_key, &md)?;
+        if self.delete_member_internal(&set, member)? {
+            set.decr_len_by(1);
+            if set.is_empty() {
+                self.delete_metadata(user_key, &set.metadata)?;
             } else {
-                self.put_metadata(user_key, &md)?;
+                self.put_metadata(user_key, &set.metadata)?;
             }
         } else {
             return Ok(ZSetDeleteMemberResult::MemberNotFound);
@@ -342,17 +401,21 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Insert or replace a set entry in the database
-    fn create_metadata(&mut self, user_key: &BytesMut) -> Result<ZSetValueMetadata, SableError> {
+    fn create_set(&mut self, user_key: &BytesMut) -> Result<SortedSet, SableError> {
         let md = ZSetValueMetadata::with_id(self.store.generate_id());
         self.put_metadata(user_key, &md)?;
 
         // Add a bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(md.id())
-            .with_value_type(ValueType::Zset)
-            .to_bytes();
+        let bookkeeping_record =
+            Bookkeeping::new(self.db_id, crate::utils::calculate_slot(user_key))
+                .with_uid(md.id())
+                .with_value_type(ValueType::Zset)
+                .to_bytes();
         self.cache.put(&bookkeeping_record, user_key.clone())?;
-        Ok(md)
+        Ok(SortedSet {
+            key: PrimaryKeyMetadata::new(user_key, self.db_id),
+            metadata: md,
+        })
     }
 
     /// Insert or replace a set entry in the database
@@ -381,10 +444,11 @@ impl<'a> ZSetDb<'a> {
         self.cache.delete(&encoded_key)?;
 
         // Delete the bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(md.id())
-            .with_value_type(ValueType::Zset)
-            .to_bytes();
+        let bookkeeping_record =
+            Bookkeeping::new(self.db_id, crate::utils::calculate_slot(user_key))
+                .with_uid(md.id())
+                .with_value_type(ValueType::Zset)
+                .to_bytes();
         self.cache.delete(&bookkeeping_record)?;
         Ok(())
     }
@@ -392,15 +456,15 @@ impl<'a> ZSetDb<'a> {
     /// Put member
     fn put_member(
         &mut self,
-        set_id: u64,
+        set: &SortedSet,
         member: &[u8],
         score: f64,
         flags: &ZWriteFlags,
     ) -> Result<PutMemberResult, SableError> {
-        let key_by_member = self.encode_key_by_memebr(set_id, member);
-        let key_by_score = self.encode_key_by_score(set_id, score, member);
+        let key_by_member = self.encode_key_by_memebr(set, member);
+        let key_by_score = self.encode_key_by_score(set, score, member);
 
-        let result = match self.get_member_score(set_id, member)? {
+        let result = match self.get_member_score(set, member)? {
             Some(old_score) => {
                 if flags.intersects(ZWriteFlags::Nx)
                     || (flags.intersects(ZWriteFlags::Gt) && !score.gt(&old_score))
@@ -432,8 +496,8 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Get member score
-    fn get_member_score(&self, set_id: u64, member: &[u8]) -> Result<Option<f64>, SableError> {
-        let key_by_member = self.encode_key_by_memebr(set_id, member);
+    fn get_member_score(&self, set: &SortedSet, member: &[u8]) -> Result<Option<f64>, SableError> {
+        let key_by_member = self.encode_key_by_memebr(set, member);
 
         let Some(value) = self.cache.get(&key_by_member)? else {
             return Ok(None);
@@ -445,36 +509,41 @@ impl<'a> ZSetDb<'a> {
     }
 
     /// Check if `member` is already part of this set
-    fn contains_member(&self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
-        let key_by_member = self.encode_key_by_memebr(set_id, member);
+    fn contains_member(&self, set: &SortedSet, member: &[u8]) -> Result<bool, SableError> {
+        let key_by_member = self.encode_key_by_memebr(set, member);
         self.cache.contains(&key_by_member)
     }
 
     /// Delete member from the set
-    fn delete_member_internal(&mut self, set_id: u64, member: &[u8]) -> Result<bool, SableError> {
-        let key_by_member = self.encode_key_by_memebr(set_id, member);
+    fn delete_member_internal(
+        &mut self,
+        set: &SortedSet,
+        member: &[u8],
+    ) -> Result<bool, SableError> {
+        let key_by_member = self.encode_key_by_memebr(set, member);
         let Some(value) = self.cache.get(&key_by_member)? else {
             return Ok(false);
         };
         let mut reader = U8ArrayReader::with_buffer(&value);
         let score = reader.read_f64().ok_or(SableError::SerialisationError)?;
 
-        let key_by_score = self.encode_key_by_score(set_id, score, member);
+        let key_by_score = self.encode_key_by_score(set, score, member);
         self.cache.delete(&key_by_member)?;
         self.cache.delete(&key_by_score)?;
         Ok(true)
     }
 
-    fn encode_key_by_score(&self, set_id: u64, score: f64, member: &[u8]) -> BytesMut {
-        let key_by_score = ZSetScoreItem::new(set_id, score, member);
+    fn encode_key_by_score(&self, set: &SortedSet, score: f64, member: &[u8]) -> BytesMut {
+        let key_by_score =
+            ZSetScoreItem::new(set.id(), set.database_id(), set.slot(), score, member);
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         key_by_score.to_bytes(&mut reader);
         buffer
     }
 
-    fn encode_key_by_memebr(&self, set_id: u64, member: &[u8]) -> BytesMut {
-        let key_by_member = ZSetMemberItem::new(set_id, member);
+    fn encode_key_by_memebr(&self, set: &SortedSet, member: &[u8]) -> BytesMut {
+        let key_by_member = ZSetMemberItem::new(set.id(), set.database_id(), set.slot(), member);
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);
         key_by_member.to_bytes(&mut reader);
@@ -507,12 +576,10 @@ mod tests {
 
         // run a hash operation on a string key
         assert_eq!(zset_db.len(&key).unwrap(), ZSetLenResult::WrongType);
-        assert_eq!(
-            zset_db.get_metadata(&key).unwrap(),
-            ZSetGetMetadataResult::WrongType
-        );
+        assert_eq!(zset_db.find_set(&key).unwrap(), FindZSetResult::WrongType);
         Ok(())
     }
+
     #[test]
     fn test_bookkeeping_record() {
         let (_deleter, db) = crate::tests::open_store();
@@ -527,15 +594,15 @@ mod tests {
             .unwrap();
 
         // confirm that we have a bookkeeping record
-        let set_md = match zset_db.get_metadata(&set_name).unwrap() {
-            ZSetGetMetadataResult::Some(md) => md,
+        let set = match zset_db.find_set(&set_name).unwrap() {
+            FindZSetResult::Some(md) => md,
             _ => {
                 panic!("Expected to find the set MD in the database");
             }
         };
 
-        let bookkeeping_record_key = Bookkeeping::new(0)
-            .with_uid(set_md.id())
+        let bookkeeping_record_key = Bookkeeping::new(0, crate::utils::calculate_slot(&set_name))
+            .with_uid(set.id())
             .with_value_type(ValueType::Zset)
             .to_bytes();
 
@@ -543,7 +610,7 @@ mod tests {
         assert_eq!(db_set_name, set_name);
 
         // delete the only entry from the hash -> this should remove the hash completely from the database
-        zset_db.delete_metadata(&set_name, &set_md).unwrap();
+        zset_db.delete_metadata(&set_name, &set.metadata).unwrap();
         zset_db.commit().unwrap();
 
         // confirm that the bookkeeping record was also removed from the database

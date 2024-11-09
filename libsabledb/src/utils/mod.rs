@@ -693,6 +693,8 @@ impl_to_u8_builder_for!(u32);
 impl_from_u8_reader_for!(u32);
 impl_to_u8_builder_for!(u64);
 impl_from_u8_reader_for!(u64);
+impl_to_u8_builder_for!(f64);
+impl_from_u8_reader_for!(f64);
 impl_to_u8_builder_for!(usize);
 impl_from_u8_reader_for!(usize);
 

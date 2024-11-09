@@ -4,7 +4,7 @@ use crate::{
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
     storage::{
-        ScanCursor, ZSetAddMemberResult, ZSetDb, ZSetDeleteMemberResult, ZSetGetMetadataResult,
+        FindZSetResult, ScanCursor, ZSetAddMemberResult, ZSetDb, ZSetDeleteMemberResult,
         ZSetGetScoreResult, ZSetGetSmallestResult, ZSetLenResult, ZWriteFlags,
     },
     utils,
@@ -804,16 +804,16 @@ impl ZSetCommands {
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = zset_md_or_0_builder!(zset_db, key, builder, response_buffer);
+        let set = zset_md_or_0_builder!(zset_db, key, builder, response_buffer);
 
         // empty set? empty array
-        if md.is_empty() {
+        if set.is_empty() {
             builder.number_usize(response_buffer, 0);
             return Ok(());
         }
 
         // Determine the starting score
-        let prefix = md.prefix_by_score(None);
+        let prefix = set.prefix_by_score(None);
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         if !db_iter.valid() {
             // invalud iterator
@@ -835,7 +835,7 @@ impl ZSetCommands {
             if (include_start_score && set_item.score() >= start_score)
                 || (!include_start_score && set_item.score() > start_score)
             {
-                let prefix = md.prefix_by_score(Some(set_item.score()));
+                let prefix = set.prefix_by_score(Some(set_item.score()));
                 // place the iterator on the range start
                 db_iter = client_state.database().create_iterator(&prefix)?;
                 break;
@@ -844,7 +844,7 @@ impl ZSetCommands {
         }
 
         // All items must start with `zset_prefix` regardless of the user conditions
-        let zset_prefix = md.prefix_by_score(None);
+        let zset_prefix = set.prefix_by_score(None);
 
         let mut matched_entries = 0usize;
         while db_iter.valid() {
@@ -1344,15 +1344,15 @@ impl ZSetCommands {
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = match zset_db.get_metadata(key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let set = match zset_db.find_set(key)? {
+            FindZSetResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            ZSetGetMetadataResult::NotFound => {
+            FindZSetResult::NotFound => {
                 builder.number_usize(response_buffer, 0);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            FindZSetResult::Some(set) => set,
         };
 
         let mut db_iter = match min {
@@ -1360,11 +1360,11 @@ impl ZSetCommands {
                 builder_return_syntax_error!(builder, response_buffer);
             }
             LexIndex::Include(prefix) => {
-                let prefix = md.prefix_by_member(Some(prefix));
+                let prefix = set.prefix_by_member(Some(prefix));
                 client_state.database().create_iterator(&prefix)?
             }
             LexIndex::Exclude(prefix) => {
-                let prefix = md.prefix_by_member(Some(prefix));
+                let prefix = set.prefix_by_member(Some(prefix));
                 let mut db_iter = client_state.database().create_iterator(&prefix)?;
                 db_iter.next(); // skip this entry
                 db_iter
@@ -1374,7 +1374,7 @@ impl ZSetCommands {
                 return Ok(());
             }
             LexIndex::Min => {
-                let prefix = md.prefix_by_member(None);
+                let prefix = set.prefix_by_member(None);
                 client_state.database().create_iterator(&prefix)?
             }
         };
@@ -1384,8 +1384,8 @@ impl ZSetCommands {
             LexIndex::Invalid => {
                 builder_return_syntax_error!(builder, response_buffer);
             }
-            LexIndex::Include(prefix) => Some((md.prefix_by_member(Some(prefix)), true)),
-            LexIndex::Exclude(prefix) => Some((md.prefix_by_member(Some(prefix)), false)),
+            LexIndex::Include(prefix) => Some((set.prefix_by_member(Some(prefix)), true)),
+            LexIndex::Exclude(prefix) => Some((set.prefix_by_member(Some(prefix)), false)),
             LexIndex::Max => None,
             LexIndex::Min => {
                 builder.number_usize(response_buffer, 0);
@@ -1393,11 +1393,11 @@ impl ZSetCommands {
             }
         };
 
-        let set_prefix = md.prefix_by_member(None);
+        let set_prefix = set.prefix_by_member(None);
         let mut state = UpperLimitState::NotFound;
         let mut count = 0usize;
         while db_iter.valid() {
-            let Some((key, _)) = db_iter.key_value() else {
+            let Some(key) = db_iter.key() else {
                 break;
             };
 
@@ -1788,24 +1788,24 @@ impl ZSetCommands {
         items_with_low_score: bool,
     ) -> Result<TryPopResult, SableError> {
         let mut zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
-        let md = match zset_db.get_metadata(key)? {
-            ZSetGetMetadataResult::Some(md) => md,
-            ZSetGetMetadataResult::NotFound => {
+        let set = match zset_db.find_set(key)? {
+            FindZSetResult::Some(set) => set,
+            FindZSetResult::NotFound => {
                 return Ok(TryPopResult::None);
             }
-            ZSetGetMetadataResult::WrongType => {
+            FindZSetResult::WrongType => {
                 return Ok(TryPopResult::WrongType);
             }
         };
 
-        let count = std::cmp::min(count, md.len() as usize);
-        let prefix = md.prefix_by_score(None);
+        let count = std::cmp::min(count, set.len() as usize);
+        let prefix = set.prefix_by_score(None);
 
         // items with lowest scores are placed at the start
         let mut db_iter = if items_with_low_score {
             client_state.database().create_iterator(&prefix)?
         } else {
-            let upper_bound = md.score_upper_bound_prefix();
+            let upper_bound = set.score_upper_bound_prefix();
             client_state
                 .database()
                 .create_reverse_iterator(&upper_bound)?
@@ -1817,7 +1817,7 @@ impl ZSetCommands {
                 break;
             }
 
-            let Some((key, _)) = db_iter.key_value() else {
+            let Some(key) = db_iter.key() else {
                 break;
             };
 
@@ -1911,12 +1911,12 @@ impl ZSetCommands {
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
         // determine the array length
-        let md = match zset_db.get_metadata(key)? {
-            ZSetGetMetadataResult::Some(md) => md,
-            ZSetGetMetadataResult::NotFound => {
+        let set = match zset_db.find_set(key)? {
+            FindZSetResult::Some(set) => set,
+            FindZSetResult::NotFound => {
                 writer_return_null_string!(writer);
             }
-            ZSetGetMetadataResult::WrongType => {
+            FindZSetResult::WrongType => {
                 writer_return_wrong_type!(writer);
             }
         };
@@ -1925,7 +1925,7 @@ impl ZSetCommands {
         let count = if allow_dups {
             count
         } else {
-            std::cmp::min(count, md.len() as i64)
+            std::cmp::min(count, set.len() as i64)
         };
 
         // fast bail out
@@ -1933,7 +1933,7 @@ impl ZSetCommands {
             writer_return_empty_array!(writer);
         }
 
-        let possible_indexes: Vec<usize> = (0..md.len() as usize).collect();
+        let possible_indexes: Vec<usize> = (0..set.len() as usize).collect();
 
         // select the indices we want to pick (indices is sorted, descending order)
         let mut indices =
@@ -1952,7 +1952,7 @@ impl ZSetCommands {
 
         // Create an iterator and place at at the start of the set members
         let mut curidx = 0usize;
-        let prefix = md.prefix_by_member(None);
+        let prefix = set.prefix_by_member(None);
 
         // strategy: create an iterator on all the hash items and maintain a "curidx" that keeps the current visited
         // index for every element, compare it against the first item in the "chosen" vector which holds a sorted list of
@@ -2111,15 +2111,15 @@ impl ZSetCommands {
 
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = match zset_db.get_metadata(key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let set = match zset_db.find_set(key)? {
+            FindZSetResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            ZSetGetMetadataResult::NotFound => {
+            FindZSetResult::NotFound => {
                 builder.number_usize(response_buffer, 0);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            FindZSetResult::Some(md) => md,
         };
 
         let client_state_cloned = client_state.clone();
@@ -2128,11 +2128,11 @@ impl ZSetCommands {
                 builder_return_syntax_error!(builder, response_buffer);
             }
             LexIndex::Include(prefix) => {
-                let prefix = md.prefix_by_member(Some(prefix));
+                let prefix = set.prefix_by_member(Some(prefix));
                 client_state_cloned.database().create_iterator(&prefix)?
             }
             LexIndex::Exclude(prefix) => {
-                let prefix = md.prefix_by_member(Some(prefix));
+                let prefix = set.prefix_by_member(Some(prefix));
                 let mut db_iter = client_state_cloned.database().create_iterator(&prefix)?;
                 db_iter.next(); // skip this entry
                 db_iter
@@ -2141,7 +2141,7 @@ impl ZSetCommands {
                 builder_return_empty_array!(builder, response_buffer);
             }
             LexIndex::Min => {
-                let prefix = md.prefix_by_member(None);
+                let prefix = set.prefix_by_member(None);
                 client_state_cloned.database().create_iterator(&prefix)?
             }
         };
@@ -2151,8 +2151,8 @@ impl ZSetCommands {
             LexIndex::Invalid => {
                 builder_return_syntax_error!(builder, response_buffer);
             }
-            LexIndex::Include(prefix) => Some((md.prefix_by_member(Some(prefix)), true)),
-            LexIndex::Exclude(prefix) => Some((md.prefix_by_member(Some(prefix)), false)),
+            LexIndex::Include(prefix) => Some((set.prefix_by_member(Some(prefix)), true)),
+            LexIndex::Exclude(prefix) => Some((set.prefix_by_member(Some(prefix)), false)),
             LexIndex::Max => None,
             LexIndex::Min => {
                 builder_return_empty_array!(builder, response_buffer);
@@ -2160,14 +2160,14 @@ impl ZSetCommands {
         };
 
         let (mut offset, count) =
-            match Self::parse_offset_and_limit(command.clone(), md.len() as usize) {
+            match Self::parse_offset_and_limit(command.clone(), set.len() as usize) {
                 LimitAndOffsetResult::SyntaxError => {
                     builder_return_syntax_error!(builder, response_buffer);
                 }
                 LimitAndOffsetResult::Value((offset, count)) => (offset, count),
             };
 
-        let zset_prefix = md.prefix_by_member(None);
+        let zset_prefix = set.prefix_by_member(None);
         let mut result_set = Vec::<(BytesMut, f64)>::new();
         let mut state = UpperLimitState::NotFound;
         while db_iter.valid() {
@@ -2569,15 +2569,15 @@ impl ZSetCommands {
         let _unused = LockManager::lock(key, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = if with_scores {
+        let set = if with_scores {
             zset_md_or_nil_array_builder!(zset_db, key, builder, response_buffer)
         } else {
             zset_md_or_nil_string_builder!(zset_db, key, builder, response_buffer)
         };
 
-        let zset_prefix = md.prefix_by_score(None);
+        let zset_prefix = set.prefix_by_score(None);
         let mut db_iter = if reverse {
-            let upper_bound = md.score_upper_bound_prefix();
+            let upper_bound = set.score_upper_bound_prefix();
             client_state
                 .database()
                 .create_reverse_iterator(&upper_bound)?
@@ -2614,7 +2614,7 @@ impl ZSetCommands {
             }
 
             rank = rank.saturating_add(1);
-            if rank >= md.len() as usize {
+            if rank >= set.len() as usize {
                 break;
             }
             db_iter.next();
@@ -2912,13 +2912,13 @@ impl ZSetCommands {
         F: FnMut(&[u8], f64) -> Result<IterateCallbackResult, SableError>,
     {
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
-        let md = match zset_db.get_metadata(set_name)? {
-            ZSetGetMetadataResult::WrongType => return Ok(IterateResult::WrongType),
-            ZSetGetMetadataResult::NotFound => return Ok(IterateResult::NotFound),
-            ZSetGetMetadataResult::Some(md) => md,
+        let set = match zset_db.find_set(set_name)? {
+            FindZSetResult::WrongType => return Ok(IterateResult::WrongType),
+            FindZSetResult::NotFound => return Ok(IterateResult::NotFound),
+            FindZSetResult::Some(set) => set,
         };
 
-        let prefix = md.prefix_by_member(None);
+        let prefix = set.prefix_by_member(None);
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         while db_iter.valid() {
             let Some((key, value)) = db_iter.key_value() else {
@@ -3170,18 +3170,18 @@ impl ZSetCommands {
         let _unused = LockManager::lock(zset_name, client_state.clone(), command.clone()).await?;
         let zset_db = ZSetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = match zset_db.get_metadata(zset_name)? {
-            ZSetGetMetadataResult::WrongType => {
+        let set = match zset_db.find_set(zset_name)? {
+            FindZSetResult::WrongType => {
                 builder.error_string(response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            FindZSetResult::NotFound => {
                 builder.add_array_len(response_buffer, 2);
                 builder.add_number::<usize>(response_buffer, 0, false);
                 builder.add_empty_array(response_buffer);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            FindZSetResult::Some(md) => md,
         };
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
@@ -3208,17 +3208,17 @@ impl ZSetCommands {
         let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
             BytesMut::from(saved_prefix)
         } else {
-            md.prefix_by_score(None)
+            set.prefix_by_score(None)
         };
 
         // All items in this set must start with `set_prefix`
-        let set_prefix = md.prefix_by_score(None);
+        let set_prefix = set.prefix_by_score(None);
 
         let mut results = Vec::<(BytesMut, BytesMut)>::with_capacity(count);
         let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
         while db_iter.valid() && count > 0 {
             // get the key & value
-            let Some((key, _)) = db_iter.key_value() else {
+            let Some(key) = db_iter.key() else {
                 break;
             };
 
@@ -3252,7 +3252,7 @@ impl ZSetCommands {
 
         let cursor_id = if db_iter.valid() && count == 0 {
             // read the next key to be used as the next starting point for next iteration
-            let Some((key, _)) = db_iter.key_value() else {
+            let Some(key) = db_iter.key() else {
                 // this is an error
                 builder.error_string(
                     response_buffer,

@@ -435,18 +435,18 @@ macro_rules! builder_return_number {
 #[macro_export]
 macro_rules! zset_md_or_nil {
     ($zset_db:expr, $key:expr,  $writer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let md = match $zset_db.find_set($key)? {
+            $crate::storage::FindZSetResult::WrongType => {
                 $writer.error_string(Strings::WRONGTYPE).await?;
                 $writer.flush().await?;
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            $crate::storage::FindZSetResult::NotFound => {
                 $writer.empty_array().await?;
                 $writer.flush().await?;
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            $crate::storage::FindZSetResult::Some(md) => md,
         };
         md
     }};
@@ -455,16 +455,16 @@ macro_rules! zset_md_or_nil {
 #[macro_export]
 macro_rules! zset_md_or_nil_builder {
     ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let md = match $zset_db.find_set($key)? {
+            $crate::storage::FindZSetResult::WrongType => {
                 $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            $crate::storage::FindZSetResult::NotFound => {
                 $builder.empty_array($response_buffer);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            $crate::storage::FindZSetResult::Some(md) => md,
         };
         md
     }};
@@ -473,16 +473,16 @@ macro_rules! zset_md_or_nil_builder {
 #[macro_export]
 macro_rules! zset_md_or_nil_string_builder {
     ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let md = match $zset_db.find_set($key)? {
+            $crate::storage::FindZSetResult::WrongType => {
                 $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            $crate::storage::FindZSetResult::NotFound => {
                 $builder.null_string($response_buffer);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            $crate::storage::FindZSetResult::Some(md) => md,
         };
         md
     }};
@@ -491,16 +491,16 @@ macro_rules! zset_md_or_nil_string_builder {
 #[macro_export]
 macro_rules! zset_md_or_nil_array_builder {
     ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let md = match $zset_db.find_set($key)? {
+            $crate::storage::FindZSetResult::WrongType => {
                 $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            $crate::storage::FindZSetResult::NotFound => {
                 $builder.null_array($response_buffer);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            $crate::storage::FindZSetResult::Some(md) => md,
         };
         md
     }};
@@ -509,16 +509,16 @@ macro_rules! zset_md_or_nil_array_builder {
 #[macro_export]
 macro_rules! zset_md_or_0_builder {
     ($zset_db:expr, $key:expr,  $builder:expr, $response_buffer:expr) => {{
-        let md = match $zset_db.get_metadata($key)? {
-            ZSetGetMetadataResult::WrongType => {
+        let md = match $zset_db.find_set($key)? {
+            $crate::storage::FindZSetResult::WrongType => {
                 $builder.error_string($response_buffer, Strings::WRONGTYPE);
                 return Ok(());
             }
-            ZSetGetMetadataResult::NotFound => {
+            $crate::storage::FindZSetResult::NotFound => {
                 $builder.number_usize($response_buffer, 0);
                 return Ok(());
             }
-            ZSetGetMetadataResult::Some(md) => md,
+            $crate::storage::FindZSetResult::Some(md) => md,
         };
         md
     }};

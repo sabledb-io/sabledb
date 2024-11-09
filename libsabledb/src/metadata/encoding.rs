@@ -23,6 +23,19 @@ impl Default for ValueType {
     }
 }
 
+impl crate::FromU8Reader for ValueType {
+    type Item = ValueType;
+    fn from_reader(reader: &mut crate::U8ArrayReader) -> Option<Self::Item> {
+        Self::from_u8(reader.read_u8()?)
+    }
+}
+
+impl crate::ToU8Writer for ValueType {
+    fn to_writer(&self, builder: &mut crate::U8ArrayBuilder) {
+        (*self as u8).to_writer(builder)
+    }
+}
+
 impl FromRaw for ValueType {
     type Item = ValueType;
     fn from_u8(v: u8) -> Option<Self::Item> {

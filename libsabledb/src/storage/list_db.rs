@@ -1113,7 +1113,7 @@ impl<'a> ListDb<'a> {
         self.put_list_metadata(&list)?;
 
         // Add a bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
+        let bookkeeping_record = Bookkeeping::new(self.db_id, list.slot())
             .with_uid(list.id())
             .with_value_type(ValueType::List)
             .to_bytes();

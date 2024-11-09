@@ -388,10 +388,11 @@ impl<'a> SetDb<'a> {
         self.cache.delete(&encoded_key)?;
 
         // Delete the bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(set_md.id())
-            .with_value_type(ValueType::Set)
-            .to_bytes();
+        let bookkeeping_record =
+            Bookkeeping::new(self.db_id, crate::utils::calculate_slot(user_key))
+                .with_uid(set_md.id())
+                .with_value_type(ValueType::Set)
+                .to_bytes();
         self.cache.delete(&bookkeeping_record)?;
         Ok(())
     }
@@ -402,10 +403,11 @@ impl<'a> SetDb<'a> {
         self.put_set_metadata(user_key, &set_md)?;
 
         // Add a bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(set_md.id())
-            .with_value_type(ValueType::Set)
-            .to_bytes();
+        let bookkeeping_record =
+            Bookkeeping::new(self.db_id, crate::utils::calculate_slot(user_key))
+                .with_uid(set_md.id())
+                .with_value_type(ValueType::Set)
+                .to_bytes();
         self.cache.put(&bookkeeping_record, user_key.clone())?;
         Ok(set_md)
     }
@@ -547,7 +549,7 @@ mod tests {
             }
         };
 
-        let bookkeeping_record_key = Bookkeeping::new(0)
+        let bookkeeping_record_key = Bookkeeping::new(0, crate::utils::calculate_slot(&set_name))
             .with_uid(set_id)
             .with_value_type(ValueType::Set)
             .to_bytes();

@@ -1,10 +1,10 @@
 use crate::{
-    metadata::{Bookkeeping, KeyType, ValueType},
+    metadata::{Bookkeeping, KeyPrefix, KeyType, ValueType},
     server::telemetry::Telemetry,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
-    LockManager, SableError, ServerOptions, StorageAdapter, U8ArrayBuilder, U8ArrayReader,
-    WorkerHandle,
+    LockManager, SableError, ServerOptions, StorageAdapter, ToU8Writer, U8ArrayBuilder,
+    U8ArrayReader, WorkerHandle,
 };
 use bytes::BytesMut;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -311,11 +311,11 @@ impl Cron {
         key_type: &KeyType,
     ) -> Result<usize, SableError> {
         let mut prefix = BytesMut::new();
-
         // Sub-items are always encoded with: the type (u8) followed by the instance UID (u64)
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_key_type(*key_type);
-        builder.write_u64(record.uid());
+        let key_prefix = KeyPrefix::new(key_type.clone(), record.db_id(), record.slot());
+        key_prefix.to_writer(&mut builder);
+        //record.uid().to_writer(&mut builder);
 
         let mut db_iter = store.create_iterator(&prefix)?;
         let mut count = 0usize;
@@ -352,10 +352,12 @@ impl Cron {
                     RecordExistsResult::Found
                 } else {
                     tracing::info!(
-                        "'{:?}' found but with wrong type. Expected {:?}, Found: {:?}",
+                        "'{:?}' found but with wrong type. Expected {:?}@{}, Found: {:?}@{}",
                         user_key,
                         expected_value_type,
-                        md.value_type()
+                        record.uid(),
+                        md.value_type(),
+                        md.uid(),
                     );
                     RecordExistsResult::WrongType
                 },
