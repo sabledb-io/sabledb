@@ -5,7 +5,7 @@ use crate::{
     server::ClientState,
     storage::ScanCursor,
     storage::{
-        FindSmallestResult, GetSetMetadataResult, IteratorAdapter, SetDb, SetDeleteResult,
+        FindSetResult, FindSmallestResult, IteratorAdapter, SetDb, SetDeleteResult,
         SetExistsResult, SetLenResult, SetPutResult,
     },
     utils::RespBuilderV2,
@@ -60,32 +60,32 @@ enum PickRandomIndexResult {
 /// Return the set metadata
 macro_rules! writer_get_set_metadata_or_empty_array {
     ($set_db:expr, $key:expr, $writer:expr) => {{
-        let md = match $set_db.set_metadata($key)? {
-            GetSetMetadataResult::WrongType => {
+        let set = match $set_db.find_set($key)? {
+            FindSetResult::WrongType => {
                 writer_return_wrong_type!($writer);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 writer_return_empty_array!($writer);
             }
-            GetSetMetadataResult::Some(md) => md,
+            FindSetResult::Some(md) => md,
         };
-        md
+        set
     }};
 }
 
 /// Return the set metadata
 macro_rules! writer_get_set_metadata_or_null {
     ($set_db:expr, $key:expr, $writer:expr, $return_array:expr) => {{
-        let md = match $set_db.set_metadata($key)? {
-            GetSetMetadataResult::WrongType => {
+        let set = match $set_db.find_set($key)? {
+            FindSetResult::WrongType => {
                 writer_return_wrong_type!($writer);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 writer_return_null_reply!($writer, $return_array);
             }
-            GetSetMetadataResult::Some(md) => md,
+            FindSetResult::Some(md) => md,
         };
-        md
+        set
     }};
 }
 
@@ -544,13 +544,13 @@ impl SetCommands {
         let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
 
         let mut writer = RespWriter::new(tx, 1024, client_state.clone());
-        let md = writer_get_set_metadata_or_empty_array!(set_db, key, writer);
+        let set = writer_get_set_metadata_or_empty_array!(set_db, key, writer);
 
         // Create an iterator over all the set members and stream them
-        let set_prefix = md.prefix();
+        let set_prefix = set.prefix();
 
         // create an iterator that points to the start of the set elements
-        writer.add_array_len(md.len() as usize).await?;
+        writer.add_array_len(set.len() as usize).await?;
         let mut db_iter = client_state.database().create_iterator(&set_prefix)?;
         let mut count = 0u64;
         while db_iter.valid() {
@@ -568,7 +568,7 @@ impl SetCommands {
             db_iter.next();
         }
 
-        if count != md.len() {
+        if count != set.len() {
             // internal error: the metadata does not match the number of items read
             // return a SableError here to close the connection
             let errmsg =
@@ -576,7 +576,7 @@ impl SetCommands {
                         "Number of set ('{:?}') items read ({}), does not match the expected items count ({}) ",
                         key,
                         count,
-                        md.len()
+                        set.len()
                 );
             return Err(SableError::Corrupted(errmsg));
         }
@@ -881,17 +881,17 @@ impl SetCommands {
         let _unused = LockManager::lock(set_name, client_state.clone(), command.clone()).await?;
         let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
 
-        let md = match set_db.set_metadata(set_name)? {
-            GetSetMetadataResult::WrongType => {
+        let set = match set_db.find_set(set_name)? {
+            FindSetResult::WrongType => {
                 builder_return_wrong_type!(builder, response_buffer);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 builder.add_array_len(response_buffer, 2);
                 builder.add_number(response_buffer, 0, false);
                 builder.add_empty_array(response_buffer);
                 return Ok(());
             }
-            GetSetMetadataResult::Some(md) => md,
+            FindSetResult::Some(md) => md,
         };
 
         // Find a cursor with the given ID or create a new one (if cursor ID is `0`)
@@ -918,10 +918,10 @@ impl SetCommands {
         let iter_start_pos = if let Some(saved_prefix) = cursor.prefix() {
             BytesMut::from(saved_prefix)
         } else {
-            md.prefix()
+            set.prefix()
         };
 
-        let set_prefix = md.prefix();
+        let set_prefix = set.prefix();
 
         let mut results = Vec::<BytesMut>::with_capacity(count);
         let mut db_iter = client_state.database().create_iterator(&iter_start_pos)?;
@@ -1226,13 +1226,13 @@ impl SetCommands {
         F: FnMut(&[u8]) -> Result<IterateCallbackResult, SableError>,
     {
         let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
-        let md = match set_db.set_metadata(set_name)? {
-            GetSetMetadataResult::WrongType => return Ok(IterateResult::WrongType),
-            GetSetMetadataResult::NotFound => return Ok(IterateResult::NotFound),
-            GetSetMetadataResult::Some(md) => md,
+        let set = match set_db.find_set(set_name)? {
+            FindSetResult::WrongType => return Ok(IterateResult::WrongType),
+            FindSetResult::NotFound => return Ok(IterateResult::NotFound),
+            FindSetResult::Some(md) => md,
         };
 
-        let set_prefix = md.prefix();
+        let set_prefix = set.prefix();
         db_iter.seek(&set_prefix);
         while db_iter.valid() {
             let Some(key) = db_iter.key() else {
@@ -1268,13 +1268,13 @@ impl SetCommands {
         allow_dups: bool,
     ) -> Result<PickRandomIndexResult, SableError> {
         let set_db = SetDb::with_storage(client_state.database(), client_state.database_id());
-        let md = match set_db.set_metadata(set_name)? {
-            GetSetMetadataResult::WrongType => return Ok(PickRandomIndexResult::WrongType),
-            GetSetMetadataResult::NotFound => return Ok(PickRandomIndexResult::NotFound),
-            GetSetMetadataResult::Some(md) => md,
+        let set = match set_db.find_set(set_name)? {
+            FindSetResult::WrongType => return Ok(PickRandomIndexResult::WrongType),
+            FindSetResult::NotFound => return Ok(PickRandomIndexResult::NotFound),
+            FindSetResult::Some(md) => md,
         };
 
-        let possible_indexes = (0..md.len() as usize).collect::<Vec<usize>>();
+        let possible_indexes = (0..set.len() as usize).collect::<Vec<usize>>();
         Ok(PickRandomIndexResult::Some(
             crate::utils::choose_multiple_values(count, &possible_indexes, allow_dups)?,
         ))

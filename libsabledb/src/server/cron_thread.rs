@@ -313,9 +313,9 @@ impl Cron {
         let mut prefix = BytesMut::new();
         // Sub-items are always encoded with: the type (u8) followed by the instance UID (u64)
         let mut builder = crate::U8ArrayBuilder::with_buffer(&mut prefix);
-        let key_prefix = KeyPrefix::new(key_type.clone(), record.db_id(), record.slot());
+        let key_prefix = KeyPrefix::new(*key_type, record.db_id(), record.slot());
         key_prefix.to_writer(&mut builder);
-        //record.uid().to_writer(&mut builder);
+        record.uid().to_writer(&mut builder);
 
         let mut db_iter = store.create_iterator(&prefix)?;
         let mut count = 0usize;

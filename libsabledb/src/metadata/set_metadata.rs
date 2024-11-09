@@ -1,7 +1,7 @@
 use crate::{
-    metadata::CommonValueMetadata,
-    metadata::{FromRaw, KeyType},
-    Expiration, SableError, U8ArrayBuilder, U8ArrayReader,
+    metadata::KeyType,
+    metadata::{CommonValueMetadata, KeyPrefix},
+    Expiration, FromU8Reader, SableError, ToU8Writer, U8ArrayBuilder, U8ArrayReader,
 };
 use bytes::BytesMut;
 
@@ -72,22 +72,12 @@ impl SetValueMetadata {
         let set_size = reader.read_u64().ok_or(SableError::SerialisationError)?;
         Ok(SetValueMetadata { common, set_size })
     }
-
-    /// Create a prefix for iterating all items belonged to this SET
-    pub fn prefix(&self) -> BytesMut {
-        let mut buffer =
-            BytesMut::with_capacity(std::mem::size_of::<u8>() + std::mem::size_of::<u64>());
-        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        builder.write_key_type(KeyType::SetItem);
-        builder.write_u64(self.id());
-        buffer
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct SetMemberKey<'a> {
-    kind: KeyType,
+    prefix: KeyPrefix,
     set_id: u64,
     user_key: &'a [u8],
 }
@@ -95,11 +85,11 @@ pub struct SetMemberKey<'a> {
 #[allow(dead_code)]
 impl<'a> SetMemberKey<'a> {
     // SIZE contain only the serialisable items
-    pub const SIZE: usize = std::mem::size_of::<u8>() + std::mem::size_of::<u64>();
+    pub const SIZE: usize = KeyPrefix::SIZE + std::mem::size_of::<u64>();
 
-    pub fn with_user_key(set_id: u64, user_key: &'a BytesMut) -> Self {
+    pub fn with_user_key(set_id: u64, db_id: u16, slot: u16, user_key: &'a [u8]) -> Self {
         SetMemberKey {
-            kind: KeyType::SetItem,
+            prefix: KeyPrefix::new(KeyType::SetItem, db_id, slot),
             set_id,
             user_key,
         }
@@ -107,18 +97,20 @@ impl<'a> SetMemberKey<'a> {
 
     /// Serialise this object into `BytesMut`
     pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_u8(self.kind as u8);
+        self.prefix.to_writer(builder);
         builder.write_u64(self.set_id);
-        builder.write_bytes(self.user_key);
+        if !self.user_key.is_empty() {
+            builder.write_bytes(self.user_key);
+        }
     }
 
     pub fn from_bytes(buff: &'a [u8]) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buff);
-        let kind = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        let prefix = KeyPrefix::from_reader(&mut reader).ok_or(SableError::SerialisationError)?;
         let set_id = reader.read_u64().ok_or(SableError::SerialisationError)?;
-        let (_, user_key) = buff.split_at(reader.consumed());
+        let user_key = &buff[reader.consumed()..];
         Ok(SetMemberKey {
-            kind: KeyType::from_u8(kind).ok_or(SableError::SerialisationError)?,
+            prefix,
             set_id,
             user_key,
         })
@@ -134,6 +126,20 @@ impl<'a> SetMemberKey<'a> {
 
     pub fn key(&self) -> &[u8] {
         self.user_key
+    }
+
+    pub fn key_type(&self) -> &KeyType {
+        self.prefix.key_type()
+    }
+
+    /// Return prefix for iterating over all the set items
+    pub fn prefix(set_id: u64, db_id: u16, slot: u16) -> BytesMut {
+        let prefix = KeyPrefix::new(KeyType::SetItem, db_id, slot);
+        let mut buffer = BytesMut::with_capacity(KeyPrefix::SIZE + std::mem::size_of::<u64>());
+        let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
+        prefix.to_writer(&mut builder);
+        set_id.to_writer(&mut builder);
+        buffer
     }
 }
 
@@ -151,11 +157,12 @@ mod tests {
     #[test]
     pub fn test_hash_key_serialization() -> Result<(), SableError> {
         let field_key = BytesMut::from("field_key");
-        let set_item_key = SetMemberKey::with_user_key(42, &field_key);
+        let slot = crate::utils::calculate_slot(&field_key);
+        let set_item_key = SetMemberKey::with_user_key(42, 0, slot, &field_key);
         let kk = BytesMut::from(set_item_key.user_key);
         assert_eq!(kk, BytesMut::from("field_key"),);
         assert_eq!(set_item_key.set_id, 42);
-        assert_eq!(set_item_key.kind, KeyType::SetItem);
+        assert_eq!(set_item_key.key_type(), &KeyType::SetItem);
 
         let mut buffer = BytesMut::with_capacity(256);
         let mut reader = U8ArrayBuilder::with_buffer(&mut buffer);

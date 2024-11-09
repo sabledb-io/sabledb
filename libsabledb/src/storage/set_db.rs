@@ -6,13 +6,53 @@ use crate::{
 };
 use bytes::BytesMut;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct Set {
+    pub key: PrimaryKeyMetadata,
+    pub metadata: SetValueMetadata,
+}
+
+impl Set {
+    pub fn slot(&self) -> u16 {
+        self.key.slot()
+    }
+
+    pub fn database_id(&self) -> u16 {
+        self.key.database_id()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.metadata.id()
+    }
+
+    pub fn len(&self) -> u64 {
+        self.metadata.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.metadata.is_empty()
+    }
+
+    pub fn incr_len_by(&mut self, n: u64) {
+        self.metadata.incr_len_by(n);
+    }
+
+    pub fn decr_len_by(&mut self, n: u64) {
+        self.metadata.decr_len_by(n);
+    }
+
+    pub fn prefix(&self) -> BytesMut {
+        SetMemberKey::prefix(self.id(), self.database_id(), self.slot())
+    }
+}
+
 // Internal enum
 #[derive(Debug, PartialEq, Eq)]
-pub enum GetSetMetadataResult {
+pub enum FindSetResult {
     /// An entry exists in the db for the given key, but for a different type
     WrongType,
     /// A match was found
-    Some(SetValueMetadata),
+    Some(Set),
     /// No entry exist
     NotFound,
 }
@@ -148,102 +188,53 @@ impl<'a> SetDb<'a> {
         }
     }
 
-    /// Return the values associated with the provided members.
-    pub fn get_multi(
-        &self,
-        user_key: &BytesMut,
-        members: &[&BytesMut],
-    ) -> Result<SetGetMultiResult, SableError> {
-        if members.is_empty() {
-            return Ok(SetGetMultiResult::None);
-        }
-
-        // locate the hash
-        let hash = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => {
-                return Ok(SetGetMultiResult::WrongType);
-            }
-            GetSetMetadataResult::NotFound => {
-                return Ok(SetGetMultiResult::None);
-            }
-            GetSetMetadataResult::Some(hash) => hash,
-        };
-
-        let mut values = Vec::<Option<BytesMut>>::with_capacity(members.len());
-        for member in members {
-            values.push(self.get_hash_member_value(hash.id(), member)?);
-        }
-
-        Ok(SetGetMultiResult::Some(values))
-    }
-
-    /// Return the value of a hash member
-    pub fn get(&self, user_key: &BytesMut, member: &BytesMut) -> Result<SetGetResult, SableError> {
-        // locate the hash
-        let hash = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => {
-                return Ok(SetGetResult::WrongType);
-            }
-            GetSetMetadataResult::NotFound => {
-                return Ok(SetGetResult::NotFound);
-            }
-            GetSetMetadataResult::Some(hash) => hash,
-        };
-
-        let Some(value) = self.get_hash_member_value(hash.id(), member)? else {
-            return Ok(SetGetResult::MemberNotFound);
-        };
-
-        Ok(SetGetResult::Some(value))
-    }
-
-    /// Removes the specified members from the hash stored at `user_key`
+    /// Removes the specified members from the SET
     pub fn delete(
         &mut self,
         user_key: &BytesMut,
         members: &[&BytesMut],
     ) -> Result<SetDeleteResult, SableError> {
         // locate the hash
-        let mut hash = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => {
+        let mut set = match self.find_set(user_key)? {
+            FindSetResult::WrongType => {
                 return Ok(SetDeleteResult::WrongType);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 return Ok(SetDeleteResult::Some(0));
             }
-            GetSetMetadataResult::Some(hash) => hash,
+            FindSetResult::Some(hash) => hash,
         };
 
         let mut items_deleted = 0usize;
         for member in members {
-            if self.contains_set_member(hash.id(), member)? {
-                self.delete_set_member_key(hash.id(), member)?;
+            if self.contains(&set, member)? {
+                self.delete_set_member_key(&set, member)?;
                 items_deleted = items_deleted.saturating_add(1);
             }
         }
 
         // update the hash metadata
-        hash.decr_len_by(items_deleted as u64);
-        if hash.is_empty() {
-            self.delete_set_metadata(user_key, &hash)?;
+        set.decr_len_by(items_deleted as u64);
+        if set.is_empty() {
+            self.delete_set_metadata(user_key, &set.metadata)?;
         } else {
-            self.put_set_metadata(user_key, &hash)?;
+            self.put_set_metadata(user_key, &set.metadata)?;
         }
         Ok(SetDeleteResult::Some(items_deleted))
     }
 
     /// Return the size of the hash
     pub fn len(&self, user_key: &BytesMut) -> Result<SetLenResult, SableError> {
-        let md = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => {
+        let set = match self.find_set(user_key)? {
+            FindSetResult::WrongType => {
                 return Ok(SetLenResult::WrongType);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 return Ok(SetLenResult::Some(0));
             }
-            GetSetMetadataResult::Some(md) => md,
+            FindSetResult::Some(md) => md,
         };
-        Ok(SetLenResult::Some(md.len() as usize))
+        Ok(SetLenResult::Some(set.len() as usize))
     }
 
     /// Check whether `user_member` exists in the hash `user_key`
@@ -252,18 +243,18 @@ impl<'a> SetDb<'a> {
         user_key: &BytesMut,
         user_member: &BytesMut,
     ) -> Result<SetExistsResult, SableError> {
-        // locate the hash
-        let hash = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => {
+        // locate the set
+        let set = match self.find_set(user_key)? {
+            FindSetResult::WrongType => {
                 return Ok(SetExistsResult::WrongType);
             }
-            GetSetMetadataResult::NotFound => {
+            FindSetResult::NotFound => {
                 return Ok(SetExistsResult::NotExists);
             }
-            GetSetMetadataResult::Some(hash) => hash,
+            FindSetResult::Some(set) => set,
         };
 
-        if self.contains_set_member(hash.id(), user_member)? {
+        if self.contains(&set, user_member)? {
             Ok(SetExistsResult::Exists)
         } else {
             Ok(SetExistsResult::NotExists)
@@ -271,15 +262,18 @@ impl<'a> SetDb<'a> {
     }
 
     /// Load hash value metadata from the store
-    pub fn set_metadata(&self, user_key: &BytesMut) -> Result<GetSetMetadataResult, SableError> {
+    pub fn find_set(&self, user_key: &BytesMut) -> Result<FindSetResult, SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         let Some(value) = self.cache.get(&encoded_key)? else {
-            return Ok(GetSetMetadataResult::NotFound);
+            return Ok(FindSetResult::NotFound);
         };
 
         match self.try_decode_set_value_metadata(&value)? {
-            None => Ok(GetSetMetadataResult::WrongType),
-            Some(hash_md) => Ok(GetSetMetadataResult::Some(hash_md)),
+            None => Ok(FindSetResult::WrongType),
+            Some(md) => Ok(FindSetResult::Some(Set {
+                key: PrimaryKeyMetadata::new(user_key, self.db_id),
+                metadata: md,
+            })),
         }
     }
 
@@ -335,27 +329,28 @@ impl<'a> SetDb<'a> {
         }
 
         // locate the set
-        let mut set = match self.set_metadata(user_key)? {
-            GetSetMetadataResult::WrongType => return Ok(SetPutResult::WrongType),
-            GetSetMetadataResult::NotFound => {
+        let mut set = match self.find_set(user_key)? {
+            FindSetResult::WrongType => return Ok(SetPutResult::WrongType),
+            FindSetResult::NotFound => {
                 // Create a entry
-                self.create_set_metadata(user_key)?
+                self.create_set(user_key)?
             }
-            GetSetMetadataResult::Some(set) => set,
+            FindSetResult::Some(set) => set,
         };
 
         let mut items_added = 0usize;
         for member in members {
-            match self.put_set_member(set.id(), member)? {
+            match self.put_set_member(&set, member)? {
                 PutMemberResult::AlreadyExists => {}
                 PutMemberResult::Inserted => items_added = items_added.saturating_add(1),
             }
         }
 
         set.incr_len_by(items_added as u64);
-        self.put_set_metadata(user_key, &set)?;
+        self.put_set_metadata(user_key, &set.metadata)?;
         Ok(SetPutResult::Some(items_added))
     }
+
     /// Apply the changes to the store and clear the cache
     fn flush_cache(&mut self) -> Result<(), SableError> {
         self.cache.flush()
@@ -398,7 +393,7 @@ impl<'a> SetDb<'a> {
     }
 
     /// Create or replace a SET entry in the database
-    fn create_set_metadata(&mut self, user_key: &BytesMut) -> Result<SetValueMetadata, SableError> {
+    fn create_set(&mut self, user_key: &BytesMut) -> Result<Set, SableError> {
         let set_md = SetValueMetadata::with_id(self.store.generate_id());
         self.put_set_metadata(user_key, &set_md)?;
 
@@ -409,18 +404,24 @@ impl<'a> SetDb<'a> {
                 .with_value_type(ValueType::Set)
                 .to_bytes();
         self.cache.put(&bookkeeping_record, user_key.clone())?;
-        Ok(set_md)
+
+        let key = PrimaryKeyMetadata::new(user_key, self.db_id);
+        Ok(Set {
+            key,
+            metadata: set_md,
+        })
     }
 
     /// Encode an hash member key from user member
     fn encode_set_member_key(
         &self,
-        set_id: u64,
+        set: &Set,
         user_member: &BytesMut,
     ) -> Result<BytesMut, SableError> {
         let mut buffer = BytesMut::with_capacity(256);
         let mut builder = U8ArrayBuilder::with_buffer(&mut buffer);
-        let member_key = SetMemberKey::with_user_key(set_id, user_member);
+        let member_key =
+            SetMemberKey::with_user_key(set.id(), set.database_id(), set.slot(), user_member);
         member_key.to_bytes(&mut builder);
         Ok(buffer)
     }
@@ -428,37 +429,27 @@ impl<'a> SetDb<'a> {
     /// Delete hash member from the database
     fn delete_set_member_key(
         &mut self,
-        set_id: u64,
+        set: &Set,
         user_member: &BytesMut,
     ) -> Result<(), SableError> {
-        let key = self.encode_set_member_key(set_id, user_member)?;
+        let key = self.encode_set_member_key(set, user_member)?;
         self.cache.delete(&key)?;
         Ok(())
     }
 
-    /// Return the value of hash member
-    fn get_hash_member_value(
-        &self,
-        set_id: u64,
-        user_member: &BytesMut,
-    ) -> Result<Option<BytesMut>, SableError> {
-        let key = self.encode_set_member_key(set_id, user_member)?;
-        self.cache.get(&key)
-    }
-
-    /// Return the value of hash member
-    fn contains_set_member(&self, set_id: u64, user_member: &BytesMut) -> Result<bool, SableError> {
-        let key = self.encode_set_member_key(set_id, user_member)?;
+    /// Return true if `set` contains `user_member`
+    fn contains(&self, set: &Set, user_member: &BytesMut) -> Result<bool, SableError> {
+        let key = self.encode_set_member_key(set, user_member)?;
         self.cache.contains(&key)
     }
 
     /// Put the value for a hash member
     fn put_set_member(
         &mut self,
-        set_id: u64,
+        set: &Set,
         user_member: &BytesMut,
     ) -> Result<PutMemberResult, SableError> {
-        let key = self.encode_set_member_key(set_id, user_member)?;
+        let key = self.encode_set_member_key(set, user_member)?;
         let updating = self.cache.contains(&key)?;
         self.cache.put(&key, BytesMut::default())?;
         Ok(if updating {
@@ -512,8 +503,8 @@ mod tests {
         // run a hash operation on a string key
         assert_eq!(set_db.len(&key).unwrap(), SetLenResult::WrongType);
         assert_eq!(
-            set_db.get_multi(&key, &[&key]).unwrap(),
-            SetGetMultiResult::WrongType
+            set_db.put_multi(&key, &[&key]).unwrap(),
+            SetPutResult::WrongType
         );
         assert_eq!(
             set_db.delete(&key, &[&key]).unwrap(),
@@ -542,8 +533,8 @@ mod tests {
         set_db.commit().unwrap();
 
         // confirm that we have a bookkeeping record
-        let set_id = match set_db.set_metadata(&set_name).unwrap() {
-            GetSetMetadataResult::Some(md) => md.id(),
+        let set_id = match set_db.find_set(&set_name).unwrap() {
+            FindSetResult::Some(md) => md.id(),
             _ => {
                 panic!("Expected to find the set MD in the database");
             }
@@ -570,8 +561,8 @@ mod tests {
         let (_deleter, db) = crate::tests::open_store();
         let mut set_db = SetDb::with_storage(&db, 0);
 
-        let hash_name = BytesMut::from("myset");
-        let hash_name_2 = BytesMut::from("myset_2");
+        let set_name_1 = BytesMut::from("myset");
+        let set_name_2 = BytesMut::from("myset_2");
 
         let member1 = BytesMut::from("member1");
         let member2 = BytesMut::from("member2");
@@ -579,77 +570,46 @@ mod tests {
         let no_such_member = BytesMut::from("nosuchmember");
 
         assert_eq!(
-            set_db.put_multi(&hash_name, &[&member1, &member2, &member3])?,
+            set_db.put_multi(&set_name_1, &[&member1, &member2, &member3])?,
             SetPutResult::Some(3)
         );
 
         assert_eq!(
-            set_db.put_multi(&hash_name_2, &[&member1, &member2, &member3])?,
+            set_db.put_multi(&set_name_2, &[&member1, &member2, &member3])?,
             SetPutResult::Some(3)
         );
 
-        assert_eq!(set_db.len(&hash_name).unwrap(), SetLenResult::Some(3));
+        assert_eq!(set_db.len(&set_name_1).unwrap(), SetLenResult::Some(3));
         assert_eq!(
             set_db
-                .delete(&hash_name, &[&member1, &no_such_member])
+                .delete(&set_name_1, &[&member1, &no_such_member])
                 .unwrap(),
             SetDeleteResult::Some(1)
         );
 
-        assert_eq!(set_db.len(&hash_name).unwrap(), SetLenResult::Some(2));
+        assert_eq!(set_db.len(&set_name_1).unwrap(), SetLenResult::Some(2));
 
         {
             // Check the first hash
-
-            let SetGetMultiResult::Some(results_vec) = set_db
-                .get_multi(&hash_name, &[&member1, &no_such_member, &member2, &member3])
-                .unwrap()
-            else {
-                panic!("get failed");
-            };
-
-            // non existing members, will create a `None` value in the result array
-            assert_eq!(results_vec.len(), 4);
-
-            // Since we deleted `member1` earlier, we expect a None value
-            let expected_values = vec![
-                None,
-                None,
-                Some(BytesMut::default()),
-                Some(BytesMut::default()),
-            ];
-            for i in 0..4 {
-                let result = results_vec.get(i).unwrap();
-                assert_eq!(result, &expected_values[i]);
+            for (member, res) in [
+                (&member1, SetExistsResult::NotExists),
+                (&no_such_member, SetExistsResult::NotExists),
+                (&member2, SetExistsResult::Exists),
+                (&member3, SetExistsResult::Exists),
+            ] {
+                assert!(set_db.member_exists(&set_name_1, member).unwrap().eq(&res))
             }
         }
         {
-            // Confirm that the manipulations on the first hash did not impact the second one
-            let SetGetMultiResult::Some(results_vec) = set_db
-                .get_multi(
-                    &hash_name_2,
-                    &[&member1, &no_such_member, &member2, &member3],
-                )
-                .unwrap()
-            else {
-                panic!("get failed");
-            };
-
-            // non existing members, will create a `None` value in the result array
-            assert_eq!(results_vec.len(), 4);
-
-            // This time, `member1` should still be in the hash
-            let expected_values = vec![
-                Some(BytesMut::default()),
-                None,
-                Some(BytesMut::default()),
-                Some(BytesMut::default()),
-            ];
-            for i in 0..4 {
-                let result = results_vec.get(i).unwrap();
-                assert_eq!(result, &expected_values[i]);
+            // Check the second hash
+            for (member, res) in [
+                (&member1, SetExistsResult::Exists),
+                (&no_such_member, SetExistsResult::NotExists),
+                (&member2, SetExistsResult::Exists),
+                (&member3, SetExistsResult::Exists),
+            ] {
+                assert!(set_db.member_exists(&set_name_2, member).unwrap().eq(&res))
             }
-            assert_eq!(set_db.len(&hash_name_2).unwrap(), SetLenResult::Some(3));
         }
         Ok(())
     }
