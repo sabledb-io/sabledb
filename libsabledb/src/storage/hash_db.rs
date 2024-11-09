@@ -359,24 +359,6 @@ impl<'a> HashDb<'a> {
     }
 
     /// Delete the hash metadata
-    fn delete_hash_metadata(
-        &mut self,
-        user_key: &BytesMut,
-        hash_md: &HashValueMetadata,
-    ) -> Result<(), SableError> {
-        let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
-        self.cache.delete(&encoded_key)?;
-
-        // Delete the bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(hash_md.id())
-            .with_value_type(ValueType::Hash)
-            .to_bytes();
-        self.cache.delete(&bookkeeping_record)?;
-        Ok(())
-    }
-
-    /// Delete the hash metadata
     fn delete_hash(&mut self, user_key: &BytesMut, hash: &Hash) -> Result<(), SableError> {
         let encoded_key = PrimaryKeyMetadata::new_primary_key(user_key, self.db_id);
         self.cache.delete(&encoded_key)?;
@@ -388,25 +370,6 @@ impl<'a> HashDb<'a> {
             .to_bytes();
         self.cache.delete(&bookkeeping_record)?;
         Ok(())
-    }
-
-    /// Create or replace a hash entry in the database
-    /// If `hash_id_opt` is `None`, create a new id and put it
-    /// else, override the existing entry
-    fn create_hash_metadata(
-        &mut self,
-        user_key: &BytesMut,
-    ) -> Result<HashValueMetadata, SableError> {
-        let hash_md = HashValueMetadata::with_id(self.store.generate_id());
-        self.put_hash_metadata(user_key, &hash_md)?;
-
-        // Add a bookkeeping record
-        let bookkeeping_record = Bookkeeping::new(self.db_id)
-            .with_uid(hash_md.id())
-            .with_value_type(ValueType::Hash)
-            .to_bytes();
-        self.cache.put(&bookkeeping_record, user_key.clone())?;
-        Ok(hash_md)
     }
 
     /// Create or replace a hash entry in the database
