@@ -20,6 +20,9 @@ pub struct KeyPrefix {
 }
 
 impl KeyPrefix {
+    pub const SIZE: usize =
+        std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
+
     pub fn set_key_type(&mut self, key_type: KeyType) {
         self.key_type = key_type;
     }

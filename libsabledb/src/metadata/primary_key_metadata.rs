@@ -61,8 +61,7 @@ impl FromU8Reader for PrimaryKeyMetadata {
 }
 
 impl PrimaryKeyMetadata {
-    pub const SIZE: usize =
-        std::mem::size_of::<KeyType>() + std::mem::size_of::<u16>() + std::mem::size_of::<u16>();
+    pub const SIZE: usize = KeyPrefix::SIZE;
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self, SableError> {
         let mut reader = U8ArrayReader::with_buffer(buf);
