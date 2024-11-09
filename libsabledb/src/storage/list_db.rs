@@ -1,5 +1,5 @@
 use crate::{
-    metadata::{Bookkeeping, ListValueMetadata, ValueType},
+    metadata::{Bookkeeping, KeyPrefix, ListValueMetadata, ValueType},
     storage::DbWriteCache,
     CommonValueMetadata, FromBytes, FromU8Reader, PrimaryKeyMetadata, SableError, StorageAdapter,
     ToBytes, ToU8Writer, U8ArrayBuilder, U8ArrayReader,
@@ -28,8 +28,7 @@ pub struct ListFlags: u32  {
 
 #[derive(Clone)]
 struct ListItemKey {
-    pub db_id: u16,
-    pub slot: u16,
+    pub prefix: KeyPrefix,
     pub list_id: u64,
     pub item_id: u64,
 }
@@ -37,8 +36,7 @@ struct ListItemKey {
 impl ListItemKey {
     pub fn new(list: &List, item_id: u64) -> Self {
         ListItemKey {
-            db_id: list.database_id(),
-            slot: list.slot(),
+            prefix: KeyPrefix::new(crate::KeyType::ListItem, list.database_id(), list.slot()),
             list_id: list.id(),
             item_id,
         }
@@ -289,9 +287,7 @@ impl FromBytes for ListItemValue {
 
 impl ToU8Writer for ListItemKey {
     fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        builder.write_key_type(crate::KeyType::ListItem);
-        self.db_id.to_writer(builder);
-        self.slot.to_writer(builder);
+        self.prefix.to_writer(builder);
         self.list_id.to_writer(builder);
         self.item_id.to_writer(builder);
     }
