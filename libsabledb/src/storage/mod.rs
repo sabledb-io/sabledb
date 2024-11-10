@@ -1,5 +1,6 @@
 mod generic_db;
 mod hash_db;
+mod limits;
 mod list_db;
 mod scan_cursor;
 mod set_db;
@@ -17,6 +18,7 @@ pub use hash_db::{
     FindHashResult, HashDb, HashDeleteResult, HashExistsResult, HashGetMultiResult, HashGetResult,
     HashLenResult, HashPutResult,
 };
+pub use limits::*;
 pub use list_db::*;
 pub use scan_cursor::ScanCursor;
 pub use set_db::*;

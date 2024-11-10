@@ -1,54 +1,17 @@
-Shard management:
+# Tasks
 
-## Primary:
+## General
 
-- [x] Update primary info the cluster database in a constant interval (this is the equivalent of a `heartbeat` operation)
+- Add API to dump & load a complete slot
+- Add API to dump slot from a given txn ID
+- Fix `calculate_slot` to include HASHTAGS
+- Rename binaries to `sabledb`, `sabledb-cli`, `sabledb-admin`, `sabledb-bench`
 
-## Replica:
+## Cluster related
 
-- [x] Update the node info after each successful operation (mainly the fields: `last_txn_id` + `last_updated`)
-- [x] Add random check interval per replica for checking whether the primary is alive or not
-- [x] Update the replicas in the SET ( `<primary_node_id>_replicas` ) after each successful operation / timeout ( `GET_CHANGES`, `FULL_SYNC` etc)
-- [x] When calling `REPLICAOF NO ONE` make sure to:
-    - [x] Update the cluster database with the new role
-    - [x] Disassociate the node from the `<primary_node_id>_replicas` SET (call `SREM`)
+- Provide API for building control plane on top of `SableDB`
 
-## Auto-Failover
+## Statistics
 
-When a replica detects that its primary did not update its `last_updated` field in over than `N` seconds (where `N` is a random number for each replica),
-it should trigger an auto-faileover process:
-
-- [x] Mark in the DB that an "auto-failover" process is taking place `SET <primary_id>_FAILOVER <unique_value> NX EX 60`
-- [x] Decide which replica should be the next primary (the one with the highest `last_txn_id` field)
-- [x] Dispatch a message for every replica in the shard to start a failover (using `BLPUSH` / `BRPOP`) with the correct `REPLICAOF` command to execute
-- [x] Delete the `<old_primary>` HASH key from the database
-- [x] Delete the `<old_primary>_replicas` SET key from the database
-- [x] Remove the `<old_primary_id>_LOCK` (for safety we also set it with 60 seconds timeout)
-- [x] Place a command on the OLD primary to connect to the new PRIMARY
-
-**A note about locking:**
-The only client allowed to delete the lock is the client created it, hence the `<unique_value>`. If that client crashed
-we have the `EX 60` as a backup plan
-
-The current information stored in the cluster DB is (HASH):
-
-```
-"aaa-bbb-ccc-ddd" => {
-    "node_id": "aaa-bbb-ccc-ddd",
-    "node_address": "IP:PORT",
-    "role": "replica",
-    "last_updated": "1234567890",
-    "last_txn_id": "0987654321",
-    "primary_node_id": "eee-fff-hhh-iii"
-}
-```
-
-Every primary has an entry (SET) of the following format for keeping track of
-replicas in its shard:
-
-```
-"eee-fff-hhh-iii_replicas" => {
-    "aaa-bbb-ccc-ddd"
-}
-```
+- Provide per slot metrics
 

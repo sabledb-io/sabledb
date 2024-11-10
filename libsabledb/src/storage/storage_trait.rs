@@ -1,12 +1,11 @@
 use crate::{
-    storage::{BatchUpdate, PutFlags, StorageUpdates},
+    storage::{BatchUpdate, GetChangesLimits, PutFlags, StorageUpdates},
     SableError,
 };
 use bytes::BytesMut;
 use nohash_hasher::IntMap;
 use std::path::Path;
-
-//pub type IterateCallback<'a> = dyn FnMut(&[u8], &[u8], &[u8]) -> bool + 'a;
+use std::rc::Rc;
 
 pub enum StorageIterator<'a> {
     RocksDb(rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::DB>),
@@ -140,8 +139,7 @@ pub trait StorageTrait {
     fn storage_updates_since(
         &self,
         sequence_number: u64,
-        memory_limit: Option<u64>,
-        changes_count_limit: Option<u64>,
+        limits: Rc<GetChangesLimits>,
     ) -> Result<StorageUpdates, SableError>;
 
     /// The sequence number of the most recent transaction.

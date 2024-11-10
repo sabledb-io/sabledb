@@ -4,7 +4,7 @@ use crate::{
     replication::{StorageUpdates, StorageUpdatesIterItem},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
-        PutFlags, StorageTrait, SEQUENCES_FILE,
+        GetChangesLimits, PutFlags, StorageTrait, SEQUENCES_FILE,
     },
     BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
 };
@@ -12,6 +12,7 @@ use crate::{
 use bytes::BytesMut;
 use num_format::{Locale, ToFormattedString};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 type Database = rocksdb::DB;
@@ -22,20 +23,38 @@ pub struct StorageRocksDb {
     write_opts: rocksdb::WriteOptions,
 }
 
-struct UpdateBatchIterator {
+pub struct UpdateBatchIterator {
     storage_updates: StorageUpdates,
+    limits: Rc<GetChangesLimits>,
 }
 
 impl UpdateBatchIterator {
-    pub fn new(from_seq: u64) -> Self {
+    pub fn new_with_limits(from_seq: u64, limits: Rc<GetChangesLimits>) -> Self {
         UpdateBatchIterator {
             storage_updates: StorageUpdates::from_seq_number(from_seq),
+            limits,
         }
     }
 
     pub fn update(&mut self, seq: u64) {
         self.storage_updates.end_seq_number = seq;
         self.storage_updates.changes_count = self.storage_updates.changes_count.saturating_add(1);
+    }
+
+    /// Based on the limits provided, check if the iterator can continue
+    pub fn can_continue(&self) -> bool {
+        if let Some(memory_limit) = self.limits.memory_limit() {
+            if self.storage_updates.len().ge(memory_limit) {
+                return false;
+            }
+        }
+
+        if let Some(changes_count_limit) = self.limits.changes_count_limit() {
+            if self.storage_updates.changes_count.ge(changes_count_limit) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -277,19 +296,15 @@ impl StorageTrait for StorageRocksDb {
         Ok(())
     }
 
-    /// Return all changes since the requested `sequence_number`
-    /// If not `None`, `memory_limit` sets the limit for the
-    /// memory (in bytes) that a single change since message can
-    /// return
+    /// Return all changes since the requested `sequence_number`. Limit changes to the `GetChangesLimits`
     fn storage_updates_since(
         &self,
         sequence_number: u64,
-        memory_limit: Option<u64>,
-        changes_count_limit: Option<u64>,
+        limits: Rc<GetChangesLimits>,
     ) -> Result<StorageUpdates, SableError> {
         let changes_iter = self.store.get_updates_since(sequence_number)?;
 
-        let mut myiter = UpdateBatchIterator::new(sequence_number);
+        let mut myiter = UpdateBatchIterator::new_with_limits(sequence_number, limits);
         for change in changes_iter {
             let (seq, write_batch) = match change {
                 Err(e) => {
@@ -303,16 +318,8 @@ impl StorageTrait for StorageRocksDb {
             // update the counters
             myiter.update(seq);
 
-            if let Some(memory_limit) = memory_limit {
-                if myiter.storage_updates.len() >= memory_limit {
-                    break;
-                }
-            }
-
-            if let Some(changes_count_limit) = changes_count_limit {
-                if myiter.storage_updates.changes_count >= changes_count_limit {
-                    break;
-                }
+            if !myiter.can_continue() {
+                break;
             }
         }
         Ok(myiter.storage_updates)
@@ -509,7 +516,12 @@ mod tests {
         }
 
         // read 10 changes, starting 0
-        let changes = rocks.storage_updates_since(0, None, Some(10))?;
+        let limits = Rc::new(
+            GetChangesLimits::builder()
+                .with_max_changes_count(10)
+                .build(),
+        );
+        let changes = rocks.storage_updates_since(0, limits.clone())?;
         assert_eq!(changes.changes_count, 10);
 
         let next_batch_seq = changes.end_seq_number;
@@ -525,7 +537,7 @@ mod tests {
         }
         assert_eq!(counter, 20);
 
-        let changes = rocks.storage_updates_since(next_batch_seq, None, Some(10))?;
+        let changes = rocks.storage_updates_since(next_batch_seq, limits.clone())?;
         assert_eq!(changes.changes_count, 10);
         let mut counter = 0;
         let mut reader = crate::U8ArrayReader::with_buffer(&changes.serialised_data);

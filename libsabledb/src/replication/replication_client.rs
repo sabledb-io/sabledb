@@ -666,6 +666,9 @@ mod tests {
 
     #[test]
     fn test_replication_changes_flow() -> Result<(), SableError> {
+        use crate::storage::GetChangesLimits;
+        use std::rc::Rc;
+
         // Create 2 databases:
         // Primary database with 100K records and another replication database
         // with no records. After the primary database is populated, trigger
@@ -690,7 +693,8 @@ mod tests {
         );
 
         // Followed by the change set
-        reader.add_response(primary_db.storage_updates_since(0, None, None)?.to_bytes());
+        let limits = Rc::new(GetChangesLimits::builder().build());
+        reader.add_response(primary_db.storage_updates_since(0, limits)?.to_bytes());
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 

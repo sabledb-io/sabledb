@@ -1,6 +1,6 @@
 use crate::{
     replication::StorageUpdates,
-    storage::{storage_trait::IteratorAdapter, StorageTrait},
+    storage::{storage_trait::IteratorAdapter, GetChangesLimits, StorageTrait},
     utils, StorageRocksDb,
 };
 
@@ -259,7 +259,7 @@ enum TxnWriteCacheContainsResult {
     Found,
 }
 
-/// Transcation write cache.
+/// Transaction write cache.
 ///
 /// Used by the storage adapter to aggregate all writes (Put/Delete) into a single atomic batch
 #[allow(dead_code)]
@@ -559,13 +559,12 @@ impl StorageAdapter {
     pub fn storage_updates_since(
         &self,
         sequence_number: u64,
-        memory_limit: Option<u64>,
-        changes_count_limit: Option<u64>,
+        limits: Rc<GetChangesLimits>,
     ) -> Result<StorageUpdates, SableError> {
         let Some(db) = &self.store else {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
-        db.storage_updates_since(sequence_number, memory_limit, changes_count_limit)
+        db.storage_updates_since(sequence_number, limits)
     }
 
     /// The sequence number of the most recent transaction.

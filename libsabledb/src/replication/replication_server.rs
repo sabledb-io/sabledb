@@ -1,6 +1,9 @@
 use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
+use crate::storage::GetChangesLimits;
+use std::rc::Rc;
+
 use futures::future;
 
 use crate::utils;
@@ -303,24 +306,27 @@ impl ReplicationServer {
                 // Get the changes from the database. If no changes available
                 // hold the request until we have some changes to send over
                 let mut retries = 5usize;
-                let storage_updates = loop {
-                    let storage_updates = match store.storage_updates_since(
-                        seq,
-                        Some(
+                let limits = Rc::new(
+                    GetChangesLimits::builder()
+                        .with_memory(
                             options
                                 .read()
                                 .expect(OPTIONS_LOCK_ERR)
                                 .replication_limits
                                 .single_update_buffer_size as u64,
-                        ),
-                        Some(
+                        )
+                        .with_max_changes_count(
                             options
                                 .read()
                                 .expect(OPTIONS_LOCK_ERR)
                                 .replication_limits
                                 .num_updates_per_message as u64,
-                        ),
-                    ) {
+                        )
+                        .build(),
+                );
+
+                let storage_updates = loop {
+                    let storage_updates = match store.storage_updates_since(seq, limits.clone()) {
                         Err(e) => {
                             let msg =
                                 format!("Failed to construct 'changes since' message. {:?}", e);
