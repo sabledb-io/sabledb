@@ -56,13 +56,30 @@ impl UpdateBatchIterator {
         }
         true
     }
+
+    /// Return whether `key` starts with `self.prefix`. If `self.prefix` is `None`, return `true`
+    fn starts_with(&self, key: &[u8]) -> bool {
+        let Some(prefix) = self.limits.prefix_limit() else {
+            return true;
+        };
+        key.starts_with(&prefix)
+    }
 }
 
 impl rocksdb::WriteBatchIterator for UpdateBatchIterator {
     fn put(&mut self, key: Box<[u8]>, value: Box<[u8]>) {
+        // if "prefix" limit is set, only collect keys that start with the prefix
+        if !self.starts_with(&key) {
+            return;
+        }
         self.storage_updates.add_put(&key, &value);
     }
+
     fn delete(&mut self, key: Box<[u8]>) {
+        // if "prefix" limit is set, only collect keys that start with the prefix
+        if !self.starts_with(&key) {
+            return;
+        }
         self.storage_updates.add_delete(&key);
     }
 }
