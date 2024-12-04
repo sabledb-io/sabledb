@@ -35,9 +35,12 @@ async fn thread_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
 /// Client main function
 async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     const LIST_KEY_RANGE: usize = 1000;
-    let stream =
-        crate::redis_client::RedisClient::connect(opts.host.clone(), opts.port as u16, opts.tls)
-            .await?;
+    let stream = crate::redis_client::RedisClient::connect(
+        opts.host.clone(),
+        opts.port as u16,
+        opts.tls_enabled(),
+    )
+    .await?;
     match opts.test.as_str() {
         "set" => tests::run_set(stream, opts).await?,
         "get" => tests::run_get(stream, opts).await?,

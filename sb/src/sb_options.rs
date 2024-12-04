@@ -86,4 +86,9 @@ impl Options {
     pub fn client_requests(&self) -> usize {
         self.num_requests.saturating_div(self.connections)
     }
+
+    /// Return true if should be using TLS connection
+    pub fn tls_enabled(&self) -> bool {
+        self.ssl || self.tls
+    }
 }
