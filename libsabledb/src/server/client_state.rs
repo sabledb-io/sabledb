@@ -1,5 +1,5 @@
 use crate::{
-    commands::RedisCommand,
+    commands::ValkeyCommand,
     server::{new_client_id, ServerState, WatchedKeys},
     storage::{ScanCursor, StorageAdapter},
 };
@@ -21,17 +21,17 @@ thread_local! {
 
 #[derive(Default)]
 pub struct TransactionState {
-    commands: VecDeque<Rc<RedisCommand>>,
+    commands: VecDeque<Rc<ValkeyCommand>>,
     watched_keys: Vec<BytesMut>,
 }
 
 impl TransactionState {
     /// Queue command for later execution
-    pub fn add_command(&mut self, command: Rc<RedisCommand>) {
+    pub fn add_command(&mut self, command: Rc<ValkeyCommand>) {
         self.commands.push_back(command);
     }
 
-    pub fn commands(&self) -> &VecDeque<Rc<RedisCommand>> {
+    pub fn commands(&self) -> &VecDeque<Rc<ValkeyCommand>> {
         &self.commands
     }
 
@@ -100,12 +100,12 @@ impl ClientState {
     }
 
     /// Return a clone of the transaction command queue
-    pub fn txn_commands_vec_cloned(&self) -> VecDeque<Rc<RedisCommand>> {
+    pub fn txn_commands_vec_cloned(&self) -> VecDeque<Rc<ValkeyCommand>> {
         ACTIVE_TRANSACTIONS.with(|txs| {
             if let Some(txn_state) = txs.borrow().get(&self.id()) {
                 txn_state.commands().clone()
             } else {
-                VecDeque::<Rc<RedisCommand>>::default()
+                VecDeque::<Rc<ValkeyCommand>>::default()
             }
         })
     }
@@ -122,7 +122,7 @@ impl ClientState {
     }
 
     /// Add command to the back of the transaction queue
-    pub fn add_txn_command(&self, command: Rc<RedisCommand>) {
+    pub fn add_txn_command(&self, command: Rc<ValkeyCommand>) {
         ACTIVE_TRANSACTIONS.with(|txs| {
             if let Some(txn_state) = txs.borrow_mut().get_mut(&self.id()) {
                 txn_state.add_command(command)

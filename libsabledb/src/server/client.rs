@@ -4,9 +4,9 @@ use crate::{
     server::{ClientState, Telemetry},
     utils::RequestParser,
     utils::RespBuilderV2,
-    ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, RedisCommand,
-    RedisCommandName, SableError, ServerCommands, ServerState, SetCommands, StorageAdapter,
-    StringCommands, TransactionCommands, ZSetCommands,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, SableError,
+    ServerCommands, ServerState, SetCommands, StorageAdapter, StringCommands, TransactionCommands,
+    ValkeyCommand, ValkeyCommandName, ZSetCommands,
 };
 
 use bytes::BytesMut;
@@ -182,7 +182,7 @@ impl Client {
     /// Read data from the network, parse it and send it "writer" task for processing
     async fn reader_loop(
         mut rx: impl AsyncReadExt + std::marker::Unpin,
-        channel_tx: tokio::sync::mpsc::Sender<Rc<RedisCommand>>,
+        channel_tx: tokio::sync::mpsc::Sender<Rc<ValkeyCommand>>,
         client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         let mut buffer = BytesMut::new();
@@ -246,7 +246,7 @@ impl Client {
     /// Accepts the parsed requests, execute the command and send back the response
     async fn writer_loop(
         mut tx: impl AsyncWriteExt + std::marker::Unpin,
-        mut channel_rx: TokioReceiver<Rc<RedisCommand>>,
+        mut channel_rx: TokioReceiver<Rc<ValkeyCommand>>,
         client_state: Rc<ClientState>,
     ) -> Result<(), SableError> {
         while let Some(command) = channel_rx.recv().await {
@@ -337,7 +337,7 @@ impl Client {
     /// Handle time-out for command
     fn handle_timeout(
         _client_state: Rc<ClientState>,
-        _command: Rc<RedisCommand>,
+        _command: Rc<ValkeyCommand>,
         timeout_response: TimeoutResponse,
     ) -> Result<BytesMut, SableError> {
         let builder = RespBuilderV2::default();
@@ -362,7 +362,7 @@ impl Client {
     /// A write command being called on a replica server
     fn pre_handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
     ) -> PreHandleCommandResult {
         if !client_state.active() {
             PreHandleCommandResult::ClientKilled
@@ -376,7 +376,7 @@ impl Client {
         } else if client_state.is_txn_state_multi() {
             // All commands by "exec" and "discard" are queued
             match command.metadata().name() {
-                RedisCommandName::Exec | RedisCommandName::Discard => {
+                ValkeyCommandName::Exec | ValkeyCommandName::Discard => {
                     PreHandleCommandResult::Continue
                 }
                 _ => {
@@ -395,7 +395,7 @@ impl Client {
     /// Accepts the parsed requests, execute the command and send back the response
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<ClientNextAction, SableError> {
         {
@@ -446,7 +446,7 @@ impl Client {
         // as this will cause some compilation errors
         let kind = command.metadata().name();
         match kind {
-            RedisCommandName::Exec => {
+            ValkeyCommandName::Exec => {
                 match TransactionCommands::handle_exec(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => Err(SableError::ClientInvalidState),
                     HandleCommandResult::ResponseSent => Ok(ClientNextAction::NoAction),
@@ -463,39 +463,39 @@ impl Client {
     /// Handle all commands, execpt for `Exec`
     pub async fn handle_non_exec_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<ClientNextAction, SableError> {
         let builder = RespBuilderV2::default();
         let kind = command.metadata().name();
         let client_action = match kind {
-            RedisCommandName::Ping => {
+            ValkeyCommandName::Ping => {
                 tx.write_all(PONG).await?;
                 Telemetry::inc_net_bytes_written(PONG.len() as u128);
                 ClientNextAction::NoAction
             }
-            RedisCommandName::Set
-            | RedisCommandName::Append
-            | RedisCommandName::Get
-            | RedisCommandName::Incr
-            | RedisCommandName::Decr
-            | RedisCommandName::DecrBy
-            | RedisCommandName::IncrBy
-            | RedisCommandName::IncrByFloat
-            | RedisCommandName::GetDel
-            | RedisCommandName::GetEx
-            | RedisCommandName::GetRange
-            | RedisCommandName::Lcs
-            | RedisCommandName::GetSet
-            | RedisCommandName::Mget
-            | RedisCommandName::Mset
-            | RedisCommandName::Msetnx
-            | RedisCommandName::Psetex
-            | RedisCommandName::Setex
-            | RedisCommandName::Setnx
-            | RedisCommandName::SetRange
-            | RedisCommandName::Strlen
-            | RedisCommandName::Substr => {
+            ValkeyCommandName::Set
+            | ValkeyCommandName::Append
+            | ValkeyCommandName::Get
+            | ValkeyCommandName::Incr
+            | ValkeyCommandName::Decr
+            | ValkeyCommandName::DecrBy
+            | ValkeyCommandName::IncrBy
+            | ValkeyCommandName::IncrByFloat
+            | ValkeyCommandName::GetDel
+            | ValkeyCommandName::GetEx
+            | ValkeyCommandName::GetRange
+            | ValkeyCommandName::Lcs
+            | ValkeyCommandName::GetSet
+            | ValkeyCommandName::Mget
+            | ValkeyCommandName::Mset
+            | ValkeyCommandName::Msetnx
+            | ValkeyCommandName::Psetex
+            | ValkeyCommandName::Setex
+            | ValkeyCommandName::Setnx
+            | ValkeyCommandName::SetRange
+            | ValkeyCommandName::Strlen
+            | ValkeyCommandName::Substr => {
                 match StringCommands::handle_command(client_state.clone(), command.clone(), tx)
                     .await?
                 {
@@ -511,12 +511,12 @@ impl Client {
                 }
                 ClientNextAction::NoAction
             }
-            RedisCommandName::Ttl
-            | RedisCommandName::Del
-            | RedisCommandName::Exists
-            | RedisCommandName::Expire
-            | RedisCommandName::Keys
-            | RedisCommandName::Scan => {
+            ValkeyCommandName::Ttl
+            | ValkeyCommandName::Del
+            | ValkeyCommandName::Exists
+            | ValkeyCommandName::Expire
+            | ValkeyCommandName::Keys
+            | ValkeyCommandName::Scan => {
                 match GenericCommands::handle_command(client_state.clone(), command.clone(), tx)
                     .await?
                 {
@@ -532,13 +532,13 @@ impl Client {
                 }
                 ClientNextAction::NoAction
             }
-            RedisCommandName::Config => {
+            ValkeyCommandName::Config => {
                 let mut buffer = BytesMut::with_capacity(32);
                 builder.ok(&mut buffer);
                 Self::send_response(tx, &buffer, client_state.id()).await?;
                 ClientNextAction::NoAction
             }
-            RedisCommandName::Info => {
+            ValkeyCommandName::Info => {
                 let mut buffer = BytesMut::with_capacity(1024);
                 crate::ReplicationTelemetry::set_last_change(
                     client_state.database().latest_sequence_number()?,
@@ -557,28 +557,28 @@ impl Client {
                 ClientNextAction::NoAction
             }
             // List commands
-            RedisCommandName::Lpush
-            | RedisCommandName::Lpushx
-            | RedisCommandName::Rpush
-            | RedisCommandName::Rpushx
-            | RedisCommandName::Lpop
-            | RedisCommandName::Rpop
-            | RedisCommandName::Llen
-            | RedisCommandName::Lindex
-            | RedisCommandName::Linsert
-            | RedisCommandName::Lset
-            | RedisCommandName::Lpos
-            | RedisCommandName::Ltrim
-            | RedisCommandName::Lrange
-            | RedisCommandName::Lrem
-            | RedisCommandName::Lmove
-            | RedisCommandName::Lmpop
-            | RedisCommandName::Rpoplpush
-            | RedisCommandName::Brpoplpush
-            | RedisCommandName::Blmove
-            | RedisCommandName::Blpop
-            | RedisCommandName::Brpop
-            | RedisCommandName::Blmpop => {
+            ValkeyCommandName::Lpush
+            | ValkeyCommandName::Lpushx
+            | ValkeyCommandName::Rpush
+            | ValkeyCommandName::Rpushx
+            | ValkeyCommandName::Lpop
+            | ValkeyCommandName::Rpop
+            | ValkeyCommandName::Llen
+            | ValkeyCommandName::Lindex
+            | ValkeyCommandName::Linsert
+            | ValkeyCommandName::Lset
+            | ValkeyCommandName::Lpos
+            | ValkeyCommandName::Ltrim
+            | ValkeyCommandName::Lrange
+            | ValkeyCommandName::Lrem
+            | ValkeyCommandName::Lmove
+            | ValkeyCommandName::Lmpop
+            | ValkeyCommandName::Rpoplpush
+            | ValkeyCommandName::Brpoplpush
+            | ValkeyCommandName::Blmove
+            | ValkeyCommandName::Blpop
+            | ValkeyCommandName::Brpop
+            | ValkeyCommandName::Blmpop => {
                 match ListCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
@@ -591,7 +591,7 @@ impl Client {
                 }
             }
             // Server commands
-            RedisCommandName::Client | RedisCommandName::Select => {
+            ValkeyCommandName::Client | ValkeyCommandName::Select => {
                 match ClientCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
@@ -602,12 +602,12 @@ impl Client {
                 ClientNextAction::NoAction
             }
             // Server commands
-            RedisCommandName::ReplicaOf
-            | RedisCommandName::SlaveOf
-            | RedisCommandName::Command
-            | RedisCommandName::FlushDb
-            | RedisCommandName::FlushAll
-            | RedisCommandName::DbSize => {
+            ValkeyCommandName::ReplicaOf
+            | ValkeyCommandName::SlaveOf
+            | ValkeyCommandName::Command
+            | ValkeyCommandName::FlushDb
+            | ValkeyCommandName::FlushAll
+            | ValkeyCommandName::DbSize => {
                 match ServerCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
@@ -618,23 +618,23 @@ impl Client {
                 ClientNextAction::NoAction
             }
             // Set commands
-            RedisCommandName::Sadd
-            | RedisCommandName::Scard
-            | RedisCommandName::Sdiff
-            | RedisCommandName::Sdiffstore
-            | RedisCommandName::Sinter
-            | RedisCommandName::Sintercard
-            | RedisCommandName::Sinterstore
-            | RedisCommandName::Sismember
-            | RedisCommandName::Smismember
-            | RedisCommandName::Smembers
-            | RedisCommandName::Smove
-            | RedisCommandName::Spop
-            | RedisCommandName::Srandmember
-            | RedisCommandName::Srem
-            | RedisCommandName::Sscan
-            | RedisCommandName::Sunion
-            | RedisCommandName::Sunionstore => {
+            ValkeyCommandName::Sadd
+            | ValkeyCommandName::Scard
+            | ValkeyCommandName::Sdiff
+            | ValkeyCommandName::Sdiffstore
+            | ValkeyCommandName::Sinter
+            | ValkeyCommandName::Sintercard
+            | ValkeyCommandName::Sinterstore
+            | ValkeyCommandName::Sismember
+            | ValkeyCommandName::Smismember
+            | ValkeyCommandName::Smembers
+            | ValkeyCommandName::Smove
+            | ValkeyCommandName::Spop
+            | ValkeyCommandName::Srandmember
+            | ValkeyCommandName::Srem
+            | ValkeyCommandName::Sscan
+            | ValkeyCommandName::Sunion
+            | ValkeyCommandName::Sunionstore => {
                 match SetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
@@ -649,22 +649,22 @@ impl Client {
                 }
             }
             // Hash commands
-            RedisCommandName::Hset
-            | RedisCommandName::Hget
-            | RedisCommandName::Hdel
-            | RedisCommandName::Hlen
-            | RedisCommandName::Hexists
-            | RedisCommandName::Hgetall
-            | RedisCommandName::Hincrbyfloat
-            | RedisCommandName::Hincrby
-            | RedisCommandName::Hkeys
-            | RedisCommandName::Hvals
-            | RedisCommandName::Hmget
-            | RedisCommandName::Hmset
-            | RedisCommandName::Hrandfield
-            | RedisCommandName::Hscan
-            | RedisCommandName::Hsetnx
-            | RedisCommandName::Hstrlen => {
+            ValkeyCommandName::Hset
+            | ValkeyCommandName::Hget
+            | ValkeyCommandName::Hdel
+            | ValkeyCommandName::Hlen
+            | ValkeyCommandName::Hexists
+            | ValkeyCommandName::Hgetall
+            | ValkeyCommandName::Hincrbyfloat
+            | ValkeyCommandName::Hincrby
+            | ValkeyCommandName::Hkeys
+            | ValkeyCommandName::Hvals
+            | ValkeyCommandName::Hmget
+            | ValkeyCommandName::Hmset
+            | ValkeyCommandName::Hrandfield
+            | ValkeyCommandName::Hscan
+            | ValkeyCommandName::Hsetnx
+            | ValkeyCommandName::Hstrlen => {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
@@ -678,15 +678,15 @@ impl Client {
                     }
                 }
             }
-            RedisCommandName::Exec => {
+            ValkeyCommandName::Exec => {
                 // Well, this is unexpected. We shouldn't reach this pattern matching block
                 // with `Exec`... (it is handled earlier in the Client::handle_command)
                 return Err(SableError::ClientInvalidState);
             }
-            RedisCommandName::Multi
-            | RedisCommandName::Discard
-            | RedisCommandName::Watch
-            | RedisCommandName::Unwatch => {
+            ValkeyCommandName::Multi
+            | ValkeyCommandName::Discard
+            | ValkeyCommandName::Watch
+            | ValkeyCommandName::Unwatch => {
                 match TransactionCommands::handle_command(client_state.clone(), command, tx).await?
                 {
                     HandleCommandResult::Blocked(_) => {
@@ -701,41 +701,41 @@ impl Client {
                     }
                 }
             }
-            RedisCommandName::Zadd
-            | RedisCommandName::Zcard
-            | RedisCommandName::Zincrby
-            | RedisCommandName::Zcount
-            | RedisCommandName::Zdiff
-            | RedisCommandName::Zdiffstore
-            | RedisCommandName::Zinter
-            | RedisCommandName::Zintercard
-            | RedisCommandName::Zinterstore
-            | RedisCommandName::Zlexcount
-            | RedisCommandName::Zmpop
-            | RedisCommandName::Bzmpop
-            | RedisCommandName::Zmscore
-            | RedisCommandName::Zpopmax
-            | RedisCommandName::Zpopmin
-            | RedisCommandName::Bzpopmax
-            | RedisCommandName::Bzpopmin
-            | RedisCommandName::Zrandmember
-            | RedisCommandName::Zrangebyscore
-            | RedisCommandName::Zrevrangebyscore
-            | RedisCommandName::Zrange
-            | RedisCommandName::Zrangebylex
-            | RedisCommandName::Zrevrangebylex
-            | RedisCommandName::Zrangestore
-            | RedisCommandName::Zrank
-            | RedisCommandName::Zrem
-            | RedisCommandName::Zremrangebylex
-            | RedisCommandName::Zremrangebyrank
-            | RedisCommandName::Zremrangebyscore
-            | RedisCommandName::Zrevrange
-            | RedisCommandName::Zrevrank
-            | RedisCommandName::Zunion
-            | RedisCommandName::Zunionstore
-            | RedisCommandName::Zscore
-            | RedisCommandName::Zscan => {
+            ValkeyCommandName::Zadd
+            | ValkeyCommandName::Zcard
+            | ValkeyCommandName::Zincrby
+            | ValkeyCommandName::Zcount
+            | ValkeyCommandName::Zdiff
+            | ValkeyCommandName::Zdiffstore
+            | ValkeyCommandName::Zinter
+            | ValkeyCommandName::Zintercard
+            | ValkeyCommandName::Zinterstore
+            | ValkeyCommandName::Zlexcount
+            | ValkeyCommandName::Zmpop
+            | ValkeyCommandName::Bzmpop
+            | ValkeyCommandName::Zmscore
+            | ValkeyCommandName::Zpopmax
+            | ValkeyCommandName::Zpopmin
+            | ValkeyCommandName::Bzpopmax
+            | ValkeyCommandName::Bzpopmin
+            | ValkeyCommandName::Zrandmember
+            | ValkeyCommandName::Zrangebyscore
+            | ValkeyCommandName::Zrevrangebyscore
+            | ValkeyCommandName::Zrange
+            | ValkeyCommandName::Zrangebylex
+            | ValkeyCommandName::Zrevrangebylex
+            | ValkeyCommandName::Zrangestore
+            | ValkeyCommandName::Zrank
+            | ValkeyCommandName::Zrem
+            | ValkeyCommandName::Zremrangebylex
+            | ValkeyCommandName::Zremrangebyrank
+            | ValkeyCommandName::Zremrangebyscore
+            | ValkeyCommandName::Zrevrange
+            | ValkeyCommandName::Zrevrank
+            | ValkeyCommandName::Zunion
+            | ValkeyCommandName::Zunionstore
+            | ValkeyCommandName::Zscore
+            | ValkeyCommandName::Zscan => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
                         ClientNextAction::Wait((rx, duration, timeout_response))
@@ -748,7 +748,7 @@ impl Client {
                 }
             }
             // Misc
-            RedisCommandName::NotSupported(msg) => {
+            ValkeyCommandName::NotSupported(msg) => {
                 tracing::info!(msg);
                 let mut buffer = BytesMut::with_capacity(128);
                 builder.error_string(&mut buffer, msg.as_str());

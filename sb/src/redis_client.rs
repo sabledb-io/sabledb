@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use libsabledb::{
-    BytesMutUtils, RedisObject, RespBuilderV2, RespResponseParserV2, ResponseParseResult,
-    SableError,
+    BytesMutUtils, RespBuilderV2, RespResponseParserV2, ResponseParseResult, SableError,
+    ValkeyObject,
 };
 use pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddrV4;
@@ -74,12 +74,12 @@ pub enum StreamType {
 }
 
 #[derive(Default)]
-pub struct RedisClient {
+pub struct ValkeyClient {
     builder: RespBuilderV2,
     read_buffer: BytesMut,
 }
 
-impl RedisClient {
+impl ValkeyClient {
     /// Connect with retries
     async fn connect_with_retries(host: &String, port: u16) -> Result<TcpStream, SableError> {
         let connection_string = format!("{}:{}", host, port);
@@ -239,7 +239,7 @@ impl RedisClient {
     pub async fn read_response(
         &mut self,
         stream: &mut StreamType,
-    ) -> Result<RedisObject, SableError> {
+    ) -> Result<ValkeyObject, SableError> {
         loop {
             match RespResponseParserV2::parse_response(&self.read_buffer)? {
                 ResponseParseResult::NeedMoreData => self.read_more_bytes(stream).await?,

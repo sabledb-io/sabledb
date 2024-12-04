@@ -18,7 +18,7 @@ pub use crate::{
 pub use pattern_matcher::*;
 pub use request_parser::*;
 pub use resp_builder_v2::RespBuilderV2;
-pub use resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
+pub use resp_response_parser_v2::{RespResponseParserV2, ResponseParseResult, ValkeyObject};
 pub use shard_locker::*;
 pub use stopwatch::*;
 

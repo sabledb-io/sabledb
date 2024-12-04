@@ -9,7 +9,7 @@ use crate::{
         SetExistsResult, SetLenResult, SetPutResult,
     },
     utils::RespBuilderV2,
-    BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
+    BytesMutUtils, LockManager, SableError, ValkeyCommand, ValkeyCommandName,
 };
 
 use crate::io::RespWriter;
@@ -94,69 +94,69 @@ pub struct SetCommands {}
 impl SetCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Sadd => {
+            ValkeyCommandName::Sadd => {
                 Self::sadd(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Scard => {
+            ValkeyCommandName::Scard => {
                 Self::scard(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sdiff => {
+            ValkeyCommandName::Sdiff => {
                 Self::sdiff(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sdiffstore => {
+            ValkeyCommandName::Sdiffstore => {
                 Self::sdiffstore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sinter => {
+            ValkeyCommandName::Sinter => {
                 Self::sinter(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sintercard => {
+            ValkeyCommandName::Sintercard => {
                 Self::sintercard(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sinterstore => {
+            ValkeyCommandName::Sinterstore => {
                 Self::sinterstore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sismember => {
+            ValkeyCommandName::Sismember => {
                 Self::sismember(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Smismember => {
+            ValkeyCommandName::Smismember => {
                 Self::smismember(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Smove => {
+            ValkeyCommandName::Smove => {
                 Self::smove(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Smembers => {
+            ValkeyCommandName::Smembers => {
                 // Since - potentially - we could have a large set, stream the responses and don't build them
                 // up in the memory first
                 Self::smembers(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Srem => {
+            ValkeyCommandName::Srem => {
                 Self::srem(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Spop => {
+            ValkeyCommandName::Spop => {
                 // Since - potentially - we could have a large set, stream the responses and don't build them
                 // up in the memory first
                 Self::spop(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Srandmember => {
+            ValkeyCommandName::Srandmember => {
                 // Since - potentially - we could have a large set, stream the responses and don't build them
                 // up in the memory first
                 Self::srandmember(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Sscan => {
+            ValkeyCommandName::Sscan => {
                 Self::sscan(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sunion => {
+            ValkeyCommandName::Sunion => {
                 Self::sunion(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Sunionstore => {
+            ValkeyCommandName::Sunionstore => {
                 Self::sunionstore(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -173,7 +173,7 @@ impl SetCommands {
     /// ignored. If key does not exist, a new set is created before adding the specified members.
     async fn sadd(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -212,7 +212,7 @@ impl SetCommands {
     /// Returns the set cardinality (number of elements) of the set stored at key.
     async fn scard(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -234,7 +234,7 @@ impl SetCommands {
     /// `SDIFF key [key ...]`
     async fn sdiff(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -271,7 +271,7 @@ impl SetCommands {
     /// `SDIFFSTORE destination key [key ...]`
     async fn sdiffstore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -312,7 +312,7 @@ impl SetCommands {
     /// `SINTER key [key ...]`
     async fn sinter(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -348,7 +348,7 @@ impl SetCommands {
     /// `SINTERCARD numkeys key [key ...] [LIMIT limit]`
     async fn sintercard(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -428,7 +428,7 @@ impl SetCommands {
     /// `SINTERSTORE destination key [key ...]`
     async fn sinterstore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -466,7 +466,7 @@ impl SetCommands {
     /// `SISMEMBER key member`
     async fn sismember(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -495,7 +495,7 @@ impl SetCommands {
     /// `SISMEMBER key member`
     async fn smismember(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -533,7 +533,7 @@ impl SetCommands {
     /// `SMEMBERS key`
     async fn smembers(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -591,7 +591,7 @@ impl SetCommands {
     /// `SMOVE source destination member`
     async fn smove(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -639,7 +639,7 @@ impl SetCommands {
     /// `SPOP key [count]`
     async fn spop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -720,7 +720,7 @@ impl SetCommands {
     /// `SRANDMEMBER key [count]`
     async fn srandmember(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -799,7 +799,7 @@ impl SetCommands {
     /// `SREM key member [member ...]`
     async fn srem(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -826,7 +826,7 @@ impl SetCommands {
     /// `SSCAN key cursor [MATCH pattern] [COUNT count]`
     async fn sscan(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -996,7 +996,7 @@ impl SetCommands {
     /// `SUNION key [key ...]`
     async fn sunion(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -1020,7 +1020,7 @@ impl SetCommands {
     /// `SUNIONSTORE destination key [key ...]`
     async fn sunionstore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1493,7 +1493,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()

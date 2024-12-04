@@ -5,7 +5,7 @@ use crate::server::{
 use crate::{
     commands::ClientNextAction,
     replication::{ReplicationWorkerMessage, Replicator, ReplicatorContext},
-    Cron, CronContext, CronMessage, RedisCommand, ServerPersistentState, StorageAdapter,
+    Cron, CronContext, CronMessage, ServerPersistentState, StorageAdapter, ValkeyCommand,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -398,7 +398,7 @@ impl Server {
     /// Execute an internal command and returns its output as a raw RESP string.
     /// Note that blocking commands are not allowed.
     pub async fn process_internal_command(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         store: &StorageAdapter,
     ) -> Result<BytesMut, SableError> {
         let state = Self::state();

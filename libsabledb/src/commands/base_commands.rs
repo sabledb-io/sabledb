@@ -2,7 +2,7 @@ pub struct BaseCommands {}
 
 #[allow(dead_code)]
 impl BaseCommands {
-    /// Redis uses weird indexing: inclusive, both ways and it supports negative indexes
+    /// Valkey uses weird indexing: inclusive, both ways and it supports negative indexes
     pub fn fix_range_indexes(
         range_len: usize,
         mut start: i64,

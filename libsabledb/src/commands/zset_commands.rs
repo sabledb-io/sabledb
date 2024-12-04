@@ -9,7 +9,7 @@ use crate::{
     },
     utils,
     utils::RespBuilderV2,
-    BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName, SableError,
+    BlockClientResult, BytesMutUtils, LockManager, SableError, ValkeyCommand, ValkeyCommandName,
 };
 use bytes::BytesMut;
 use std::cell::RefCell;
@@ -148,7 +148,7 @@ impl OutputFlagsBuilder {
 /// Default output handler: write the set to the `response_buffer`
 async fn output_writer_handler(
     _client_state: Rc<ClientState>,
-    _command: Rc<RedisCommand>,
+    _command: Rc<ValkeyCommand>,
     result_set: Vec<(BytesMut, f64)>,
     flags: OutputFlags,
     response_buffer: &mut BytesMut,
@@ -196,7 +196,7 @@ async fn output_writer_handler(
 /// Default output handler: store the output in a new destination
 async fn output_store_handler(
     client_state: Rc<ClientState>,
-    command: Rc<RedisCommand>,
+    command: Rc<ValkeyCommand>,
     result_set: Vec<(BytesMut, f64)>,
     _flags: OutputFlags,
     response_buffer: &mut BytesMut,
@@ -237,7 +237,7 @@ async fn output_store_handler(
 /// Default remove handler: delete all items from `result_set`. Return the number of items deleted
 async fn output_remove_handler(
     client_state: Rc<ClientState>,
-    command: Rc<RedisCommand>,
+    command: Rc<ValkeyCommand>,
     result_set: Vec<(BytesMut, f64)>,
     _flags: OutputFlags,
     response_buffer: &mut BytesMut,
@@ -272,7 +272,7 @@ async fn output_remove_handler(
 async fn output_handler_dispatcher(
     action_type: ActionType,
     client_state: Rc<ClientState>,
-    command: Rc<RedisCommand>,
+    command: Rc<ValkeyCommand>,
     result_set: Vec<(BytesMut, f64)>,
     flags: OutputFlags,
     response_buffer: &mut BytesMut,
@@ -296,57 +296,57 @@ pub struct ZSetCommands {}
 impl ZSetCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Zadd => {
+            ValkeyCommandName::Zadd => {
                 Self::zadd(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zcard => {
+            ValkeyCommandName::Zcard => {
                 Self::zcard(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zincrby => {
+            ValkeyCommandName::Zincrby => {
                 Self::zincrby(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zcount => {
+            ValkeyCommandName::Zcount => {
                 Self::zcount(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zdiff => {
+            ValkeyCommandName::Zdiff => {
                 Self::zdiff(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zdiffstore => {
+            ValkeyCommandName::Zdiffstore => {
                 Self::zdiffstore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zinter => {
+            ValkeyCommandName::Zinter => {
                 Self::zinter(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zintercard => {
+            ValkeyCommandName::Zintercard => {
                 Self::zintercard(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zinterstore => {
+            ValkeyCommandName::Zinterstore => {
                 Self::zinterstore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zlexcount => {
+            ValkeyCommandName::Zlexcount => {
                 Self::zlexcount(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zmpop => {
+            ValkeyCommandName::Zmpop => {
                 Self::zmpop(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Bzmpop => {
+            ValkeyCommandName::Bzmpop => {
                 return Self::bzmpop(client_state, command, response_buffer).await;
             }
-            RedisCommandName::Zmscore => {
+            ValkeyCommandName::Zmscore => {
                 Self::zmscore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zpopmax => {
+            ValkeyCommandName::Zpopmax => {
                 Self::zpop_min_or_max(client_state, command, &mut response_buffer, false).await?;
             }
-            RedisCommandName::Zpopmin => {
+            ValkeyCommandName::Zpopmin => {
                 Self::zpop_min_or_max(client_state, command, &mut response_buffer, true).await?;
             }
-            RedisCommandName::Bzpopmax => {
+            ValkeyCommandName::Bzpopmax => {
                 return Self::blocking_zpop_min_or_max(
                     client_state,
                     command,
@@ -355,7 +355,7 @@ impl ZSetCommands {
                 )
                 .await;
             }
-            RedisCommandName::Bzpopmin => {
+            ValkeyCommandName::Bzpopmin => {
                 return Self::blocking_zpop_min_or_max(
                     client_state,
                     command,
@@ -364,20 +364,20 @@ impl ZSetCommands {
                 )
                 .await;
             }
-            RedisCommandName::Zrandmember => {
+            ValkeyCommandName::Zrandmember => {
                 // write directly to the client
                 Self::zrandmember(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Zrange => {
+            ValkeyCommandName::Zrange => {
                 // write directly to the client
                 Self::zrange(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zrangestore => {
+            ValkeyCommandName::Zrangestore => {
                 // store the output into a new destination
                 Self::zrangestore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zrangebyscore => {
+            ValkeyCommandName::Zrangebyscore => {
                 expect_args_count!(
                     command,
                     4,
@@ -393,7 +393,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zrevrangebyscore => {
+            ValkeyCommandName::Zrevrangebyscore => {
                 expect_args_count!(
                     command,
                     4,
@@ -410,7 +410,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zrevrange => {
+            ValkeyCommandName::Zrevrange => {
                 expect_args_count!(
                     command,
                     4,
@@ -429,7 +429,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zrangebylex => {
+            ValkeyCommandName::Zrangebylex => {
                 expect_args_count!(
                     command,
                     4,
@@ -445,7 +445,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zrevrangebylex => {
+            ValkeyCommandName::Zrevrangebylex => {
                 expect_args_count!(
                     command,
                     4,
@@ -465,16 +465,16 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zrank => {
+            ValkeyCommandName::Zrank => {
                 Self::zrank(client_state, command, &mut response_buffer, false).await?;
             }
-            RedisCommandName::Zrevrank => {
+            ValkeyCommandName::Zrevrank => {
                 Self::zrank(client_state, command, &mut response_buffer, true).await?;
             }
-            RedisCommandName::Zrem => {
+            ValkeyCommandName::Zrem => {
                 Self::zrem(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zremrangebylex => {
+            ValkeyCommandName::Zremrangebylex => {
                 expect_exact_args_count!(
                     command,
                     4,
@@ -490,7 +490,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zremrangebyrank => {
+            ValkeyCommandName::Zremrangebyrank => {
                 expect_exact_args_count!(
                     command,
                     4,
@@ -506,7 +506,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zremrangebyscore => {
+            ValkeyCommandName::Zremrangebyscore => {
                 expect_exact_args_count!(
                     command,
                     4,
@@ -522,7 +522,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zunion => {
+            ValkeyCommandName::Zunion => {
                 Self::zunion(
                     client_state,
                     command,
@@ -531,7 +531,7 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zunionstore => {
+            ValkeyCommandName::Zunionstore => {
                 Self::zunion(
                     client_state,
                     command,
@@ -540,10 +540,10 @@ impl ZSetCommands {
                 )
                 .await?;
             }
-            RedisCommandName::Zscore => {
+            ValkeyCommandName::Zscore => {
                 Self::zscore(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Zscan => {
+            ValkeyCommandName::Zscan => {
                 Self::zscan(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -559,7 +559,7 @@ impl ZSetCommands {
     /// Returns the sorted set cardinality (number of elements) of the sorted set stored at key
     async fn zcard(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -590,7 +590,7 @@ impl ZSetCommands {
     /// `+inf` and `-inf` values are valid values as well.
     async fn zadd(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -737,7 +737,7 @@ impl ZSetCommands {
     /// a new sorted set with the specified member as its sole member is created.
     async fn zincrby(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -783,7 +783,7 @@ impl ZSetCommands {
     /// equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zcount(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -879,7 +879,7 @@ impl ZSetCommands {
     /// Computes the difference between the first and all successive input sorted sets
     async fn zdiff(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -996,7 +996,7 @@ impl ZSetCommands {
     /// destination. The total number of input keys is specified by numkeys
     async fn zdiffstore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1117,7 +1117,7 @@ impl ZSetCommands {
     /// element across the inputs where it exists.
     async fn zinter(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1189,7 +1189,7 @@ impl ZSetCommands {
     /// This command is similar to ZINTER, but instead of returning the result set, it returns just the cardinality of the result
     async fn zintercard(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1254,7 +1254,7 @@ impl ZSetCommands {
     /// This command is similar to ZINTER, but instead of returning the result set, it returns just the cardinality of the result
     async fn zinterstore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1328,7 +1328,7 @@ impl ZSetCommands {
     /// ordering, this command returns the number of elements in the sorted set at key with a value between min and max
     async fn zlexcount(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1424,7 +1424,7 @@ impl ZSetCommands {
     /// of key names
     async fn zmpop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1493,7 +1493,7 @@ impl ZSetCommands {
     /// of key names
     async fn bzmpop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         let builder = RespBuilderV2::default();
@@ -1593,7 +1593,7 @@ impl ZSetCommands {
     /// does not exist in the sorted set, a nil value is returned.
     async fn zmscore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1634,7 +1634,7 @@ impl ZSetCommands {
     /// If member does not exist in the sorted set, or key does not exist, nil is returned
     async fn zscore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1665,7 +1665,7 @@ impl ZSetCommands {
     /// sorted set's cardinality will not produce an error
     async fn zpop_min_or_max(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         pop_min: bool,
     ) -> Result<(), SableError> {
@@ -1713,7 +1713,7 @@ impl ZSetCommands {
     /// The blocking variant
     async fn blocking_zpop_min_or_max(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
         pop_min: bool,
     ) -> Result<HandleCommandResult, SableError> {
@@ -1874,7 +1874,7 @@ impl ZSetCommands {
     /// `ZRANDMEMBER key [count [WITHSCORES]]`
     async fn zrandmember(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -1998,7 +1998,7 @@ impl ZSetCommands {
     /// Returns the specified range of elements in the sorted set stored at <key>
     async fn zrangestore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 5, response_buffer);
@@ -2038,7 +2038,7 @@ impl ZSetCommands {
     /// Returns the specified range of elements in the sorted set stored at <key>
     async fn zrange(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -2079,7 +2079,7 @@ impl ZSetCommands {
     /// equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zrangebylex(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
@@ -2228,7 +2228,7 @@ impl ZSetCommands {
     /// score equal to min or max). The elements are considered to be ordered from low to high scores
     async fn zrangebyscore(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
@@ -2383,7 +2383,7 @@ impl ZSetCommands {
     /// Returns all the elements in the sorted set at key with a rank. Items are sorted by rank
     async fn zrangebyrank(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         action_type: ActionType,
         reverse: bool,
@@ -2544,7 +2544,7 @@ impl ZSetCommands {
     /// The rank (or index) is 0-based, which means that the member with the lowest score has rank 0.
     async fn zrank(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         reverse: bool,
     ) -> Result<(), SableError> {
@@ -2634,7 +2634,7 @@ impl ZSetCommands {
     /// returned when key exists and does not hold a sorted set.
     async fn zrem(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -2677,7 +2677,7 @@ impl ZSetCommands {
     /// Computes the union of numkeys sorted sets given by the specified keys
     async fn zunion(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         action_type: ActionType,
     ) -> Result<(), SableError> {
@@ -2941,7 +2941,7 @@ impl ZSetCommands {
 
     /// Return the keys to lock
     fn parse_keys_to_lock(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         first_key_pos: usize,
         numkeys: usize,
         reserved_words: &HashSet<&'static str>,
@@ -2981,7 +2981,7 @@ impl ZSetCommands {
     /// <CMD> .. numkeys <key1> ... <keyN> ...
     fn intersect(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         first_key_pos: usize,
         numkeys: usize,
     ) -> Result<IntersectError, SableError> {
@@ -3109,7 +3109,7 @@ impl ZSetCommands {
     /// `ZSCAN key cursor [MATCH pattern] [COUNT count]`
     async fn zscan(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -3330,13 +3330,13 @@ impl ZSetCommands {
     }
 
     /// Return the LIMIT <value> from the command line
-    fn get_limit(command: Rc<RedisCommand>) -> FindKeyWithValueResult<usize> {
+    fn get_limit(command: Rc<ValkeyCommand>) -> FindKeyWithValueResult<usize> {
         Self::find_keyval_or::<usize>(command, "limit", usize::MAX)
     }
 
     /// Return the `LIMIT <offset> <count>` from the command line
     fn parse_offset_and_limit(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         default_value: usize,
     ) -> LimitAndOffsetResult {
         let mut iter = command.args_vec().iter();
@@ -3367,12 +3367,15 @@ impl ZSetCommands {
     }
 
     /// Return the `COUNT <value>` from the command line
-    fn get_count(command: Rc<RedisCommand>, default_value: usize) -> FindKeyWithValueResult<usize> {
+    fn get_count(
+        command: Rc<ValkeyCommand>,
+        default_value: usize,
+    ) -> FindKeyWithValueResult<usize> {
         Self::find_keyval_or::<usize>(command, "count", default_value)
     }
 
     fn find_keyval_or<NumberT: std::str::FromStr>(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         key_name: &'static str,
         default_value: NumberT,
     ) -> FindKeyWithValueResult<NumberT> {
@@ -3397,7 +3400,7 @@ impl ZSetCommands {
     /// Find an optional argument in the command. An "argument" is a reserved
     /// word without value. e.g. `WITHSCORES`
     fn has_optional_arg(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         arg_name: &'static str,
         start_from: usize,
     ) -> bool {
@@ -3422,7 +3425,7 @@ impl ZSetCommands {
     }
 
     /// Locate `MIN` or `MAX` in the command line
-    fn get_min_or_max(command: Rc<RedisCommand>) -> MinOrMaxResult {
+    fn get_min_or_max(command: Rc<ValkeyCommand>) -> MinOrMaxResult {
         let iter = command.args_vec().iter();
         for arg in iter {
             let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
@@ -3440,7 +3443,7 @@ impl ZSetCommands {
     }
 
     /// Return the LIMIT <value> from the command line
-    fn withscores(command: Rc<RedisCommand>) -> bool {
+    fn withscores(command: Rc<ValkeyCommand>) -> bool {
         let iter = command.args_vec().iter();
         for arg in iter {
             let token_lowercase = String::from_utf8_lossy(&arg[..]).to_lowercase();
@@ -3492,7 +3495,7 @@ impl ZSetCommands {
     /// Allowed `keywords` are passed in the `keywords` hash mam, this map is also update upon
     /// successful parsing
     fn parse_optional_args(
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         start_from: usize,
         keywords: &mut HashMap<&'static str, KeyWord>,
     ) -> Result<(), String> {
@@ -3637,7 +3640,7 @@ mod test {
     #[test]
     fn test_parse_optional_args() {
         let args = "zinter 2 a b WEIGHTS 1 2".split(' ').collect();
-        let cmd = Rc::new(RedisCommand::for_test(args));
+        let cmd = Rc::new(ValkeyCommand::for_test(args));
         let mut keywords = HashMap::<&'static str, KeyWord>::new();
         keywords.insert("weights", KeyWord::new("weights", 2));
         let res = ZSetCommands::parse_optional_args(cmd, 3, &mut keywords);
@@ -3646,7 +3649,7 @@ mod test {
         assert!(errstr.contains("expected keyword"));
 
         let args = "zinter 2 a b WEIGHTS 1 2".split(' ').collect();
-        let cmd = Rc::new(RedisCommand::for_test(args));
+        let cmd = Rc::new(ValkeyCommand::for_test(args));
         let mut keywords = HashMap::<&'static str, KeyWord>::new();
         keywords.insert("weights", KeyWord::new("weights", 2));
         assert!(ZSetCommands::parse_optional_args(cmd, 4, &mut keywords).is_ok());
@@ -3658,7 +3661,7 @@ mod test {
             .split(' ')
             .collect();
 
-        let cmd = Rc::new(RedisCommand::for_test(args));
+        let cmd = Rc::new(ValkeyCommand::for_test(args));
         let mut keywords = HashMap::<&'static str, KeyWord>::new();
         keywords.insert("weights", KeyWord::new("weights", 2));
         keywords.insert("withscores", KeyWord::new("withscores", 0));
@@ -3677,7 +3680,7 @@ mod test {
             .split(' ')
             .collect();
 
-        let cmd = Rc::new(RedisCommand::for_test(args));
+        let cmd = Rc::new(ValkeyCommand::for_test(args));
         let mut keywords = HashMap::<&'static str, KeyWord>::new();
         keywords.insert("weights", KeyWord::new("weights", 2));
         keywords.insert("withscores", KeyWord::new("withscores", 0));
@@ -4062,7 +4065,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
@@ -4093,14 +4096,14 @@ mod test {
             let writer = Client::new(server, store, None);
 
             let args = command.split(' ').collect();
-            let read_cmd = Rc::new(RedisCommand::for_test(args));
+            let read_cmd = Rc::new(ValkeyCommand::for_test(args));
 
             // we expect to get a rx + duration, if we dont "deferred_command" will panic!
             let (rx, duration, _timeout_response) =
                 crate::tests::deferred_command(reader.inner(), read_cmd.clone()).await;
 
             // second connection: push data to the list
-            let pus_cmd = Rc::new(RedisCommand::for_test(vec![
+            let pus_cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "zadd", "myset", "1", "rein", "2", "orisa",
             ]));
             let response = crate::tests::execute_command(writer.inner(), pus_cmd.clone()).await;

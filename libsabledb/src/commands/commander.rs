@@ -4,7 +4,7 @@ use std::sync::Arc;
 use strum_macros::EnumString;
 
 #[derive(Default, Debug, Clone, EnumString)]
-pub enum RedisCommandFlags {
+pub enum ValkeyCommandFlags {
     #[default]
     None = 0,
     /// A read command
@@ -31,7 +31,7 @@ pub enum RedisCommandFlags {
 }
 
 #[derive(Clone, Debug, Default, EnumString, PartialEq, Eq)]
-pub enum RedisCommandName {
+pub enum ValkeyCommandName {
     Append,
     Decr,
     DecrBy,
@@ -187,7 +187,7 @@ impl CommandsManager {
     pub fn metadata(&self, cmdname: &str) -> Arc<CommandMetadata> {
         match self.cmds.get(cmdname) {
             Some(t) => t.clone(),
-            None => Arc::new(CommandMetadata::new(RedisCommandName::NotSupported(
+            None => Arc::new(CommandMetadata::new(ValkeyCommandName::NotSupported(
                 format!("unsupported command {}", cmdname),
             ))),
         }
@@ -226,7 +226,7 @@ impl CommandsManager {
 
 #[derive(Default, Debug, Clone)]
 pub struct CommandMetadata {
-    cmd_name: RedisCommandName,
+    cmd_name: ValkeyCommandName,
     cmd_flags: u64,
     /// Arity is the number of arguments a command expects. It follows a simple pattern:
     /// A positive integer means a fixed number of arguments.
@@ -239,10 +239,10 @@ pub struct CommandMetadata {
 }
 
 impl CommandMetadata {
-    pub fn new(cmd_name: RedisCommandName) -> Self {
+    pub fn new(cmd_name: ValkeyCommandName) -> Self {
         CommandMetadata {
             cmd_name,
-            cmd_flags: RedisCommandFlags::None as u64,
+            cmd_flags: ValkeyCommandFlags::None as u64,
             arity: 2,
             first_key: 1,
             last_key: 1,
@@ -275,7 +275,7 @@ impl CommandMetadata {
         self
     }
 
-    /// The position of the command's last key name argument. Redis commands usually accept one, two or multiple
+    /// The position of the command's last key name argument. Valkey commands usually accept one, two or multiple
     /// number of keys.Commands that accept a single key have both first key and last key set to 1.
     /// Commands that accept two key name arguments, e.g. BRPOPLPUSH, SMOVE and RENAME, have this value set to
     /// the position of their second key. Multi-key commands that accept an arbitrary number of keys,
@@ -287,60 +287,60 @@ impl CommandMetadata {
 
     /// This command might block the client
     pub fn blocking(mut self) -> Self {
-        self.set_flag(RedisCommandFlags::Blocking);
+        self.set_flag(ValkeyCommandFlags::Blocking);
         self
     }
 
     /// This command might block the client
     pub fn no_transaction(mut self) -> Self {
-        self.set_flag(RedisCommandFlags::NoTxn);
+        self.set_flag(ValkeyCommandFlags::NoTxn);
         self
     }
 
     /// This command is a "write" command
     pub fn write(mut self) -> Self {
-        self.set_flag(RedisCommandFlags::Write);
+        self.set_flag(ValkeyCommandFlags::Write);
         self
     }
 
     /// This command performs "read" on the database
     pub fn read_only(mut self) -> Self {
-        self.set_flag(RedisCommandFlags::Read);
+        self.set_flag(ValkeyCommandFlags::Read);
         self
     }
 
     /// An administrator command
     pub fn admin(mut self) -> Self {
-        self.set_flag(RedisCommandFlags::Admin);
+        self.set_flag(ValkeyCommandFlags::Admin);
         self
     }
 
     /// This command falls under the @connection category
     pub fn connection(mut self) -> Self {
-        self.cmd_flags |= RedisCommandFlags::Connection as u64;
+        self.cmd_flags |= ValkeyCommandFlags::Connection as u64;
         self
     }
 
-    pub fn name(&self) -> &RedisCommandName {
+    pub fn name(&self) -> &ValkeyCommandName {
         &self.cmd_name
     }
 
     /// Is this command a "Write" command?
     pub fn is_write_command(&self) -> bool {
-        self.has_flag(RedisCommandFlags::Write)
+        self.has_flag(ValkeyCommandFlags::Write)
     }
 
     /// Is this command a "Write" command?
     pub fn is_read_only_command(&self) -> bool {
-        self.has_flag(RedisCommandFlags::Read)
+        self.has_flag(ValkeyCommandFlags::Read)
     }
 
     pub fn is_blocking(&self) -> bool {
-        self.has_flag(RedisCommandFlags::Blocking)
+        self.has_flag(ValkeyCommandFlags::Blocking)
     }
 
     pub fn is_notxn(&self) -> bool {
-        self.has_flag(RedisCommandFlags::NoTxn)
+        self.has_flag(ValkeyCommandFlags::NoTxn)
     }
 
     pub fn to_resp_v2(&self) -> BytesMut {
@@ -348,23 +348,23 @@ impl CommandMetadata {
         let mut buffer = BytesMut::with_capacity(64);
 
         let mut flags = Vec::<&str>::new();
-        if self.has_flag(RedisCommandFlags::Read) {
+        if self.has_flag(ValkeyCommandFlags::Read) {
             flags.push("readonly");
         }
-        if self.has_flag(RedisCommandFlags::Write) {
+        if self.has_flag(ValkeyCommandFlags::Write) {
             flags.push("write");
         }
-        if self.has_flag(RedisCommandFlags::Blocking) {
+        if self.has_flag(ValkeyCommandFlags::Blocking) {
             flags.push("blocking");
         }
-        if self.has_flag(RedisCommandFlags::Admin) {
+        if self.has_flag(ValkeyCommandFlags::Admin) {
             flags.push("admin");
         }
-        if self.has_flag(RedisCommandFlags::Connection) {
+        if self.has_flag(ValkeyCommandFlags::Connection) {
             flags.push("connection");
         }
 
-        if self.has_flag(RedisCommandFlags::NoTxn) {
+        if self.has_flag(ValkeyCommandFlags::NoTxn) {
             flags.push("notransaction");
         }
 
@@ -385,11 +385,11 @@ impl CommandMetadata {
         buffer
     }
 
-    fn set_flag(&mut self, flag: RedisCommandFlags) {
+    fn set_flag(&mut self, flag: ValkeyCommandFlags) {
         self.cmd_flags |= flag as u64
     }
 
-    fn has_flag(&self, flag: RedisCommandFlags) -> bool {
+    fn has_flag(&self, flag: ValkeyCommandFlags) -> bool {
         let res = self.cmd_flags & flag.clone() as u64;
         res == flag as u64
     }
@@ -400,7 +400,7 @@ impl Default for CommandsManager {
         let cmds: HashMap<&str, CommandMetadata> = HashMap::from([
             (
                 "config",
-                CommandMetadata::new(RedisCommandName::Config)
+                CommandMetadata::new(ValkeyCommandName::Config)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(0)
@@ -410,7 +410,7 @@ impl Default for CommandsManager {
             ),
             (
                 "info",
-                CommandMetadata::new(RedisCommandName::Info)
+                CommandMetadata::new(ValkeyCommandName::Info)
                     .read_only()
                     .with_arity(-1)
                     .with_first_key(0)
@@ -421,93 +421,93 @@ impl Default for CommandsManager {
             // string commands
             (
                 "append",
-                CommandMetadata::new(RedisCommandName::Append)
+                CommandMetadata::new(ValkeyCommandName::Append)
                     .write()
                     .with_arity(3),
             ),
             (
                 "decr",
-                CommandMetadata::new(RedisCommandName::Decr)
+                CommandMetadata::new(ValkeyCommandName::Decr)
                     .write()
                     .with_arity(2),
             ),
             (
                 "decrby",
-                CommandMetadata::new(RedisCommandName::DecrBy)
+                CommandMetadata::new(ValkeyCommandName::DecrBy)
                     .write()
                     .with_arity(3),
             ),
             (
                 "incr",
-                CommandMetadata::new(RedisCommandName::Incr)
+                CommandMetadata::new(ValkeyCommandName::Incr)
                     .write()
                     .with_arity(2),
             ),
             (
                 "incrby",
-                CommandMetadata::new(RedisCommandName::IncrBy)
+                CommandMetadata::new(ValkeyCommandName::IncrBy)
                     .write()
                     .with_arity(3),
             ),
             (
                 "incrbyfloat",
-                CommandMetadata::new(RedisCommandName::IncrByFloat)
+                CommandMetadata::new(ValkeyCommandName::IncrByFloat)
                     .write()
                     .with_arity(3),
             ),
             (
                 "set",
-                CommandMetadata::new(RedisCommandName::Set)
+                CommandMetadata::new(ValkeyCommandName::Set)
                     .write()
                     .with_arity(3),
             ),
             (
                 "get",
-                CommandMetadata::new(RedisCommandName::Get)
+                CommandMetadata::new(ValkeyCommandName::Get)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "getdel",
-                CommandMetadata::new(RedisCommandName::GetDel)
+                CommandMetadata::new(ValkeyCommandName::GetDel)
                     .write()
                     .with_arity(2),
             ),
             (
                 "getset",
-                CommandMetadata::new(RedisCommandName::GetSet)
+                CommandMetadata::new(ValkeyCommandName::GetSet)
                     .write()
                     .with_arity(3),
             ),
             (
                 "getex",
-                CommandMetadata::new(RedisCommandName::GetEx)
+                CommandMetadata::new(ValkeyCommandName::GetEx)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "getrange",
-                CommandMetadata::new(RedisCommandName::GetRange)
+                CommandMetadata::new(ValkeyCommandName::GetRange)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "lcs",
-                CommandMetadata::new(RedisCommandName::Lcs)
+                CommandMetadata::new(ValkeyCommandName::Lcs)
                     .read_only()
                     .with_arity(-3)
                     .with_last_key(2),
             ),
             (
                 "mget",
-                CommandMetadata::new(RedisCommandName::Mget)
+                CommandMetadata::new(ValkeyCommandName::Mget)
                     .read_only()
                     .with_arity(-2)
                     .with_last_key(-1),
             ),
             (
                 "mset",
-                CommandMetadata::new(RedisCommandName::Mset)
+                CommandMetadata::new(ValkeyCommandName::Mset)
                     .write()
                     .with_arity(-3)
                     .with_last_key(-1)
@@ -515,7 +515,7 @@ impl Default for CommandsManager {
             ),
             (
                 "msetnx",
-                CommandMetadata::new(RedisCommandName::Msetnx)
+                CommandMetadata::new(ValkeyCommandName::Msetnx)
                     .write()
                     .with_arity(-3)
                     .with_last_key(-1)
@@ -523,142 +523,142 @@ impl Default for CommandsManager {
             ),
             (
                 "psetex",
-                CommandMetadata::new(RedisCommandName::Psetex)
+                CommandMetadata::new(ValkeyCommandName::Psetex)
                     .write()
                     .with_arity(4),
             ),
             (
                 "setex",
-                CommandMetadata::new(RedisCommandName::Setex)
+                CommandMetadata::new(ValkeyCommandName::Setex)
                     .write()
                     .with_arity(4),
             ),
             (
                 "setnx",
-                CommandMetadata::new(RedisCommandName::Setnx)
+                CommandMetadata::new(ValkeyCommandName::Setnx)
                     .write()
                     .with_arity(3),
             ),
             (
                 "setrange",
-                CommandMetadata::new(RedisCommandName::SetRange)
+                CommandMetadata::new(ValkeyCommandName::SetRange)
                     .write()
                     .with_arity(4),
             ),
             (
                 "strlen",
-                CommandMetadata::new(RedisCommandName::Strlen)
+                CommandMetadata::new(ValkeyCommandName::Strlen)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "substr",
-                CommandMetadata::new(RedisCommandName::Substr)
+                CommandMetadata::new(ValkeyCommandName::Substr)
                     .read_only()
                     .with_arity(4),
             ),
             // list commands
             (
                 "lpush",
-                CommandMetadata::new(RedisCommandName::Lpush)
+                CommandMetadata::new(ValkeyCommandName::Lpush)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "lpushx",
-                CommandMetadata::new(RedisCommandName::Lpushx)
+                CommandMetadata::new(ValkeyCommandName::Lpushx)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "rpush",
-                CommandMetadata::new(RedisCommandName::Rpush)
+                CommandMetadata::new(ValkeyCommandName::Rpush)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "rpushx",
-                CommandMetadata::new(RedisCommandName::Rpushx)
+                CommandMetadata::new(ValkeyCommandName::Rpushx)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "lpop",
-                CommandMetadata::new(RedisCommandName::Lpop)
+                CommandMetadata::new(ValkeyCommandName::Lpop)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "rpop",
-                CommandMetadata::new(RedisCommandName::Rpop)
+                CommandMetadata::new(ValkeyCommandName::Rpop)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "llen",
-                CommandMetadata::new(RedisCommandName::Llen)
+                CommandMetadata::new(ValkeyCommandName::Llen)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "lindex",
-                CommandMetadata::new(RedisCommandName::Lindex)
+                CommandMetadata::new(ValkeyCommandName::Lindex)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "linsert",
-                CommandMetadata::new(RedisCommandName::Linsert)
+                CommandMetadata::new(ValkeyCommandName::Linsert)
                     .write()
                     .with_arity(5),
             ),
             (
                 "lset",
-                CommandMetadata::new(RedisCommandName::Lset)
+                CommandMetadata::new(ValkeyCommandName::Lset)
                     .write()
                     .with_arity(4),
             ),
             (
                 "lpos",
-                CommandMetadata::new(RedisCommandName::Lpos)
+                CommandMetadata::new(ValkeyCommandName::Lpos)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "ltrim",
-                CommandMetadata::new(RedisCommandName::Ltrim)
+                CommandMetadata::new(ValkeyCommandName::Ltrim)
                     .write()
                     .with_arity(4),
             ),
             (
                 "lrange",
-                CommandMetadata::new(RedisCommandName::Lrange)
+                CommandMetadata::new(ValkeyCommandName::Lrange)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "lrem",
-                CommandMetadata::new(RedisCommandName::Lrem)
+                CommandMetadata::new(ValkeyCommandName::Lrem)
                     .write()
                     .with_arity(4),
             ),
             (
                 "lmove",
-                CommandMetadata::new(RedisCommandName::Lmove)
+                CommandMetadata::new(ValkeyCommandName::Lmove)
                     .write()
                     .with_arity(5)
                     .with_last_key(2),
             ),
             (
                 "rpoplpush",
-                CommandMetadata::new(RedisCommandName::Rpoplpush)
+                CommandMetadata::new(ValkeyCommandName::Rpoplpush)
                     .write()
                     .with_arity(3)
                     .with_last_key(2),
             ),
             (
                 "lmpop",
-                CommandMetadata::new(RedisCommandName::Lmpop)
+                CommandMetadata::new(ValkeyCommandName::Lmpop)
                     .write()
                     .with_arity(-4)
                     .with_first_key(0)
@@ -667,7 +667,7 @@ impl Default for CommandsManager {
             ),
             (
                 "brpoplpush",
-                CommandMetadata::new(RedisCommandName::Brpoplpush)
+                CommandMetadata::new(ValkeyCommandName::Brpoplpush)
                     .write()
                     .blocking()
                     .with_arity(4)
@@ -675,7 +675,7 @@ impl Default for CommandsManager {
             ),
             (
                 "blpop",
-                CommandMetadata::new(RedisCommandName::Blpop)
+                CommandMetadata::new(ValkeyCommandName::Blpop)
                     .write()
                     .blocking()
                     .with_arity(-3)
@@ -683,7 +683,7 @@ impl Default for CommandsManager {
             ),
             (
                 "blmove",
-                CommandMetadata::new(RedisCommandName::Blmove)
+                CommandMetadata::new(ValkeyCommandName::Blmove)
                     .write()
                     .blocking()
                     .with_arity(6)
@@ -691,7 +691,7 @@ impl Default for CommandsManager {
             ),
             (
                 "blmpop",
-                CommandMetadata::new(RedisCommandName::Blmpop)
+                CommandMetadata::new(ValkeyCommandName::Blmpop)
                     .write()
                     .blocking()
                     .with_arity(-5)
@@ -701,7 +701,7 @@ impl Default for CommandsManager {
             ),
             (
                 "brpop",
-                CommandMetadata::new(RedisCommandName::Brpop)
+                CommandMetadata::new(ValkeyCommandName::Brpop)
                     .write()
                     .blocking()
                     .with_arity(-3)
@@ -710,13 +710,13 @@ impl Default for CommandsManager {
             // Client commands
             (
                 "client",
-                CommandMetadata::new(RedisCommandName::Client)
+                CommandMetadata::new(ValkeyCommandName::Client)
                     .connection()
                     .no_transaction(),
             ),
             (
                 "select",
-                CommandMetadata::new(RedisCommandName::Select)
+                CommandMetadata::new(ValkeyCommandName::Select)
                     .connection()
                     .with_arity(2)
                     .with_first_key(0)
@@ -727,7 +727,7 @@ impl Default for CommandsManager {
             // Server commands
             (
                 "replicaof",
-                CommandMetadata::new(RedisCommandName::ReplicaOf)
+                CommandMetadata::new(ValkeyCommandName::ReplicaOf)
                     .admin()
                     .with_arity(3)
                     .with_first_key(0)
@@ -737,7 +737,7 @@ impl Default for CommandsManager {
             ),
             (
                 "slaveof",
-                CommandMetadata::new(RedisCommandName::SlaveOf)
+                CommandMetadata::new(ValkeyCommandName::SlaveOf)
                     .admin()
                     .with_arity(3)
                     .with_first_key(0)
@@ -747,7 +747,7 @@ impl Default for CommandsManager {
             ),
             (
                 "ping",
-                CommandMetadata::new(RedisCommandName::Ping)
+                CommandMetadata::new(ValkeyCommandName::Ping)
                     .read_only()
                     .with_arity(-1)
                     .with_first_key(0)
@@ -757,7 +757,7 @@ impl Default for CommandsManager {
             ),
             (
                 "command",
-                CommandMetadata::new(RedisCommandName::Command)
+                CommandMetadata::new(ValkeyCommandName::Command)
                     .with_arity(-1)
                     .with_first_key(0)
                     .with_last_key(0)
@@ -767,33 +767,33 @@ impl Default for CommandsManager {
             // generic commands
             (
                 "ttl",
-                CommandMetadata::new(RedisCommandName::Ttl)
+                CommandMetadata::new(ValkeyCommandName::Ttl)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "del",
-                CommandMetadata::new(RedisCommandName::Del)
+                CommandMetadata::new(ValkeyCommandName::Del)
                     .write()
                     .with_arity(-2)
                     .with_last_key(-1),
             ),
             (
                 "exists",
-                CommandMetadata::new(RedisCommandName::Exists)
+                CommandMetadata::new(ValkeyCommandName::Exists)
                     .read_only()
                     .with_arity(-2)
                     .with_last_key(-1),
             ),
             (
                 "expire",
-                CommandMetadata::new(RedisCommandName::Expire)
+                CommandMetadata::new(ValkeyCommandName::Expire)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "keys",
-                CommandMetadata::new(RedisCommandName::Keys)
+                CommandMetadata::new(ValkeyCommandName::Keys)
                     .read_only()
                     .with_arity(2)
                     .with_last_key(0)
@@ -803,103 +803,103 @@ impl Default for CommandsManager {
             // Hash commands
             (
                 "hset",
-                CommandMetadata::new(RedisCommandName::Hset)
+                CommandMetadata::new(ValkeyCommandName::Hset)
                     .write()
                     .with_arity(-4),
             ),
             (
                 "hmset",
-                CommandMetadata::new(RedisCommandName::Hmset)
+                CommandMetadata::new(ValkeyCommandName::Hmset)
                     .write()
                     .with_arity(-4),
             ),
             (
                 "hget",
-                CommandMetadata::new(RedisCommandName::Hget)
+                CommandMetadata::new(ValkeyCommandName::Hget)
                     .read_only()
                     .with_arity(3),
             ),
             (
                 "hdel",
-                CommandMetadata::new(RedisCommandName::Hdel)
+                CommandMetadata::new(ValkeyCommandName::Hdel)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "hlen",
-                CommandMetadata::new(RedisCommandName::Hlen)
+                CommandMetadata::new(ValkeyCommandName::Hlen)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "hexists",
-                CommandMetadata::new(RedisCommandName::Hexists)
+                CommandMetadata::new(ValkeyCommandName::Hexists)
                     .read_only()
                     .with_arity(3),
             ),
             (
                 "hgetall",
-                CommandMetadata::new(RedisCommandName::Hgetall)
+                CommandMetadata::new(ValkeyCommandName::Hgetall)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "hincrbyfloat",
-                CommandMetadata::new(RedisCommandName::Hincrbyfloat)
+                CommandMetadata::new(ValkeyCommandName::Hincrbyfloat)
                     .write()
                     .with_arity(4),
             ),
             (
                 "hincrby",
-                CommandMetadata::new(RedisCommandName::Hincrby)
+                CommandMetadata::new(ValkeyCommandName::Hincrby)
                     .write()
                     .with_arity(4),
             ),
             (
                 "hkeys",
-                CommandMetadata::new(RedisCommandName::Hkeys)
+                CommandMetadata::new(ValkeyCommandName::Hkeys)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "hvals",
-                CommandMetadata::new(RedisCommandName::Hvals)
+                CommandMetadata::new(ValkeyCommandName::Hvals)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "hmget",
-                CommandMetadata::new(RedisCommandName::Hmget)
+                CommandMetadata::new(ValkeyCommandName::Hmget)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "hrandfield",
-                CommandMetadata::new(RedisCommandName::Hrandfield)
+                CommandMetadata::new(ValkeyCommandName::Hrandfield)
                     .read_only()
                     .with_arity(-2),
             ),
             (
                 "hscan",
-                CommandMetadata::new(RedisCommandName::Hscan)
+                CommandMetadata::new(ValkeyCommandName::Hscan)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "hsetnx",
-                CommandMetadata::new(RedisCommandName::Hsetnx)
+                CommandMetadata::new(ValkeyCommandName::Hsetnx)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "hstrlen",
-                CommandMetadata::new(RedisCommandName::Hstrlen)
+                CommandMetadata::new(ValkeyCommandName::Hstrlen)
                     .read_only()
                     .with_arity(3),
             ),
             (
                 "multi",
-                CommandMetadata::new(RedisCommandName::Multi)
+                CommandMetadata::new(ValkeyCommandName::Multi)
                     .read_only()
                     .with_arity(1)
                     .with_first_key(0)
@@ -909,7 +909,7 @@ impl Default for CommandsManager {
             ),
             (
                 "exec",
-                CommandMetadata::new(RedisCommandName::Exec)
+                CommandMetadata::new(ValkeyCommandName::Exec)
                     .read_only()
                     .with_arity(1)
                     .with_first_key(0)
@@ -918,7 +918,7 @@ impl Default for CommandsManager {
             ),
             (
                 "discard",
-                CommandMetadata::new(RedisCommandName::Discard)
+                CommandMetadata::new(ValkeyCommandName::Discard)
                     .read_only()
                     .with_arity(1)
                     .with_first_key(0)
@@ -927,7 +927,7 @@ impl Default for CommandsManager {
             ),
             (
                 "watch",
-                CommandMetadata::new(RedisCommandName::Watch)
+                CommandMetadata::new(ValkeyCommandName::Watch)
                     .with_arity(-2)
                     .with_first_key(1)
                     .with_last_key(-1)
@@ -936,7 +936,7 @@ impl Default for CommandsManager {
             ),
             (
                 "unwatch",
-                CommandMetadata::new(RedisCommandName::Unwatch)
+                CommandMetadata::new(ValkeyCommandName::Unwatch)
                     .with_arity(1)
                     .with_first_key(0)
                     .with_last_key(0)
@@ -945,55 +945,55 @@ impl Default for CommandsManager {
             ),
             (
                 "zadd",
-                CommandMetadata::new(RedisCommandName::Zadd)
+                CommandMetadata::new(ValkeyCommandName::Zadd)
                     .write()
                     .with_arity(-4),
             ),
             (
                 "zcard",
-                CommandMetadata::new(RedisCommandName::Zcard)
+                CommandMetadata::new(ValkeyCommandName::Zcard)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "zincrby",
-                CommandMetadata::new(RedisCommandName::Zincrby)
+                CommandMetadata::new(ValkeyCommandName::Zincrby)
                     .write()
                     .with_arity(4),
             ),
             (
                 "zrangebyscore",
-                CommandMetadata::new(RedisCommandName::Zrangebyscore)
+                CommandMetadata::new(ValkeyCommandName::Zrangebyscore)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zrevrangebyscore",
-                CommandMetadata::new(RedisCommandName::Zrevrangebyscore)
+                CommandMetadata::new(ValkeyCommandName::Zrevrangebyscore)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zrangebylex",
-                CommandMetadata::new(RedisCommandName::Zrangebylex)
+                CommandMetadata::new(ValkeyCommandName::Zrangebylex)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zrevrangebylex",
-                CommandMetadata::new(RedisCommandName::Zrevrangebylex)
+                CommandMetadata::new(ValkeyCommandName::Zrevrangebylex)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zcount",
-                CommandMetadata::new(RedisCommandName::Zcount)
+                CommandMetadata::new(ValkeyCommandName::Zcount)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "zdiff",
-                CommandMetadata::new(RedisCommandName::Zdiff)
+                CommandMetadata::new(ValkeyCommandName::Zdiff)
                     .read_only()
                     .with_arity(-3)
                     .with_first_key(0)
@@ -1002,7 +1002,7 @@ impl Default for CommandsManager {
             ),
             (
                 "zdiffstore",
-                CommandMetadata::new(RedisCommandName::Zdiffstore)
+                CommandMetadata::new(ValkeyCommandName::Zdiffstore)
                     .write()
                     .with_arity(-4)
                     .with_first_key(1)
@@ -1011,7 +1011,7 @@ impl Default for CommandsManager {
             ),
             (
                 "zinter",
-                CommandMetadata::new(RedisCommandName::Zinter)
+                CommandMetadata::new(ValkeyCommandName::Zinter)
                     .read_only()
                     .with_arity(-3)
                     .with_first_key(0)
@@ -1020,7 +1020,7 @@ impl Default for CommandsManager {
             ),
             (
                 "zintercard",
-                CommandMetadata::new(RedisCommandName::Zintercard)
+                CommandMetadata::new(ValkeyCommandName::Zintercard)
                     .read_only()
                     .with_arity(-3)
                     .with_first_key(0)
@@ -1029,19 +1029,19 @@ impl Default for CommandsManager {
             ),
             (
                 "zinterstore",
-                CommandMetadata::new(RedisCommandName::Zinterstore)
+                CommandMetadata::new(ValkeyCommandName::Zinterstore)
                     .write()
                     .with_arity(-4),
             ),
             (
                 "zlexcount",
-                CommandMetadata::new(RedisCommandName::Zlexcount)
+                CommandMetadata::new(ValkeyCommandName::Zlexcount)
                     .read_only()
                     .with_arity(4),
             ),
             (
                 "zmpop",
-                CommandMetadata::new(RedisCommandName::Zmpop)
+                CommandMetadata::new(ValkeyCommandName::Zmpop)
                     .write()
                     .with_arity(-4)
                     .with_first_key(0)
@@ -1050,7 +1050,7 @@ impl Default for CommandsManager {
             ),
             (
                 "bzmpop",
-                CommandMetadata::new(RedisCommandName::Bzmpop)
+                CommandMetadata::new(ValkeyCommandName::Bzmpop)
                     .write()
                     .blocking()
                     .with_arity(-5)
@@ -1060,25 +1060,25 @@ impl Default for CommandsManager {
             ),
             (
                 "zmscore",
-                CommandMetadata::new(RedisCommandName::Zmscore)
+                CommandMetadata::new(ValkeyCommandName::Zmscore)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "zpopmax",
-                CommandMetadata::new(RedisCommandName::Zpopmax)
+                CommandMetadata::new(ValkeyCommandName::Zpopmax)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "zpopmin",
-                CommandMetadata::new(RedisCommandName::Zpopmin)
+                CommandMetadata::new(ValkeyCommandName::Zpopmin)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "bzpopmax",
-                CommandMetadata::new(RedisCommandName::Bzpopmax)
+                CommandMetadata::new(ValkeyCommandName::Bzpopmax)
                     .write()
                     .blocking()
                     .with_arity(-3)
@@ -1088,7 +1088,7 @@ impl Default for CommandsManager {
             ),
             (
                 "bzpopmin",
-                CommandMetadata::new(RedisCommandName::Bzpopmin)
+                CommandMetadata::new(ValkeyCommandName::Bzpopmin)
                     .write()
                     .blocking()
                     .with_arity(-3)
@@ -1098,19 +1098,19 @@ impl Default for CommandsManager {
             ),
             (
                 "zrandmember",
-                CommandMetadata::new(RedisCommandName::Zrandmember)
+                CommandMetadata::new(ValkeyCommandName::Zrandmember)
                     .read_only()
                     .with_arity(-2),
             ),
             (
                 "zrange",
-                CommandMetadata::new(RedisCommandName::Zrange)
+                CommandMetadata::new(ValkeyCommandName::Zrange)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zrangestore",
-                CommandMetadata::new(RedisCommandName::Zrangestore)
+                CommandMetadata::new(ValkeyCommandName::Zrangestore)
                     .write()
                     .with_arity(-5)
                     .with_first_key(1)
@@ -1119,49 +1119,49 @@ impl Default for CommandsManager {
             ),
             (
                 "zrank",
-                CommandMetadata::new(RedisCommandName::Zrank)
+                CommandMetadata::new(ValkeyCommandName::Zrank)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "zrem",
-                CommandMetadata::new(RedisCommandName::Zrem)
+                CommandMetadata::new(ValkeyCommandName::Zrem)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "zremrangebylex",
-                CommandMetadata::new(RedisCommandName::Zremrangebylex)
+                CommandMetadata::new(ValkeyCommandName::Zremrangebylex)
                     .write()
                     .with_arity(4),
             ),
             (
                 "zremrangebyrank",
-                CommandMetadata::new(RedisCommandName::Zremrangebyrank)
+                CommandMetadata::new(ValkeyCommandName::Zremrangebyrank)
                     .write()
                     .with_arity(4),
             ),
             (
                 "zremrangebyscore",
-                CommandMetadata::new(RedisCommandName::Zremrangebyscore)
+                CommandMetadata::new(ValkeyCommandName::Zremrangebyscore)
                     .write()
                     .with_arity(4),
             ),
             (
                 "zrevrange",
-                CommandMetadata::new(RedisCommandName::Zrevrange)
+                CommandMetadata::new(ValkeyCommandName::Zrevrange)
                     .read_only()
                     .with_arity(-4),
             ),
             (
                 "zrevrank",
-                CommandMetadata::new(RedisCommandName::Zrevrank)
+                CommandMetadata::new(ValkeyCommandName::Zrevrank)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "zunion",
-                CommandMetadata::new(RedisCommandName::Zunion)
+                CommandMetadata::new(ValkeyCommandName::Zunion)
                     .read_only()
                     .with_arity(-3)
                     .with_first_key(0)
@@ -1170,57 +1170,57 @@ impl Default for CommandsManager {
             ),
             (
                 "zunionstore",
-                CommandMetadata::new(RedisCommandName::Zunionstore)
+                CommandMetadata::new(ValkeyCommandName::Zunionstore)
                     .write()
                     .with_arity(-4),
             ),
             (
                 "zscore",
-                CommandMetadata::new(RedisCommandName::Zscore)
+                CommandMetadata::new(ValkeyCommandName::Zscore)
                     .read_only()
                     .with_arity(3),
             ),
             (
                 "zscan",
-                CommandMetadata::new(RedisCommandName::Zscan)
+                CommandMetadata::new(ValkeyCommandName::Zscan)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "flushall",
-                CommandMetadata::new(RedisCommandName::FlushAll)
+                CommandMetadata::new(ValkeyCommandName::FlushAll)
                     .write()
                     .with_arity(-1)
                     .no_transaction(),
             ),
             (
                 "flushdb",
-                CommandMetadata::new(RedisCommandName::FlushDb)
+                CommandMetadata::new(ValkeyCommandName::FlushDb)
                     .write()
                     .with_arity(-1)
                     .no_transaction(),
             ),
             (
                 "dbsize",
-                CommandMetadata::new(RedisCommandName::DbSize)
+                CommandMetadata::new(ValkeyCommandName::DbSize)
                     .read_only()
                     .with_arity(1),
             ),
             (
                 "sadd",
-                CommandMetadata::new(RedisCommandName::Sadd)
+                CommandMetadata::new(ValkeyCommandName::Sadd)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "scard",
-                CommandMetadata::new(RedisCommandName::Scard)
+                CommandMetadata::new(ValkeyCommandName::Scard)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "sdiff",
-                CommandMetadata::new(RedisCommandName::Sdiff)
+                CommandMetadata::new(ValkeyCommandName::Sdiff)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(1)
@@ -1229,7 +1229,7 @@ impl Default for CommandsManager {
             ),
             (
                 "sdiffstore",
-                CommandMetadata::new(RedisCommandName::Sdiffstore)
+                CommandMetadata::new(ValkeyCommandName::Sdiffstore)
                     .write()
                     .with_arity(-3)
                     .with_first_key(1)
@@ -1238,7 +1238,7 @@ impl Default for CommandsManager {
             ),
             (
                 "sinter",
-                CommandMetadata::new(RedisCommandName::Sinter)
+                CommandMetadata::new(ValkeyCommandName::Sinter)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(1)
@@ -1247,7 +1247,7 @@ impl Default for CommandsManager {
             ),
             (
                 "sintercard",
-                CommandMetadata::new(RedisCommandName::Sintercard)
+                CommandMetadata::new(ValkeyCommandName::Sintercard)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(1)
@@ -1256,7 +1256,7 @@ impl Default for CommandsManager {
             ),
             (
                 "sinterstore",
-                CommandMetadata::new(RedisCommandName::Sinterstore)
+                CommandMetadata::new(ValkeyCommandName::Sinterstore)
                     .write()
                     .with_arity(-3)
                     .with_first_key(1)
@@ -1265,25 +1265,25 @@ impl Default for CommandsManager {
             ),
             (
                 "sismember",
-                CommandMetadata::new(RedisCommandName::Sismember)
+                CommandMetadata::new(ValkeyCommandName::Sismember)
                     .read_only()
                     .with_arity(3),
             ),
             (
                 "smismember",
-                CommandMetadata::new(RedisCommandName::Smismember)
+                CommandMetadata::new(ValkeyCommandName::Smismember)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "smembers",
-                CommandMetadata::new(RedisCommandName::Smembers)
+                CommandMetadata::new(ValkeyCommandName::Smembers)
                     .read_only()
                     .with_arity(2),
             ),
             (
                 "smove",
-                CommandMetadata::new(RedisCommandName::Smove)
+                CommandMetadata::new(ValkeyCommandName::Smove)
                     .write()
                     .with_arity(4)
                     .with_first_key(1)
@@ -1292,31 +1292,31 @@ impl Default for CommandsManager {
             ),
             (
                 "spop",
-                CommandMetadata::new(RedisCommandName::Spop)
+                CommandMetadata::new(ValkeyCommandName::Spop)
                     .write()
                     .with_arity(-2),
             ),
             (
                 "srandmember",
-                CommandMetadata::new(RedisCommandName::Srandmember)
+                CommandMetadata::new(ValkeyCommandName::Srandmember)
                     .read_only()
                     .with_arity(-2),
             ),
             (
                 "srem",
-                CommandMetadata::new(RedisCommandName::Srem)
+                CommandMetadata::new(ValkeyCommandName::Srem)
                     .write()
                     .with_arity(-3),
             ),
             (
                 "sscan",
-                CommandMetadata::new(RedisCommandName::Sscan)
+                CommandMetadata::new(ValkeyCommandName::Sscan)
                     .read_only()
                     .with_arity(-3),
             ),
             (
                 "sunion",
-                CommandMetadata::new(RedisCommandName::Sunion)
+                CommandMetadata::new(ValkeyCommandName::Sunion)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(1)
@@ -1325,7 +1325,7 @@ impl Default for CommandsManager {
             ),
             (
                 "sunionstore",
-                CommandMetadata::new(RedisCommandName::Sunionstore)
+                CommandMetadata::new(ValkeyCommandName::Sunionstore)
                     .write()
                     .with_arity(-3)
                     .with_first_key(1)
@@ -1334,7 +1334,7 @@ impl Default for CommandsManager {
             ),
             (
                 "scan",
-                CommandMetadata::new(RedisCommandName::Scan)
+                CommandMetadata::new(ValkeyCommandName::Scan)
                     .read_only()
                     .with_arity(-2)
                     .with_first_key(0)

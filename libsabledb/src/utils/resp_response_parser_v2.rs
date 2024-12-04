@@ -4,22 +4,22 @@ use bytes::BytesMut;
 #[derive(PartialEq, Eq, Debug)]
 pub enum ResponseParseResult {
     NeedMoreData,
-    /// How many bytes consumed to form the RedisObject + the object
-    Ok((usize, RedisObject)),
+    /// How many bytes consumed to form the ValkeyObject + the object
+    Ok((usize, ValkeyObject)),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum RedisObject {
+pub enum ValkeyObject {
     Status(BytesMut),
     Error(BytesMut),
     Str(BytesMut),
-    Array(Vec<RedisObject>),
+    Array(Vec<ValkeyObject>),
     NullArray,
     NullString,
     Integer(u64),
 }
 
-impl RedisObject {
+impl ValkeyObject {
     pub fn integer(&self) -> Result<u64, SableError> {
         match self {
             Self::Integer(num) => Ok(*num),
@@ -60,7 +60,7 @@ impl RedisObject {
         }
     }
 
-    pub fn array(&self) -> Result<Vec<RedisObject>, SableError> {
+    pub fn array(&self) -> Result<Vec<ValkeyObject>, SableError> {
         match self {
             Self::Array(arr) => Ok(arr.clone()),
             other => Err(SableError::OtherError(
@@ -97,7 +97,7 @@ impl RespResponseParserV2 {
                 consume = consume.saturating_add(crlf_pos + 2);
                 Ok(ResponseParseResult::Ok((
                     consume,
-                    RedisObject::Status(BytesMut::from(&buffer[..crlf_pos])),
+                    ValkeyObject::Status(BytesMut::from(&buffer[..crlf_pos])),
                 )))
             }
             b'-' => {
@@ -110,7 +110,7 @@ impl RespResponseParserV2 {
                 consume = consume.saturating_add(crlf_pos + 2);
                 Ok(ResponseParseResult::Ok((
                     consume,
-                    RedisObject::Error(BytesMut::from(&buffer[..crlf_pos])),
+                    ValkeyObject::Error(BytesMut::from(&buffer[..crlf_pos])),
                 )))
             }
             b':' => {
@@ -131,7 +131,7 @@ impl RespResponseParserV2 {
 
                 Ok(ResponseParseResult::Ok((
                     consume,
-                    RedisObject::Integer(num),
+                    ValkeyObject::Integer(num),
                 )))
             }
             b'$' => {
@@ -153,7 +153,7 @@ impl RespResponseParserV2 {
 
                 if strlen <= 0 {
                     // Null or empty string
-                    Ok(ResponseParseResult::Ok((consume, RedisObject::NullString)))
+                    Ok(ResponseParseResult::Ok((consume, ValkeyObject::NullString)))
                 } else {
                     let strlen = strlen as usize;
                     // read the string content
@@ -168,7 +168,7 @@ impl RespResponseParserV2 {
                     consume = consume.saturating_add(strlen + 2);
                     Ok(ResponseParseResult::Ok((
                         consume,
-                        RedisObject::Str(str_content),
+                        ValkeyObject::Str(str_content),
                     )))
                 }
             }
@@ -192,10 +192,10 @@ impl RespResponseParserV2 {
 
                 // Null array?
                 if arrlen < 0 {
-                    return Ok(ResponseParseResult::Ok((consume, RedisObject::NullArray)));
+                    return Ok(ResponseParseResult::Ok((consume, ValkeyObject::NullArray)));
                 }
 
-                let mut objects = Vec::<RedisObject>::with_capacity(arrlen as usize);
+                let mut objects = Vec::<ValkeyObject>::with_capacity(arrlen as usize);
                 let mut buffer = &buffer[crlf_pos + 2..];
 
                 // start reading elements. At this point `buffer` points to the first element
@@ -214,7 +214,7 @@ impl RespResponseParserV2 {
                 }
                 Ok(ResponseParseResult::Ok((
                     consume,
-                    RedisObject::Array(objects),
+                    ValkeyObject::Array(objects),
                 )))
             }
             _ => Err(SableError::OtherError(format!(
@@ -230,26 +230,26 @@ mod tests {
     use super::*;
     use test_case::test_case;
     #[test_case(b"*4\r\n$5\r\nvalue\r\n$5\r\nvalue\r\n$-1\r\n$5\r\nvalue\r\n",
-        RedisObject::Array(vec![
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::NullString,
-            RedisObject::Str(BytesMut::from("value"))
+        ValkeyObject::Array(vec![
+            ValkeyObject::Str(BytesMut::from("value")),
+            ValkeyObject::Str(BytesMut::from("value")),
+            ValkeyObject::NullString,
+            ValkeyObject::Str(BytesMut::from("value"))
         ])
     ; "parse array with 4 elements")]
     #[test_case(b"$11\r\nhello world\r\n",
-        RedisObject::Str(BytesMut::from("hello world"))
+        ValkeyObject::Str(BytesMut::from("hello world"))
     ; "parse simple string")]
     #[test_case(b"+OK\r\n",
-        RedisObject::Status(BytesMut::from("OK"))
+        ValkeyObject::Status(BytesMut::from("OK"))
     ; "parse status OK")]
     #[test_case(b"-ERR bad thing happened\r\n",
-        RedisObject::Error(BytesMut::from("ERR bad thing happened"))
+        ValkeyObject::Error(BytesMut::from("ERR bad thing happened"))
     ; "parse err message")]
-    #[test_case(b":42\r\n", RedisObject::Integer(42); "parse integer")]
+    #[test_case(b":42\r\n", ValkeyObject::Integer(42); "parse integer")]
     fn test_happy_response_parser(
         buffer: &[u8],
-        expected_response: RedisObject,
+        expected_response: ValkeyObject,
     ) -> Result<(), SableError> {
         let response = RespResponseParserV2::parse_response(buffer)?;
         let ResponseParseResult::Ok((consumed, obj)) = response else {
@@ -264,19 +264,19 @@ mod tests {
     }
 
     #[test_case(b"$11\r\nhello world\r\n$5\r\n",
-        RedisObject::Str(BytesMut::from("hello world")), 18
+        ValkeyObject::Str(BytesMut::from("hello world")), 18
     ; "parse simple string with excessive data")]
     #[test_case(b"*4\r\n$5\r\nvalue\r\n$5\r\nvalue\r\n$-1\r\n$5\r\nvalue\r\n$5\r\n",
-        RedisObject::Array(vec![
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::Str(BytesMut::from("value")),
-            RedisObject::NullString,
-            RedisObject::Str(BytesMut::from("value"))
+        ValkeyObject::Array(vec![
+            ValkeyObject::Str(BytesMut::from("value")),
+            ValkeyObject::Str(BytesMut::from("value")),
+            ValkeyObject::NullString,
+            ValkeyObject::Str(BytesMut::from("value"))
         ]), 42
     ; "parse array with 4 elements and excessive data")]
     fn test_buffer_too_long(
         buffer: &[u8],
-        expected_response: RedisObject,
+        expected_response: ValkeyObject,
         expected_consumed: usize,
     ) -> Result<(), SableError> {
         let response = RespResponseParserV2::parse_response(buffer)?;

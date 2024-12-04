@@ -79,7 +79,7 @@ async fn task_main(
     requests_count: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const LIST_KEY_RANGE: usize = 1000;
-    let stream = crate::redis_client::RedisClient::connect(
+    let stream = crate::redis_client::ValkeyClient::connect(
         opts.host.clone(),
         opts.port as u16,
         opts.tls_enabled(),

@@ -10,8 +10,8 @@ use crate::{
     server::SableError,
     storage::StringsDb,
     utils::RespBuilderV2,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, StorageAdapter, StringUtils,
+    Telemetry, TimeUtils, ValkeyCommand, ValkeyCommandName,
 };
 
 use bytes::BytesMut;
@@ -23,15 +23,15 @@ pub struct ClientCommands {}
 impl ClientCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Client => {
+            ValkeyCommandName::Client => {
                 Self::client(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Select => {
+            ValkeyCommandName::Select => {
                 Self::select(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -47,7 +47,7 @@ impl ClientCommands {
     /// Execute the `client` command
     async fn client(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -110,11 +110,11 @@ impl ClientCommands {
         Ok(())
     }
 
-    /// Select the Redis logical database having the specified zero-based numeric index.
+    /// Select the Valkey logical database having the specified zero-based numeric index.
     /// New connections always use the database 0.
     async fn select(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -182,7 +182,7 @@ mod tests {
 
             for (args, expected_value) in args_vec {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
@@ -208,7 +208,7 @@ mod tests {
 
             let client1_id = format!("{}", client1.inner().id());
             let kill_command = Rc::new(
-                RedisCommand::new(vec![
+                ValkeyCommand::new(vec![
                     BytesMut::from("client"),
                     BytesMut::from("kill"),
                     BytesMut::from("id"),
@@ -232,7 +232,7 @@ mod tests {
             }
 
             // Try to use client 1
-            let some_command = Rc::new(RedisCommand::for_test(vec!["set", "some", "value"]));
+            let some_command = Rc::new(ValkeyCommand::for_test(vec!["set", "some", "value"]));
             let mut sink = crate::tests::ResponseSink::with_name("test_client_kill").await;
             match Client::handle_command(client1.inner(), some_command, &mut sink.fp)
                 .await

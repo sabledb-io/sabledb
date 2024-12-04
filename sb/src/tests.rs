@@ -1,6 +1,6 @@
-use crate::redis_client::{RedisClient, StreamType};
+use crate::redis_client::{StreamType, ValkeyClient};
 use crate::{bench_utils, sb_options::Options, stats};
-use libsabledb::{stopwatch::StopWatch, RedisObject};
+use libsabledb::{stopwatch::StopWatch, ValkeyObject};
 
 /// Run the `set` test case
 pub async fn run_set(
@@ -12,8 +12,8 @@ pub async fn run_set(
     let key_size = opts.key_size;
     let key_range = opts.key_range;
     let payload = bench_utils::generate_payload(opts.data_size);
-    let mut client = RedisClient::default();
-    let status_ok = RedisObject::Status("OK".into());
+    let mut client = ValkeyClient::default();
+    let status_ok = ValkeyObject::Status("OK".into());
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -47,7 +47,7 @@ pub async fn run_get(
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;
-    let mut client = RedisClient::default();
+    let mut client = ValkeyClient::default();
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -61,8 +61,8 @@ pub async fn run_get(
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
             match client.read_response(&mut stream).await? {
-                RedisObject::NullString => {}
-                RedisObject::Str(_value) => {
+                ValkeyObject::NullString => {}
+                ValkeyObject::Str(_value) => {
                     stats::incr_hits();
                 }
                 other => {
@@ -85,8 +85,8 @@ pub async fn run_ping(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let requests_to_send = opts.client_requests();
     let mut requests_sent = 0;
-    let mut client = RedisClient::default();
-    let status_pong = RedisObject::Status("PONG".into());
+    let mut client = ValkeyClient::default();
+    let status_pong = ValkeyObject::Status("PONG".into());
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -119,7 +119,7 @@ pub async fn run_incr(
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;
-    let mut client = RedisClient::default();
+    let mut client = ValkeyClient::default();
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -133,7 +133,7 @@ pub async fn run_incr(
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
             match client.read_response(&mut stream).await? {
-                RedisObject::Integer(_val) => {
+                ValkeyObject::Integer(_val) => {
                     stats::incr_hits();
                 }
                 other => {
@@ -160,7 +160,7 @@ pub async fn run_push(
     let key_size = opts.key_size;
     let key_range = opts.key_range;
     let payload = bench_utils::generate_payload(opts.data_size);
-    let mut client = RedisClient::default();
+    let mut client = ValkeyClient::default();
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -173,7 +173,7 @@ pub async fn run_push(
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
             match client.read_response(&mut stream).await? {
-                RedisObject::Integer(_list_length) => {}
+                ValkeyObject::Integer(_list_length) => {}
                 other => {
                     tracing::error!("expected Integer. Got: {:?}", other);
                 }
@@ -196,7 +196,7 @@ pub async fn run_pop(
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;
-    let mut client = RedisClient::default();
+    let mut client = ValkeyClient::default();
     while requests_sent < requests_to_send {
         let mut buffer = bytes::BytesMut::with_capacity(1024);
         for _ in 0..opts.pipeline {
@@ -210,8 +210,8 @@ pub async fn run_pop(
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
             match client.read_response(&mut stream).await? {
-                RedisObject::NullString => {}
-                RedisObject::Str(_value) => {
+                ValkeyObject::NullString => {}
+                ValkeyObject::Str(_value) => {
                     stats::incr_hits();
                 }
                 other => {
@@ -236,7 +236,7 @@ pub async fn run_hset(
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;
-    let mut client = RedisClient::default();
+    let mut client = ValkeyClient::default();
     let payload = bench_utils::generate_payload(opts.data_size);
     let mut seq = 0usize;
     while requests_sent < requests_to_send {
@@ -254,8 +254,8 @@ pub async fn run_hset(
         // read "pipeline" responses
         for _ in 0..opts.pipeline {
             match client.read_response(&mut stream).await? {
-                RedisObject::NullString => {}
-                RedisObject::Integer(_num) => {
+                ValkeyObject::NullString => {}
+                ValkeyObject::Integer(_num) => {
                     stats::incr_hits();
                 }
                 other => {

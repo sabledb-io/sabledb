@@ -14,7 +14,7 @@ pub fn commands_manager() -> &'static CommandsManager {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct RedisCommand {
+pub struct ValkeyCommand {
     /// the raw command arguments
     args: Vec<BytesMut>,
 
@@ -26,7 +26,7 @@ pub struct RedisCommand {
     command_metadata: Arc<CommandMetadata>,
 }
 
-impl RedisCommand {
+impl ValkeyCommand {
     #[cfg(test)]
     pub fn for_test(args: Vec<&'static str>) -> Self {
         let args: Vec<BytesMut> = args.iter().map(|s| BytesMut::from(s.as_bytes())).collect();
@@ -39,7 +39,7 @@ impl RedisCommand {
         Self::new(args).unwrap()
     }
 
-    /// Construct `RedisCommandData` from raw parsed data
+    /// Construct `ValkeyCommandData` from raw parsed data
     pub fn new(args: Vec<BytesMut>) -> Result<Self, SableError> {
         let Some(command_name) = args.first() else {
             return Err(SableError::EmptyCommand);
@@ -48,7 +48,7 @@ impl RedisCommand {
         let command_name = String::from_utf8_lossy(command_name).to_lowercase();
         let metadata = COMMANDS_MGR.metadata(command_name.as_str());
 
-        Ok(RedisCommand {
+        Ok(ValkeyCommand {
             args,
             command_name,
             command_metadata: metadata,
@@ -107,10 +107,10 @@ impl RedisCommand {
     }
 }
 
-impl FromStr for RedisCommand {
+impl FromStr for ValkeyCommand {
     type Err = SableError;
 
-    /// Construct `RedisCommand` from string literal
+    /// Construct `ValkeyCommand` from string literal
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let args: Vec<&str> = s.split(' ').collect();
         let args = args.iter().map(|s| BytesMut::from(*s)).collect();

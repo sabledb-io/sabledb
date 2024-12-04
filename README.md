@@ -7,9 +7,9 @@
 
 <img src="/docs/images/sabledb.svg" width="200" height="200" align="right" />
 
-`SableDB` is a key-value NoSQL database that utilizes [`RocksDB`][3] as its storage engine and is compatible with the Redis protocol.
-It aims to reduce memory costs and increase capacity compared to Redis. `SableDB` features include Redis-compatible access via
-any Redis client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.
+`SableDB` is a key-value NoSQL database that utilizes [`RocksDB`][3] as its storage engine and is compatible with the Valkey protocol.
+It aims to reduce memory costs and increase capacity compared to Valkey. `SableDB` features include Valkey-compatible access via
+any Valkey client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.
 
 ## Building
 
@@ -87,7 +87,7 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 
 ## Supported features
 
-- Persistent data using RocksDB - use `SableDB` as a persistent storage using `Redis`'s API
+- Persistent data using RocksDB - use `SableDB` as a persistent storage using `Valkey`'s API
 - TLS connections
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
@@ -368,7 +368,7 @@ multi-threaded environment causes a challenge
 
 Command executions can be seen [here][2]
 
-[1]: https://github.com/redis/redis
+[1]: https://github.com/valkey-io/valkey
 [2]: https://github.com/sabledb-io/sabledb/blob/main/BENCHMARK.md
 [3]: https://rocksdb.org/
 [4]: https://tokio.rs/

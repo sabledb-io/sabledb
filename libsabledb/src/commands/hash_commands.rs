@@ -10,8 +10,8 @@ use crate::{
         HashGetResult, HashLenResult, HashPutResult, ScanCursor,
     },
     utils::{PatternMatcher, RespBuilderV2},
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, SableError, StorageAdapter,
+    StringUtils, Telemetry, TimeUtils, ValkeyCommand, ValkeyCommandName,
 };
 
 use crate::io::RespWriter;
@@ -32,15 +32,15 @@ enum HGetAllOutput {
 impl HashCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Hset => {
+            ValkeyCommandName::Hset => {
                 Self::hset(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hmset => {
+            ValkeyCommandName::Hmset => {
                 // HMSET is identical to HSET with different response (it responds with OK)
                 Self::hset(client_state, command, &mut response_buffer).await?;
                 if response_buffer.starts_with(b":") {
@@ -49,59 +49,59 @@ impl HashCommands {
                     builder.ok(&mut response_buffer);
                 }
             }
-            RedisCommandName::Hget => {
+            ValkeyCommandName::Hget => {
                 Self::hget(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hdel => {
+            ValkeyCommandName::Hdel => {
                 Self::hdel(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hlen => {
+            ValkeyCommandName::Hlen => {
                 Self::hlen(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hexists => {
+            ValkeyCommandName::Hexists => {
                 Self::hexists(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hincrbyfloat => {
+            ValkeyCommandName::Hincrbyfloat => {
                 Self::hincrbyfloat(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hincrby => {
+            ValkeyCommandName::Hincrby => {
                 Self::hincrby(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hgetall => {
+            ValkeyCommandName::Hgetall => {
                 // write directly to the client
                 Self::hgetall(client_state, command, tx, HGetAllOutput::Both).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hkeys => {
+            ValkeyCommandName::Hkeys => {
                 // write directly to the client
                 Self::hgetall(client_state, command, tx, HGetAllOutput::Keys).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hvals => {
+            ValkeyCommandName::Hvals => {
                 // write directly to the client
                 Self::hgetall(client_state, command, tx, HGetAllOutput::Values).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hmget => {
+            ValkeyCommandName::Hmget => {
                 // write directly to the client
                 Self::hmget(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hrandfield => {
+            ValkeyCommandName::Hrandfield => {
                 // write directly to the client
                 Self::hrandfield(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hscan => {
+            ValkeyCommandName::Hscan => {
                 // write directly to the client
                 Self::hscan(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Hsetnx => {
+            ValkeyCommandName::Hsetnx => {
                 // simple response, write to response_buffer
                 Self::hsetnx(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Hstrlen => {
+            ValkeyCommandName::Hstrlen => {
                 // simple response, write to response_buffer
                 Self::hstrlen(client_state, command, &mut response_buffer).await?;
             }
@@ -118,7 +118,7 @@ impl HashCommands {
     /// Sets the specified fields to their respective values in the hash stored at key.
     async fn hset(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -181,7 +181,7 @@ impl HashCommands {
     /// a new key holding a hash is created. If field already exists, this operation has no effect.
     async fn hsetnx(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -223,7 +223,7 @@ impl HashCommands {
     /// Returns the value associated with field in the hash stored at key.
     async fn hget(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -258,7 +258,7 @@ impl HashCommands {
     /// do not exist, 0 is returned.
     async fn hstrlen(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -293,7 +293,7 @@ impl HashCommands {
     /// are ignored. If key does not exist, it is treated as an empty hash and this command returns 0
     async fn hdel(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -337,7 +337,7 @@ impl HashCommands {
     /// Returns the number of fields contained in the hash stored at key
     async fn hlen(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -362,7 +362,7 @@ impl HashCommands {
     /// Returns the number of fields contained in the hash stored at key
     async fn hexists(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -387,7 +387,7 @@ impl HashCommands {
     /// Returns the number of fields contained in the hash stored at key
     async fn hgetall(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
         output_type: HGetAllOutput,
     ) -> Result<(), SableError> {
@@ -476,7 +476,7 @@ impl HashCommands {
     /// The range of values supported by HINCRBY is limited to 64 bit signed integers.
     async fn hincrby(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -524,7 +524,7 @@ impl HashCommands {
     /// The range of values supported by HINCRBY is limited to 64 bit signed integers.
     async fn hincrbyfloat(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -571,7 +571,7 @@ impl HashCommands {
     /// are treated as empty hashes, running HMGET against a non-existing key will return a list of nil values.
     async fn hmget(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 3, tx);
@@ -619,7 +619,7 @@ impl HashCommands {
     /// hash fields.
     async fn hrandfield(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -778,7 +778,7 @@ impl HashCommands {
     /// `HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]`
     async fn hscan(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 3, tx);
@@ -1150,7 +1150,7 @@ mod test {
 
             for (args, expected_value) in args {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
@@ -1370,7 +1370,7 @@ mod test {
         client_state: Rc<ClientState>,
     ) {
         let mut sink = crate::tests::ResponseSink::with_name("test_hscan_continutation").await;
-        let cmd = Rc::new(RedisCommand::for_test(cmd_args));
+        let cmd = Rc::new(ValkeyCommand::for_test(cmd_args));
 
         match Client::handle_command(client_state, cmd, &mut sink.fp)
             .await

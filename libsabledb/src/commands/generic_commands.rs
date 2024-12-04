@@ -6,8 +6,8 @@ use crate::{
     server::ClientState,
     storage::{GenericDb, ScanCursor},
     utils::{PatternMatcher, RespBuilderV2},
-    BytesMutUtils, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName, SableError,
-    U8ArrayBuilder,
+    BytesMutUtils, LockManager, PrimaryKeyMetadata, SableError, U8ArrayBuilder, ValkeyCommand,
+    ValkeyCommandName,
 };
 
 use bytes::BytesMut;
@@ -19,27 +19,27 @@ pub struct GenericCommands {}
 impl GenericCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Ttl => {
+            ValkeyCommandName::Ttl => {
                 Self::ttl(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Del => {
+            ValkeyCommandName::Del => {
                 Self::del(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Exists => {
+            ValkeyCommandName::Exists => {
                 Self::exists(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Expire => {
+            ValkeyCommandName::Expire => {
                 Self::expire(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Keys => {
+            ValkeyCommandName::Keys => {
                 Self::keys(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Scan => {
+            ValkeyCommandName::Scan => {
                 Self::scan(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -56,7 +56,7 @@ impl GenericCommands {
     /// the individual complexity remains O(1) and the deletion of the element keys is done in a background thread
     async fn del(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -106,11 +106,11 @@ impl GenericCommands {
     }
 
     /// Returns the remaining time to live of a key that has a timeout.
-    /// This introspection capability allows a Redis client to check how
+    /// This introspection capability allows a Valkey client to check how
     /// many seconds a given key will continue to be part of the dataset.
     async fn ttl(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -142,7 +142,7 @@ impl GenericCommands {
     /// it will be counted multiple times. So if somekey exists, EXISTS somekey somekey will return 2.
     async fn exists(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 2 items: EXISTS <KEY1> [..]
@@ -167,7 +167,7 @@ impl GenericCommands {
 
     async fn expire(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 3 arguments
@@ -257,7 +257,7 @@ impl GenericCommands {
     /// Returns all keys for the current database that matches a given pattern
     async fn keys(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // NOTE: this function iterate through all keys in the database and
@@ -325,7 +325,7 @@ impl GenericCommands {
     /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`
     async fn scan(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -569,7 +569,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()

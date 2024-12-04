@@ -6,8 +6,8 @@ use crate::{
         ListLenResult, ListPopResult, ListPushResult, ListRangeResult, ListRemoveResult,
         ListTrimResult,
     },
-    to_number, BlockClientResult, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
-    RespBuilderV2, SableError,
+    to_number, BlockClientResult, BytesMutUtils, LockManager, RespBuilderV2, SableError,
+    ValkeyCommand, ValkeyCommandName,
 };
 use bytes::BytesMut;
 use std::rc::Rc;
@@ -23,12 +23,12 @@ impl ListCommands {
     /// Main entry point for all list commands
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         _tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Lpush => {
+            ValkeyCommandName::Lpush => {
                 Self::push(
                     client_state,
                     command,
@@ -38,7 +38,7 @@ impl ListCommands {
                 .await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lpushx => {
+            ValkeyCommandName::Lpushx => {
                 Self::push(
                     client_state,
                     command,
@@ -48,11 +48,11 @@ impl ListCommands {
                 .await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Rpush => {
+            ValkeyCommandName::Rpush => {
                 Self::push(client_state, command, &mut response_buffer, ListFlags::None).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Rpushx => {
+            ValkeyCommandName::Rpushx => {
                 Self::push(
                     client_state,
                     command,
@@ -62,7 +62,7 @@ impl ListCommands {
                 .await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lpop => {
+            ValkeyCommandName::Lpop => {
                 Self::pop(
                     client_state,
                     command,
@@ -72,64 +72,64 @@ impl ListCommands {
                 .await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Rpop => {
+            ValkeyCommandName::Rpop => {
                 Self::pop(client_state, command, &mut response_buffer, ListFlags::None).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Ltrim => {
+            ValkeyCommandName::Ltrim => {
                 Self::ltrim(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lrange => {
+            ValkeyCommandName::Lrange => {
                 Self::lrange(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Llen => {
+            ValkeyCommandName::Llen => {
                 Self::llen(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lindex => {
+            ValkeyCommandName::Lindex => {
                 Self::lindex(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Linsert => {
+            ValkeyCommandName::Linsert => {
                 Self::linsert(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lset => {
+            ValkeyCommandName::Lset => {
                 Self::lset(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lpos => {
+            ValkeyCommandName::Lpos => {
                 Self::lpos(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lrem => {
+            ValkeyCommandName::Lrem => {
                 Self::lrem(client_state, command, &mut response_buffer).await?;
                 Ok(HandleCommandResult::ResponseBufferUpdated(response_buffer))
             }
-            RedisCommandName::Lmove => Self::lmove(client_state, command, response_buffer).await,
-            RedisCommandName::Lmpop => {
+            ValkeyCommandName::Lmove => Self::lmove(client_state, command, response_buffer).await,
+            ValkeyCommandName::Lmpop => {
                 Self::lmpop(client_state, command, false, response_buffer).await
             }
-            RedisCommandName::Rpoplpush => {
+            ValkeyCommandName::Rpoplpush => {
                 Self::rpoplpush(client_state, command, response_buffer).await
             }
-            RedisCommandName::Brpoplpush => {
+            ValkeyCommandName::Brpoplpush => {
                 Self::blocking_rpoplpush(client_state, command, response_buffer).await
             }
-            RedisCommandName::Blpop => {
+            ValkeyCommandName::Blpop => {
                 Self::blocking_pop(client_state, command, response_buffer, ListFlags::FromLeft)
                     .await
             }
-            RedisCommandName::Brpop => {
+            ValkeyCommandName::Brpop => {
                 Self::blocking_pop(client_state, command, response_buffer, ListFlags::FromRight)
                     .await
             }
-            RedisCommandName::Blmove => {
+            ValkeyCommandName::Blmove => {
                 Self::blocking_move(client_state, command, response_buffer).await
             }
-            RedisCommandName::Blmpop => {
+            ValkeyCommandName::Blmpop => {
                 Self::lmpop(client_state, command, true, response_buffer).await
             }
             _ => Err(SableError::InvalidArgument(format!(
@@ -144,7 +144,7 @@ impl ListCommands {
     /// push operations. When key holds a value that is not a list, an error is returned
     pub async fn push(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<(), SableError> {
@@ -182,7 +182,7 @@ impl ListCommands {
     /// pushes the element at the first element (head) of the list stored at destination
     pub async fn rpoplpush(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(
@@ -214,7 +214,7 @@ impl ListCommands {
     /// Blocking version
     pub async fn blocking_rpoplpush(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(
@@ -258,7 +258,7 @@ impl ListCommands {
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn lmove(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(
@@ -291,7 +291,7 @@ impl ListCommands {
     /// (head/tail depending on the whereto argument) of the list stored at destination.
     pub async fn blocking_move(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
         expect_args_count!(
@@ -336,7 +336,7 @@ impl ListCommands {
     /// the client is blocked for the duration of specified in `blocking_duration`
     async fn lmove_internal(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         src_list_name: &BytesMut,
         target_list_name: &BytesMut,
         src_left_or_right: &str,
@@ -426,7 +426,7 @@ impl ListCommands {
     /// Pops one or more elements from the first non-empty list key from the list of provided key names
     pub async fn lmpop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         allow_blocking: bool,
         mut response_buffer: BytesMut,
     ) -> Result<HandleCommandResult, SableError> {
@@ -599,7 +599,7 @@ impl ListCommands {
     /// reply will consist of up to count elements, depending on the list's length.
     pub async fn pop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
         flags: ListFlags,
     ) -> Result<(), SableError> {
@@ -645,7 +645,7 @@ impl ListCommands {
 
     pub async fn blocking_pop(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         mut response_buffer: BytesMut,
         flags: ListFlags,
     ) -> Result<HandleCommandResult, SableError> {
@@ -759,7 +759,7 @@ impl ListCommands {
     /// 1 the next element and so on
     pub async fn ltrim(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -792,7 +792,7 @@ impl ListCommands {
     /// -1 is the last element of the list, -2 the penultimate, and so on.
     pub async fn lrange(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -824,7 +824,7 @@ impl ListCommands {
     /// is not a list.
     pub async fn llen(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -852,7 +852,7 @@ impl ListCommands {
     /// `LINSERT key <BEFORE | AFTER> pivot element`
     pub async fn linsert(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 5, response_buffer);
@@ -898,7 +898,7 @@ impl ListCommands {
     /// When the value at key is not a list, an error is returned.
     pub async fn lindex(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -924,14 +924,14 @@ impl ListCommands {
         Ok(())
     }
 
-    /// The command returns the index of matching elements inside a Redis list.
+    /// The command returns the index of matching elements inside a Valkey list.
     /// By default, when no options are given, it will scan the list from head
     /// to tail, looking for the first match of "element". If the element is
     /// found, its index (the zero-based position in the list) is returned.
     /// Otherwise, if no match is found, nil is returned.
     pub async fn lpos(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -1017,7 +1017,7 @@ impl ListCommands {
     /// An error is returned for out of range indexes.
     pub async fn lset(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1054,7 +1054,7 @@ impl ListCommands {
     /// An error is returned for out of range indexes.
     pub async fn lrem(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1351,7 +1351,7 @@ mod tests {
 
             for (args, expected_value) in args_vec {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd.clone(), &mut sink.fp)
                     .await
                     .unwrap()
@@ -1415,7 +1415,7 @@ mod tests {
             let writer = Client::new(server, store, None);
 
             const EXPECTED_RESULT: &str = "*2\r\n$23\r\ntest_blocking_pop_list1\r\n$5\r\nvalue\r\n";
-            let read_cmd = Rc::new(RedisCommand::for_test(vec![
+            let read_cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "blpop",
                 "test_blocking_pop_list1",
                 "test_blocking_pop_list2",
@@ -1427,7 +1427,7 @@ mod tests {
                 crate::tests::deferred_command(reader.inner(), read_cmd.clone()).await;
 
             // second connection: push data to the list
-            let pus_cmd = Rc::new(RedisCommand::for_test(vec![
+            let pus_cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "lpush",
                 "test_blocking_pop_list1",
                 "value",

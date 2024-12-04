@@ -1,4 +1,4 @@
-use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, RedisCommand, SableError};
+use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, SableError, ValkeyCommand};
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -59,7 +59,7 @@ impl LockManager {
     pub async fn lock<'a>(
         user_key: &BytesMut,
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let db_id = client_state.database_id();
         let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
@@ -75,7 +75,7 @@ impl LockManager {
     pub async fn lock_multi<'a>(
         user_keys: &[&BytesMut],
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let db_id = client_state.database_id();
         let keys: Vec<Rc<BytesMut>> = user_keys
@@ -500,7 +500,7 @@ mod tests {
 
                 // Create a "write" command to force `lock_multi` to use exclusive lock
                 let args = "set a b".split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 for _ in 0..100 {
                     let locker = LockManager::lock_multi(&keys, client.inner(), cmd.clone())
                         .await
@@ -541,7 +541,7 @@ mod tests {
 
                 // Create a "write" command to force `lock_multi` to use exclusive lock
                 let args = "set a b".split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
 
                 for _ in 0..100 {
                     let locker = LockManager::lock_multi(&keys, client.inner(), cmd.clone())

@@ -10,10 +10,10 @@ pub enum SableError {
     StorageError(#[from] sled::Error),
     /// From tokio channel error
     #[error("Tokio channel error. {0}")]
-    WorkerChannel(#[from] tokio::sync::mpsc::error::SendError<crate::RedisCommand>),
+    WorkerChannel(#[from] tokio::sync::mpsc::error::SendError<crate::ValkeyCommand>),
     /// From tokio channel error
     #[error("Tokio channel error. {0}")]
-    SendCommanError(#[from] tokio::sync::mpsc::error::SendError<Rc<crate::RedisCommand>>),
+    SendCommanError(#[from] tokio::sync::mpsc::error::SendError<Rc<crate::ValkeyCommand>>),
     #[error("Failed to broadcast worker message. {0}")]
     BroadcastWorkerMessage(
         #[from] tokio::sync::mpsc::error::SendError<crate::server::WorkerMessage>,
@@ -60,8 +60,8 @@ pub enum SableError {
     ClientInvalidState,
     #[error("Corrupted database. {0}")]
     Corrupted(String),
-    #[error("RedisError. {0}")]
-    RedisError(#[from] redis::RedisError),
+    #[error("ValkeyError. {0}")]
+    ValkeyError(#[from] redis::RedisError),
     #[error("Parsing error. {0}")]
     ParseError(String),
     #[error("Internal error. {0}")]

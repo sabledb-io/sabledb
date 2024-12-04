@@ -11,8 +11,8 @@ use crate::{
     commands::{HandleCommandResult, Strings},
     parse_string_to_number,
     storage::PutFlags,
-    to_number, to_number_ex, BytesMutUtils, LockManager, RedisCommand, RedisCommandName,
-    RespBuilderV2, SableError, StringUtils, StringValueMetadata, Telemetry,
+    to_number, to_number_ex, BytesMutUtils, LockManager, RespBuilderV2, SableError, StringUtils,
+    StringValueMetadata, Telemetry, ValkeyCommand, ValkeyCommandName,
 };
 
 use bytes::BytesMut;
@@ -38,76 +38,76 @@ impl StringCommands {
     /// Main entry point for all string commands
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::Append => {
+            ValkeyCommandName::Append => {
                 Self::append(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Set => {
+            ValkeyCommandName::Set => {
                 Self::set(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Get => {
+            ValkeyCommandName::Get => {
                 Self::get(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::GetDel => {
+            ValkeyCommandName::GetDel => {
                 Self::getdel(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::GetSet => {
+            ValkeyCommandName::GetSet => {
                 Self::getset(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Incr => {
+            ValkeyCommandName::Incr => {
                 Self::incr(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::DecrBy => {
+            ValkeyCommandName::DecrBy => {
                 Self::decrby(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::IncrBy => {
+            ValkeyCommandName::IncrBy => {
                 Self::incrby(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::IncrByFloat => {
+            ValkeyCommandName::IncrByFloat => {
                 Self::incrbyfloat(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Decr => {
+            ValkeyCommandName::Decr => {
                 Self::decr(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::GetEx => {
+            ValkeyCommandName::GetEx => {
                 Self::getex(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::GetRange => {
+            ValkeyCommandName::GetRange => {
                 Self::getrange(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Lcs => {
+            ValkeyCommandName::Lcs => {
                 Self::lcs(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Mget => {
+            ValkeyCommandName::Mget => {
                 Self::mget(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::Mset => {
+            ValkeyCommandName::Mset => {
                 Self::mset(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Msetnx => {
+            ValkeyCommandName::Msetnx => {
                 Self::msetnx(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Psetex => {
+            ValkeyCommandName::Psetex => {
                 Self::psetex(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Setex => {
+            ValkeyCommandName::Setex => {
                 Self::setex(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Setnx => {
+            ValkeyCommandName::Setnx => {
                 Self::setnx(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::SetRange => {
+            ValkeyCommandName::SetRange => {
                 Self::setrange(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Strlen => {
+            ValkeyCommandName::Strlen => {
                 Self::strlen(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Substr => {
+            ValkeyCommandName::Substr => {
                 Self::substr(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -125,7 +125,7 @@ impl StringCommands {
     /// live associated with the key is discarded on successful SET operation.
     async fn set(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -173,7 +173,7 @@ impl StringCommands {
     /// empty string, so APPEND will be similar to SET in this special case.
     async fn append(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -212,7 +212,7 @@ impl StringCommands {
     /// values
     async fn get(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
@@ -244,7 +244,7 @@ impl StringCommands {
     /// except for the fact that it also deletes the key on success (if and only if the key's value type is a string)
     async fn getdel(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -277,7 +277,7 @@ impl StringCommands {
     /// previous time to live associated with the key is discarded on successful SET operation
     async fn getset(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -313,7 +313,7 @@ impl StringCommands {
     /// but is a write command with additional options.
     async fn getex(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
@@ -385,7 +385,7 @@ impl StringCommands {
     /// the last character, -2 the penultimate and so forth.
     async fn getrange(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -433,7 +433,7 @@ impl StringCommands {
     /// This operation is limited to 64 bit signed integers.
     async fn decr(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -481,7 +481,7 @@ impl StringCommands {
     /// that can not be represented as integer. This operation is limited to 64 bit signed integers.
     async fn incr(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -528,7 +528,7 @@ impl StringCommands {
     /// represented as integer. This operation is limited to 64 bit signed integers.
     async fn decrby(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -578,7 +578,7 @@ impl StringCommands {
     /// represented as integer. This operation is limited to 64 bit signed integers.
     async fn incrby(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -626,7 +626,7 @@ impl StringCommands {
     /// the operation. An error is returned if one of the following conditions occur:
     async fn incrbyfloat(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -680,7 +680,7 @@ impl StringCommands {
     /// in the string does not need to be contiguous.
     async fn lcs(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -783,7 +783,7 @@ impl StringCommands {
     /// Because of this, the operation never fails.
     async fn mget(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         check_args_count_tx!(command, 2, tx);
@@ -823,7 +823,7 @@ impl StringCommands {
     /// some of the keys were updated while others are unchanged
     async fn mset(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 3 arguments
@@ -867,7 +867,7 @@ impl StringCommands {
     /// either all the fields or none at all are set.
     async fn msetnx(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 3 arguments
@@ -912,7 +912,7 @@ impl StringCommands {
     /// SETEX key seconds value
     async fn setex(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 4 arguments
@@ -940,7 +940,7 @@ impl StringCommands {
     /// PSETEX key milliseconds value
     async fn psetex(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         // at least 4 arguments
@@ -968,7 +968,7 @@ impl StringCommands {
     /// When key already holds a value, no operation is performed. SETNX is short for "SET if Not eXists".
     async fn setnx(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -996,7 +996,7 @@ impl StringCommands {
     /// string large enough to be able to set value at offset.
     async fn setrange(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1036,7 +1036,7 @@ impl StringCommands {
     /// An error is returned when key holds a non-string value
     async fn strlen(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -1062,7 +1062,7 @@ impl StringCommands {
     /// An alias to `GETRANGE KEY START END`
     async fn substr(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 4, response_buffer);
@@ -1083,7 +1083,7 @@ impl StringCommands {
     /// `flags` possible bitwise combination of `SetFlags` bits
     pub async fn set_internal_with_locks(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         user_key: &BytesMut,
         value: &BytesMut,
         expiry: (Option<String>, Option<String>),
@@ -1436,7 +1436,7 @@ mod test {
 
             for (args, expected_value) in args_vec {
                 let mut sink = crate::tests::ResponseSink::with_name(test_name).await;
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd.clone(), &mut sink.fp)
                     .await
                     .unwrap()
@@ -1485,7 +1485,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
@@ -1510,7 +1510,7 @@ mod test {
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "set",
                 "test_getex_k1",
                 "value",
@@ -1523,7 +1523,7 @@ mod test {
             assert_eq!(sink.read_all().await.as_str(), "+OK\r\n");
 
             // the key has no TTL associated, report -1
-            let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
+            let cmd = Rc::new(ValkeyCommand::for_test(vec!["ttl", "test_getex_k1"]));
 
             let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
             Client::handle_command(client.inner(), cmd, &mut sink.fp)
@@ -1531,7 +1531,7 @@ mod test {
                 .unwrap();
             assert_eq!(sink.read_all().await.as_str(), ":-1\r\n");
 
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "getex",
                 "test_getex_k1",
                 "EX",
@@ -1546,7 +1546,7 @@ mod test {
             assert_eq!(sink.read_all().await.as_str(), "$5\r\nvalue\r\n");
 
             std::thread::sleep(std::time::Duration::from_millis(1500)); // we round UP, so we are left with 1500 ms -> 2 seconds
-            let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
+            let cmd = Rc::new(ValkeyCommand::for_test(vec!["ttl", "test_getex_k1"]));
 
             let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
             Client::handle_command(client.inner(), cmd, &mut sink.fp)
@@ -1556,7 +1556,7 @@ mod test {
             std::thread::sleep(std::time::Duration::from_millis(2000)); // Sleep for another 2 seconds, to expire the item
 
             // the key now does not exist
-            let cmd = Rc::new(RedisCommand::for_test(vec!["ttl", "test_getex_k1"]));
+            let cmd = Rc::new(ValkeyCommand::for_test(vec!["ttl", "test_getex_k1"]));
             let mut sink = crate::tests::ResponseSink::with_name("test_getex").await;
             Client::handle_command(client.inner(), cmd, &mut sink.fp)
                 .await
@@ -1578,7 +1578,7 @@ mod test {
                 .server_inner_state()
                 .persistent_state()
                 .set_role(crate::replication::ServerRole::Replica);
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "set",
                 "test_write_on_replica",
                 "1",
@@ -1606,7 +1606,7 @@ mod test {
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store, None);
 
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "psetex",
                 "test_key_with_timeout_k",
                 "100",
@@ -1616,7 +1616,7 @@ mod test {
             let _ = Client::handle_command(client.inner(), cmd, &mut sink1.fp).await;
             assert_eq!(sink1.read_all().await.as_str(), "+OK\r\n");
 
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "get",
                 "test_key_with_timeout_k",
             ]));
@@ -1628,7 +1628,7 @@ mod test {
             std::thread::sleep(std::time::Duration::from_millis(100));
 
             // the key should now be expired
-            let cmd = Rc::new(RedisCommand::for_test(vec![
+            let cmd = Rc::new(ValkeyCommand::for_test(vec![
                 "get",
                 "test_key_with_timeout_k",
             ]));

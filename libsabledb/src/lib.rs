@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod integtests;
 pub mod io;
 pub mod metadata;
 pub mod net;
@@ -6,11 +7,10 @@ pub mod replication;
 pub mod server;
 pub mod storage;
 pub mod utils;
-pub mod integtests;
 
 pub use commands::{
-    ClientCommands, GenericCommands, HashCommands, ListCommands, RedisCommand, RedisCommandName,
-    ServerCommands, SetCommands, StringCommands, TransactionCommands, ZSetCommands,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, ServerCommands, SetCommands,
+    StringCommands, TransactionCommands, ValkeyCommand, ValkeyCommandName, ZSetCommands,
 };
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
 pub use net::Transport;
@@ -21,7 +21,7 @@ pub use server::{BlockClientResult, Server, ServerState};
 pub use server::{Worker, WorkerContext, WorkerMessage};
 pub use storage::{BatchUpdate, DbWriteCache, StorageAdapter, StorageOpenParams, StorageRocksDb};
 pub use utils::resp_builder_v2::RespBuilderV2;
-pub use utils::resp_response_parser_v2::{RedisObject, RespResponseParserV2, ResponseParseResult};
+pub use utils::resp_response_parser_v2::{RespResponseParserV2, ResponseParseResult, ValkeyObject};
 pub use utils::*;
 
 /// Parse string into `usize` with suffix support
@@ -264,7 +264,7 @@ mod tests {
     /// Run a command that should be deferred by the server
     pub async fn deferred_command(
         client_state: Rc<ClientState>,
-        cmd: Rc<RedisCommand>,
+        cmd: Rc<ValkeyCommand>,
     ) -> (Receiver<u8>, Duration, TimeoutResponse) {
         let mut sink = crate::io::FileResponseSink::new().await.unwrap();
         let next_action = Client::handle_command(client_state, cmd, &mut sink.fp)
@@ -283,7 +283,10 @@ mod tests {
     }
 
     /// Execute a command
-    pub async fn execute_command(client_state: Rc<ClientState>, cmd: Rc<RedisCommand>) -> BytesMut {
+    pub async fn execute_command(
+        client_state: Rc<ClientState>,
+        cmd: Rc<ValkeyCommand>,
+    ) -> BytesMut {
         let mut sink = crate::io::FileResponseSink::new().await.unwrap();
         let next_action = Client::handle_command(client_state, cmd.clone(), &mut sink.fp)
             .await
@@ -335,9 +338,9 @@ mod tests {
     pub async fn run_and_return_output(
         cmd_args: Vec<String>,
         client_state: std::rc::Rc<ClientState>,
-    ) -> Result<RedisObject, SableError> {
+    ) -> Result<ValkeyObject, SableError> {
         let mut sink = crate::tests::ResponseSink::with_name("run_and_return_output").await;
-        let cmd = std::rc::Rc::new(RedisCommand::for_test2(cmd_args));
+        let cmd = std::rc::Rc::new(ValkeyCommand::for_test2(cmd_args));
 
         match Client::handle_command(client_state, cmd, &mut sink.fp)
             .await

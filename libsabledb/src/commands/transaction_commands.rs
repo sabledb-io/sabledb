@@ -9,8 +9,8 @@ use crate::{
     server::SableError,
     server::{Client, ClientState},
     storage::StringsDb,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    RespBuilderV2, StorageAdapter, StringUtils, Telemetry, TimeUtils,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, StorageAdapter,
+    StringUtils, Telemetry, TimeUtils, ValkeyCommand, ValkeyCommandName,
 };
 
 use std::rc::Rc;
@@ -38,14 +38,14 @@ pub struct TransactionCommands {}
 impl TransactionCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         match command.metadata().name() {
-            RedisCommandName::Multi => Self::multi(client_state, command, tx).await,
-            RedisCommandName::Discard => Self::discard(client_state, command, tx).await,
-            RedisCommandName::Watch => Self::watch(client_state, command, tx).await,
-            RedisCommandName::Unwatch => Self::unwatch(client_state, command, tx).await,
+            ValkeyCommandName::Multi => Self::multi(client_state, command, tx).await,
+            ValkeyCommandName::Discard => Self::discard(client_state, command, tx).await,
+            ValkeyCommandName::Watch => Self::watch(client_state, command, tx).await,
+            ValkeyCommandName::Unwatch => Self::unwatch(client_state, command, tx).await,
             _ => Err(SableError::InvalidArgument(format!(
                 "Unexpected command {}",
                 command.main_command()
@@ -56,7 +56,7 @@ impl TransactionCommands {
     /// Handle `EXEC` command
     pub async fn handle_exec(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut resp_writer = RespWriter::new(tx, 1024, client_state.clone());
@@ -161,7 +161,7 @@ impl TransactionCommands {
     /// Handle `MULTI` command
     async fn multi(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
@@ -180,7 +180,7 @@ impl TransactionCommands {
     /// Handle `MULTI` command
     async fn discard(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
@@ -205,7 +205,7 @@ impl TransactionCommands {
     /// Marks the given keys to be watched for conditional execution of a transaction.
     async fn watch(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
@@ -241,7 +241,7 @@ impl TransactionCommands {
     /// Flushes all the previously watched keys for a transaction
     async fn unwatch(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut resp_writer = RespWriter::new(tx, 64, client_state.clone());
@@ -276,7 +276,7 @@ mod test {
     async fn check_command(
         client_state: Rc<ClientState>,
         command_str: &str,
-        expected_output: RedisObject,
+        expected_output: ValkeyObject,
     ) {
         // Start a transaction
         let args: Vec<String> = command_str
@@ -298,13 +298,13 @@ mod test {
             let client2 = Client::new(Arc::<ServerState>::default(), store, None);
 
             // Start a transaction
-            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
+            check_command(client.inner(), "multi", ValkeyObject::Status("OK".into())).await;
 
             // No nested MULTI
             check_command(
                 client.inner(),
                 "multi",
-                RedisObject::Error(
+                ValkeyObject::Error(
                     "ERR command multi can not be used in a MULTI / EXEC block".into(),
                 ),
             )
@@ -314,14 +314,14 @@ mod test {
             check_command(
                 client.inner(),
                 "hgetall",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
                 "set k1 v1",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
@@ -329,7 +329,7 @@ mod test {
             check_command(
                 client.inner(),
                 "set k2 v2",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
@@ -337,8 +337,8 @@ mod test {
             assert_eq!(client.inner().txn_commands_vec_len(), 3);
 
             // Use the second client to confirm that the command was not executed
-            check_command(client2.inner(), "get k1", RedisObject::NullString).await;
-            check_command(client2.inner(), "get k2", RedisObject::NullString).await;
+            check_command(client2.inner(), "get k1", ValkeyObject::NullString).await;
+            check_command(client2.inner(), "get k2", ValkeyObject::NullString).await;
         });
     }
 
@@ -355,7 +355,7 @@ mod test {
             assert!(!client.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
+            check_command(client.inner(), "multi", ValkeyObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(client.inner().is_txn_state_multi());
@@ -365,14 +365,14 @@ mod test {
             check_command(
                 client.inner(),
                 "set k1 v1",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
                 "set k2 v2",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
@@ -380,29 +380,29 @@ mod test {
             check_command(
                 client.inner(),
                 "hlen k2",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
                 "set k3 v3",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             // we expect 4 commands in the queue
             assert_eq!(client.inner().txn_commands_vec_len(), 4);
 
-            check_command(client.inner(), "discard", RedisObject::Status("OK".into())).await;
+            check_command(client.inner(), "discard", ValkeyObject::Status("OK".into())).await;
 
             assert!(!client.inner().is_txn_state_multi());
             assert!(!client.inner().is_txn_state_exec());
             assert!(!client.inner().is_txn_state_calc_slots());
 
-            check_command(client.inner(), "get k1", RedisObject::NullString).await;
-            check_command(client.inner(), "get k2", RedisObject::NullString).await;
-            check_command(client.inner(), "get k3", RedisObject::NullString).await;
+            check_command(client.inner(), "get k1", ValkeyObject::NullString).await;
+            check_command(client.inner(), "get k2", ValkeyObject::NullString).await;
+            check_command(client.inner(), "get k3", ValkeyObject::NullString).await;
             assert_eq!(client.inner().txn_commands_vec_len(), 0);
         });
     }
@@ -420,7 +420,7 @@ mod test {
             assert!(!myclient.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(myclient.inner(), "multi", RedisObject::Status("OK".into())).await;
+            check_command(myclient.inner(), "multi", ValkeyObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(myclient.inner().is_txn_state_multi());
@@ -430,35 +430,35 @@ mod test {
             check_command(
                 myclient.inner(),
                 "blpop mylist 100",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await; // Null array
 
             check_command(
                 myclient.inner(),
                 "brpop mylist 100",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await; // Null array
 
             check_command(
                 myclient.inner(),
                 "brpoplpush mylist mylist2 100",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await; // Null string
 
             check_command(
                 myclient.inner(),
                 "blmove mylist mylist2 LEFT LEFT 100",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await; // Null string
 
             check_command(
                 myclient.inner(),
                 "blmpop 100 2 mylist2 mylist3 LEFT COUNT 1",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await; // Null array
             assert_eq!(myclient.inner().txn_commands_vec_len(), 5);
@@ -466,12 +466,12 @@ mod test {
             check_command(
                 myclient.inner(),
                 "exec",
-                RedisObject::Array(vec![
-                    RedisObject::NullArray,
-                    RedisObject::NullArray,
-                    RedisObject::NullString,
-                    RedisObject::NullString,
-                    RedisObject::NullArray,
+                ValkeyObject::Array(vec![
+                    ValkeyObject::NullArray,
+                    ValkeyObject::NullArray,
+                    ValkeyObject::NullString,
+                    ValkeyObject::NullString,
+                    ValkeyObject::NullArray,
                 ]),
             )
             .await;
@@ -491,7 +491,7 @@ mod test {
             assert!(!myclient.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(myclient.inner(), "multi", RedisObject::Status("OK".into())).await;
+            check_command(myclient.inner(), "multi", ValkeyObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(myclient.inner().is_txn_state_multi());
@@ -501,7 +501,7 @@ mod test {
             check_command(
                 myclient.inner(),
                 "bzmpop 30 1 mylist MAX",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
             assert_eq!(myclient.inner().txn_commands_vec_len(), 1);
@@ -509,13 +509,13 @@ mod test {
             check_command(
                 myclient.inner(),
                 "exec",
-                RedisObject::Array(vec![RedisObject::NullArray]),
+                ValkeyObject::Array(vec![ValkeyObject::NullArray]),
             )
             .await;
         });
     }
 
-    use crate::utils::RedisObject;
+    use crate::utils::ValkeyObject;
 
     #[test]
     #[serial_test::serial]
@@ -530,7 +530,7 @@ mod test {
             assert!(!client.inner().is_txn_state_calc_slots());
 
             // Start a transaction
-            check_command(client.inner(), "multi", RedisObject::Status("OK".into())).await;
+            check_command(client.inner(), "multi", ValkeyObject::Status("OK".into())).await;
 
             // state should be "multi"
             assert!(client.inner().is_txn_state_multi());
@@ -540,14 +540,14 @@ mod test {
             check_command(
                 client.inner(),
                 "set k1 v1",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
                 "set k2 v2",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
@@ -555,14 +555,14 @@ mod test {
             check_command(
                 client.inner(),
                 "hlen k2",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
             check_command(
                 client.inner(),
                 "set k3 v3",
-                RedisObject::Status(Strings::QUEUED.into()),
+                ValkeyObject::Status(Strings::QUEUED.into()),
             )
             .await;
 
@@ -572,13 +572,13 @@ mod test {
             check_command(
                 client.inner(),
                 "exec",
-                RedisObject::Array(vec![
-                    RedisObject::Status("OK".into()),
-                    RedisObject::Status("OK".into()),
-                    RedisObject::Error(
+                ValkeyObject::Array(vec![
+                    ValkeyObject::Status("OK".into()),
+                    ValkeyObject::Status("OK".into()),
+                    ValkeyObject::Error(
                         "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                     ),
-                    RedisObject::Status("OK".into()),
+                    ValkeyObject::Status("OK".into()),
                 ]),
             )
             .await;
@@ -587,16 +587,16 @@ mod test {
             assert!(!client.inner().is_txn_state_exec());
             assert!(!client.inner().is_txn_state_calc_slots());
 
-            check_command(client.inner(), "get k1", RedisObject::Str("v1".into())).await;
-            check_command(client.inner(), "get k2", RedisObject::Str("v2".into())).await;
-            check_command(client.inner(), "get k3", RedisObject::Str("v3".into())).await;
+            check_command(client.inner(), "get k1", ValkeyObject::Str("v1".into())).await;
+            check_command(client.inner(), "get k2", ValkeyObject::Str("v2".into())).await;
+            check_command(client.inner(), "get k3", ValkeyObject::Str("v3".into())).await;
             assert_eq!(client.inner().txn_commands_vec_len(), 0);
 
             // Run another command, this time we expect it to run without "EXEC"
             check_command(
                 client.inner(),
                 "set no_cached value",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -604,7 +604,7 @@ mod test {
             check_command(
                 client.inner(),
                 "get no_cached",
-                RedisObject::Str("value".into()),
+                ValkeyObject::Str("value".into()),
             )
             .await;
         });
@@ -637,7 +637,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()
@@ -668,7 +668,7 @@ mod test {
             check_command(
                 client_state.clone(),
                 "watch key1 key2",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
             assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 2);
@@ -678,7 +678,7 @@ mod test {
             check_command(
                 client_state.clone(),
                 "watch key1 key2 key3",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
             assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 3);
@@ -694,7 +694,7 @@ mod test {
             check_command(
                 client_state.clone(),
                 "set key1 value",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
             assert!(WatchedKeys::is_user_key_modified(
@@ -706,7 +706,7 @@ mod test {
             check_command(
                 client_state.clone(),
                 "unwatch",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
             assert_eq!(client_state.watched_user_keys_cloned().unwrap().len(), 0);
@@ -734,7 +734,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "watch key1 key2",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -742,14 +742,14 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "multi",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
             check_command(
                 client_1_state.clone(),
                 "set key1 client_1_value",
-                RedisObject::Status("QUEUED".into()),
+                ValkeyObject::Status("QUEUED".into()),
             )
             .await;
 
@@ -757,7 +757,7 @@ mod test {
             check_command(
                 client_2_state.clone(),
                 "Set key1 client_2_value",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -765,12 +765,12 @@ mod test {
             check_command(
                 client_2_state.clone(),
                 "get key1",
-                RedisObject::Str("client_2_value".into()),
+                ValkeyObject::Str("client_2_value".into()),
             )
             .await;
 
             // Now attempt to commit client-1 transaction and confirm that it is aborted
-            check_command(client_1_state.clone(), "exec", RedisObject::NullArray).await;
+            check_command(client_1_state.clone(), "exec", ValkeyObject::NullArray).await;
 
             // Confirm that no more keys are being watched for client-1
             // and the transaction object was removed (getting a `None` watched user keys indicates that
@@ -782,7 +782,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "get key1",
-                RedisObject::Str("client_2_value".into()),
+                ValkeyObject::Str("client_2_value".into()),
             )
             .await;
         });
@@ -808,7 +808,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "watch key1 key2",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -816,7 +816,7 @@ mod test {
             check_command(
                 client_2_state.clone(),
                 "set key1 client_2_value",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -824,7 +824,7 @@ mod test {
             check_command(
                 client_2_state.clone(),
                 "get key1",
-                RedisObject::Str("client_2_value".into()),
+                ValkeyObject::Str("client_2_value".into()),
             )
             .await;
 
@@ -832,7 +832,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "unwatch",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
@@ -840,14 +840,14 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "multi",
-                RedisObject::Status("OK".into()),
+                ValkeyObject::Status("OK".into()),
             )
             .await;
 
             check_command(
                 client_1_state.clone(),
                 "set key1 client_1_value",
-                RedisObject::Status("QUEUED".into()),
+                ValkeyObject::Status("QUEUED".into()),
             )
             .await;
 
@@ -855,7 +855,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "exec",
-                RedisObject::Array(vec![RedisObject::Status("OK".into())]),
+                ValkeyObject::Array(vec![ValkeyObject::Status("OK".into())]),
             )
             .await;
 
@@ -870,7 +870,7 @@ mod test {
             check_command(
                 client_1_state.clone(),
                 "get key1",
-                RedisObject::Str("client_1_value".into()),
+                ValkeyObject::Str("client_1_value".into()),
             )
             .await;
         });

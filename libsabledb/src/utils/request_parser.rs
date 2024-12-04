@@ -1,4 +1,4 @@
-use crate::{ParserError, RedisCommand, SableError, StringUtils};
+use crate::{ParserError, SableError, StringUtils, ValkeyCommand};
 use bytes::BytesMut;
 use std::rc::Rc;
 
@@ -19,7 +19,7 @@ pub struct RequestParser {
 
 #[derive(Default, Debug)]
 pub struct ParseResult {
-    pub command: Rc<RedisCommand>,
+    pub command: Rc<ValkeyCommand>,
     pub bytes_consumed: usize,
 }
 
@@ -139,7 +139,9 @@ impl RequestParser {
         self.reset();
 
         Ok(ParseResult {
-            command: Rc::new(RedisCommand::new(StringUtils::split(&mut command_string)?)?),
+            command: Rc::new(ValkeyCommand::new(StringUtils::split(
+                &mut command_string,
+            )?)?),
             // its OK to add `+2` here, since we managed to find `\r\n` above
             bytes_consumed,
         })
@@ -193,7 +195,7 @@ impl RequestParser {
         self.reset();
 
         Ok(ParseResult {
-            command: Rc::new(RedisCommand::new(args)?),
+            command: Rc::new(ValkeyCommand::new(args)?),
             bytes_consumed,
         })
     }

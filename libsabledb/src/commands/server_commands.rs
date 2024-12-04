@@ -8,8 +8,9 @@ use crate::{
     replication::cluster_manager,
     server::ClientState,
     storage::StringsDb,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RedisCommand, RedisCommandName,
-    RespBuilderV2, SableError, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError,
+    StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder, ValkeyCommand,
+    ValkeyCommandName,
 };
 
 use bytes::BytesMut;
@@ -21,25 +22,25 @@ pub struct ServerCommands {}
 impl ServerCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<HandleCommandResult, SableError> {
         let mut response_buffer = BytesMut::with_capacity(256);
         match command.metadata().name() {
-            RedisCommandName::ReplicaOf | RedisCommandName::SlaveOf => {
+            ValkeyCommandName::ReplicaOf | ValkeyCommandName::SlaveOf => {
                 Self::replica_of(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::Command => {
+            ValkeyCommandName::Command => {
                 Self::command(client_state, command, tx).await?;
                 return Ok(HandleCommandResult::ResponseSent);
             }
-            RedisCommandName::FlushDb => {
+            ValkeyCommandName::FlushDb => {
                 Self::flushdb(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::FlushAll => {
+            ValkeyCommandName::FlushAll => {
                 Self::flushall(client_state, command, &mut response_buffer).await?;
             }
-            RedisCommandName::DbSize => {
+            ValkeyCommandName::DbSize => {
                 Self::dbsize(client_state, command, &mut response_buffer).await?;
             }
             _ => {
@@ -55,7 +56,7 @@ impl ServerCommands {
     /// Generate output for the `command` command
     async fn command(
         _client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         tx: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
@@ -91,7 +92,7 @@ impl ServerCommands {
 
     async fn replica_of(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 3, response_buffer);
@@ -141,7 +142,7 @@ impl ServerCommands {
     /// `SableDB` always uses the `SYNC` method
     async fn flushall(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -155,7 +156,7 @@ impl ServerCommands {
     /// Return the number of keys in the currently-selected database
     async fn dbsize(
         client_state: Rc<ClientState>,
-        _command: Rc<RedisCommand>,
+        _command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         let builder = RespBuilderV2::default();
@@ -168,7 +169,7 @@ impl ServerCommands {
 
     async fn flushdb(
         client_state: Rc<ClientState>,
-        command: Rc<RedisCommand>,
+        command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 2, response_buffer);
@@ -229,7 +230,7 @@ mod test {
 
             // Send a `command` command
             let mut sink = crate::tests::ResponseSink::with_name("test_commands").await;
-            let cmd = Rc::new(RedisCommand::for_test(["command"].to_vec()));
+            let cmd = Rc::new(ValkeyCommand::for_test(["command"].to_vec()));
             Client::handle_command(client.inner(), cmd, &mut sink.fp)
                 .await
                 .unwrap();
@@ -259,7 +260,7 @@ mod test {
 
             // Send a `command` command
             let mut sink = crate::tests::ResponseSink::with_name("test_commands").await;
-            let cmd = Rc::new(RedisCommand::for_test(["command", "docs"].to_vec()));
+            let cmd = Rc::new(ValkeyCommand::for_test(["command", "docs"].to_vec()));
             Client::handle_command(client.inner(), cmd, &mut sink.fp)
                 .await
                 .unwrap();
@@ -319,7 +320,7 @@ mod test {
             for (args, expected_value) in args {
                 let mut sink = crate::io::FileResponseSink::new().await.unwrap();
                 let args = args.split(' ').collect();
-                let cmd = Rc::new(RedisCommand::for_test(args));
+                let cmd = Rc::new(ValkeyCommand::for_test(args));
                 match Client::handle_command(client.inner(), cmd, &mut sink.fp)
                     .await
                     .unwrap()

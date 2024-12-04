@@ -4,8 +4,8 @@ use crate::replication::{
 };
 use crate::{
     replication::{ClusterDB, Lock, PrimaryLock, ServerRole},
-    utils::{RedisObject, RespResponseParserV2, ResponseParseResult, TimeUtils},
-    RedisCommand, SableError, Server, ServerOptions, StorageAdapter,
+    utils::{RespResponseParserV2, ResponseParseResult, TimeUtils, ValkeyObject},
+    SableError, Server, ServerOptions, StorageAdapter, ValkeyCommand,
 };
 use num_format::{Locale, ToFormattedString};
 use rand::Rng;
@@ -368,7 +368,7 @@ async fn try_process_commands_queue(
         options,
         store,
         cmd.as_str(),
-        RedisObject::Status("OK".into()),
+        ValkeyObject::Status("OK".into()),
     )
     .await?;
     Ok(ProcessCommandQueueResult::Done)
@@ -378,9 +378,9 @@ async fn process_command_internal(
     _options: Arc<StdRwLock<ServerOptions>>,
     store: &StorageAdapter,
     command: &str,
-    expected_output: RedisObject,
+    expected_output: ValkeyObject,
 ) -> Result<bool, SableError> {
-    let Ok(cmd) = RedisCommand::from_str(command) else {
+    let Ok(cmd) = ValkeyCommand::from_str(command) else {
         return Err(SableError::AutoFailOverError(
             "Failed to construct command".into(),
         ));
