@@ -11,17 +11,58 @@ use sb_options::Options;
 
 /// Thread main function
 async fn thread_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let count = opts.thread_clients();
+    let task_count = opts.tasks_per_thread();
     let local = tokio::task::LocalSet::new();
 
-    for _ in 0..count {
-        // span task per connection
-        let opts_clone = opts.clone();
-        local.spawn_local(async move {
-            if let Err(e) = client_main(opts_clone).await {
-                tracing::error!("{:?} client error. {:?}", std::thread::current().id(), e);
+    match opts.get_setget_ratio() {
+        Some((setcalls, getcalls)) if (setcalls >= 1.0 && getcalls >= 1.0) => {
+            // Special test case: "setget"
+            let task_count = task_count as f32;
+            let set_multiplier = setcalls / (getcalls + setcalls); // 1:4 -> 1 / 5 => 0.2, 3:3 => 3 / 6 => 0.5
+            let get_multiplier = 1.0 - set_multiplier;
+            let set_tasks_count = (task_count * set_multiplier).floor() as usize;
+            let get_tasks_count = (task_count * get_multiplier).ceil() as usize;
+
+            stats::incr_setget_get_tasks(get_tasks_count);
+            stats::incr_setget_set_tasks(set_tasks_count);
+
+            // Launch "SET" task counts
+            for _ in 0..set_tasks_count {
+                // span task per connection
+                let mut opts_clone = opts.clone();
+                opts_clone.test = String::from("set");
+                local.spawn_local(async move {
+                    let requests_count = opts_clone.client_requests();
+                    if let Err(e) = task_main(opts_clone, requests_count).await {
+                        tracing::error!("{:?} client error. {:?}", std::thread::current().id(), e);
+                    }
+                });
             }
-        });
+            // Launch "GET" task counts
+            for _ in 0..get_tasks_count {
+                // span task per connection
+                let mut opts_clone = opts.clone();
+                opts_clone.test = String::from("get");
+                local.spawn_local(async move {
+                    let requests_count = opts_clone.client_requests();
+                    if let Err(e) = task_main(opts_clone, requests_count).await {
+                        tracing::error!("{:?} client error. {:?}", std::thread::current().id(), e);
+                    }
+                });
+            }
+        }
+        _ => {
+            for _ in 0..task_count {
+                // span task per connection
+                let opts_clone = opts.clone();
+                local.spawn_local(async move {
+                    let requests_count = opts_clone.client_requests();
+                    if let Err(e) = task_main(opts_clone, requests_count).await {
+                        tracing::error!("{:?} client error. {:?}", std::thread::current().id(), e);
+                    }
+                });
+            }
+        }
     }
 
     // wait for the tasks to complete
@@ -33,7 +74,10 @@ async fn thread_main(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Client main function
-async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>> {
+async fn task_main(
+    mut opts: Options,
+    requests_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     const LIST_KEY_RANGE: usize = 1000;
     let stream = crate::redis_client::RedisClient::connect(
         opts.host.clone(),
@@ -42,8 +86,8 @@ async fn client_main(mut opts: Options) -> Result<(), Box<dyn std::error::Error>
     )
     .await?;
     match opts.test.as_str() {
-        "set" => tests::run_set(stream, opts).await?,
-        "get" => tests::run_get(stream, opts).await?,
+        "set" => tests::run_set(stream, opts, requests_count).await?,
+        "get" => tests::run_get(stream, opts, requests_count).await?,
         "ping" => tests::run_ping(stream, opts).await?,
         "incr" => tests::run_incr(stream, opts).await?,
         "rpush" => {
@@ -100,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("Threads: {}", args.threads);
     tracing::debug!("Requests per connection: {}", args.client_requests());
     tracing::debug!("Connections: {}", args.connections);
-    tracing::debug!("Conn per thread: {}", args.thread_clients());
+    tracing::debug!("Conn per thread: {}", args.tasks_per_thread());
     tracing::debug!("Key space: {}", args.key_range);
     tracing::debug!("Key size: {}", args.key_size);
     tracing::debug!("Data size: {}", args.data_size);
@@ -148,10 +192,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     requests_per_ms *= 1000.0;
     let requests_per_ms: usize = requests_per_ms as usize;
     println!(
-        "    RPS: {}",
+        "\n    RPS: {}",
         requests_per_ms.to_formatted_string(&Locale::en)
     );
     println!("    Hit rate: {}%", hits / count * 100.0);
+    if args.get_setget_ratio().is_some() {
+        println!("    GET clients count: {}", stats::setget_get_tasks());
+        println!("    SET clients count: {}", stats::setget_set_tasks());
+    }
     stats::print_latency();
     Ok(())
 }

@@ -8,6 +8,8 @@ use std::sync::{
 
 lazy_static! {
     static ref REQUESTS_PROCESSED: AtomicUsize = AtomicUsize::new(0);
+    static ref SETGET_SET_CLIENTS: AtomicUsize = AtomicUsize::new(0);
+    static ref SETGET_GET_CLIENTS: AtomicUsize = AtomicUsize::new(0);
     static ref HITS: AtomicUsize = AtomicUsize::new(0);
     static ref RUNNING_THREADS: AtomicUsize = AtomicUsize::new(0);
     // possible values:
@@ -82,4 +84,22 @@ pub fn finalise_progress_setup(len: u64) {
         )
         .expect("finalise_progress"),
     );
+}
+
+pub fn incr_setget_set_tasks(count: usize) {
+    SETGET_SET_CLIENTS.fetch_add(count, Ordering::Relaxed);
+}
+
+pub fn incr_setget_get_tasks(count: usize) {
+    SETGET_GET_CLIENTS.fetch_add(count, Ordering::Relaxed);
+}
+
+/// Return the number SET tasks launched when the "setget" test was selected
+pub fn setget_set_tasks() -> usize {
+    SETGET_SET_CLIENTS.load(Ordering::Relaxed)
+}
+
+/// Return the number GET tasks launched when the "setget" test was selected
+pub fn setget_get_tasks() -> usize {
+    SETGET_GET_CLIENTS.load(Ordering::Relaxed)
 }

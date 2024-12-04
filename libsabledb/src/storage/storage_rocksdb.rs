@@ -62,7 +62,7 @@ impl UpdateBatchIterator {
         let Some(prefix) = self.limits.prefix_limit() else {
             return true;
         };
-        key.starts_with(&prefix)
+        key.starts_with(prefix)
     }
 }
 

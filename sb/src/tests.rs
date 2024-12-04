@@ -6,8 +6,8 @@ use libsabledb::{stopwatch::StopWatch, RedisObject};
 pub async fn run_set(
     mut stream: StreamType,
     opts: Options,
+    requests_to_send: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let requests_to_send = opts.client_requests();
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;
@@ -42,8 +42,8 @@ pub async fn run_set(
 pub async fn run_get(
     mut stream: StreamType,
     opts: Options,
+    requests_to_send: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let requests_to_send = opts.client_requests();
     let mut requests_sent = 0;
     let key_size = opts.key_size;
     let key_range = opts.key_range;

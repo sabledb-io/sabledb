@@ -21,12 +21,13 @@ pub fn db_version_key() -> BytesMut {
     buffer
 }
 
+/// Primary key metadata.
 ///
-/// Each primary key stored in the storage contains a metadata attached to it which holds information about the
-/// key itself. The metadata is of a fixed size and is placed in the beginning of the byte array
+/// Each primary key stored in the storage contains a metadata attached to it
+/// which holds information about the key itself.
+/// The metadata is of a fixed size and is placed in the beginning of the byte array
 ///
 /// [ key-metadata | user key ]
-///
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PrimaryKeyMetadata {
     common: KeyPrefix,
