@@ -1,5 +1,5 @@
 [package]
-name = "sb"
+name = "sabledb-benchmark"
 version = "0.1.0"
 edition = "2021"
 

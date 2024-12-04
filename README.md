@@ -11,8 +11,6 @@
 It aims to reduce memory costs and increase capacity compared to Redis. `SableDB` features include Redis-compatible access via
 any Redis client, up to 64K databases support, asynchronous replication using transaction log tailing and TLS connectivity support.
 
-Oh, and it's written in `Rust` :)
-
 ## Building
 
 `SableDB` is supported on all major OS: `Linux`, `macOS` and `Windows`
@@ -93,12 +91,13 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 - TLS connections
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
-- Use the `sb` command line utility (`target/release/sb`) for performance testing
+- Use the `sabledb-benchmark` command line utility (`target/release/sabledb-benchmark`) for performance testing
 - Transactions ( `MULTI` / `EXEC` )
+- Auto-failover & recovery
 
-## Benchmark tool - `sb`
+## Benchmark tool - `sabledb-benchmark`
 
-`SableDB` uses its own benchmarking tool named `sb` ("SableDB Benchmark"). `sb` supports the following commands:
+`SableDB` uses its own benchmarking tool named `sabledb-benchmark`. `sabledb-benchmark` supports the following commands:
 
 - `set`
 - `get`
@@ -110,15 +109,15 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 - `ping`
 - `hset`
 
-Run `sb --help` to get the full help message.
+Run `sabledb-benchmark --help` to get the full help message.
 
-Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDB` and `sb`...):
+Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDB` and `sabledb-benchmark`...):
 
-![sb progress demo](/docs/images/sb-demo.gif)
+![sabledb-benchmark progress demo](/docs/images/sabledb-benchmark-demo.gif)
 
 `set` test, on the same set-up (local machine, WSL2 on Windows 10):
 
-![sb set progress demo](/docs/images/sb-demo-set.gif)
+![sabledb-benchmark set progress demo](/docs/images/sabledb-benchmark-demo-set.gif)
 
 ## Supported commands
 

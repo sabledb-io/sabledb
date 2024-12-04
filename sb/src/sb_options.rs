@@ -2,6 +2,9 @@ use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
 pub struct Options {
+    #[arg(long, action = clap::ArgAction::HelpLong)]
+    help: Option<bool>,
+
     /// Total number of connections
     #[arg(short, long, default_value = "512")]
     pub connections: usize,
@@ -12,7 +15,7 @@ pub struct Options {
     pub threads: usize,
 
     /// Host address
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(short, long, default_value = "127.0.0.1")]
     pub host: String,
 
     /// Host port
@@ -33,7 +36,7 @@ pub struct Options {
     pub key_size: usize,
 
     /// Number of unique keys in the benchmark
-    #[arg(long, default_value = "1000000")]
+    #[arg(short = 'r', long, default_value = "1000000")]
     pub key_range: usize,
 
     /// Total number of requests
@@ -47,6 +50,10 @@ pub struct Options {
     /// use TLS
     #[arg(long, default_value = "false")]
     pub tls: bool,
+
+    /// use SSL (this is similar to passing --tls)
+    #[arg(long, default_value = "false")]
+    pub ssl: bool,
 
     /// Pipeline
     #[arg(long, default_value = "1")]

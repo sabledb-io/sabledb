@@ -28,10 +28,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the built binary from the builder stage
-COPY --from=builder             \
-    /app/target/release/sabledb \
-    /app/target/release/sb      \
-    /app/target/release/sdb-cli \
+COPY --from=builder                         \
+    /app/target/release/sabledb             \
+    /app/target/release/sabledb-benchmark   \
+    /app/target/release/sabledb-cli         \
     /usr/local/bin/
 
 RUN mkdir -p              \
