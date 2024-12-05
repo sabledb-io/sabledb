@@ -16,9 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        submodules: 'true'
     - name: Build
-      run: cargo build 
+      run: cargo build
     - name: Clippy
-      run: cargo clippy 
+      run: cargo clippy
     - name: Run tests
-      run: cargo test -- --skip integtests 
+      run: cargo test -- --skip integtests

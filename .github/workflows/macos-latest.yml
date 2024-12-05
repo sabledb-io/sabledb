@@ -16,9 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        submodules: 'true'
     - name: Build
       run: cargo build
     - name: Clippy
       run: cargo clippy
-#    - name: Run tests
-#      run: cargo test
