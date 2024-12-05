@@ -20,6 +20,7 @@ any Valkey client, up to 64K databases support, asynchronous replication using t
 ```bash
 git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
+git submodule update --init
 cargo build --release
 cargo test --release
 ```
@@ -43,6 +44,7 @@ pacman -Sy git                                  \
 ```bash
 git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
+git submodule update --init
 CFLAGS="-D_ISOC11_SOURCE" cargo build --release
 cargo test --release
 ```
@@ -108,6 +110,7 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 - `incr`
 - `ping`
 - `hset`
+- `setget`
 
 Run `sabledb-benchmark --help` to get the full help message.
 
