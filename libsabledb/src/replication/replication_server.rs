@@ -467,7 +467,7 @@ impl ReplicationServer {
             match future::select(accept_fut, timeout_fut).await {
                 future::Either::Left((value, _)) => {
                     let (socket, addr) = value?;
-                    self.handle_new_replica(options.clone(), store.clone(), socket, addr)?;
+                    self.handle_new_connection(options.clone(), store.clone(), socket, addr)?;
                 }
                 future::Either::Right(_) => {
                     // TimeOut, do a tick operation here
@@ -482,14 +482,14 @@ impl ReplicationServer {
     }
 
     /// Create a new thread that will handle the newly connected replica
-    fn handle_new_replica(
+    fn handle_new_connection(
         &self,
         options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
         socket: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
     ) -> Result<(), SableError> {
-        info!("Accepted new connection from replica: {:?}", addr);
+        info!("Accepted new connection from: {:?}", addr);
         let mut stream = match socket.into_std() {
             Ok(socket) => socket,
             Err(e) => {
