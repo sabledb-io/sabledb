@@ -573,8 +573,25 @@ impl<'a> U8ArrayBuilder<'a> {
 pub const SLOT_SIZE: u16 = 16384;
 
 /// Provide an API for calculating the slot from a given user key
-pub fn calculate_slot(key: &BytesMut) -> u16 {
+pub fn calculate_slot(key: &[u8]) -> u16 {
+    // If we have hashtags, use the key inside it, otherwise use the entire key
+    let key = match find_hashtags(key) {
+        Some(tag) => tag,
+        None => key,
+    };
     crc16::State::<crc16::XMODEM>::calculate(key) % SLOT_SIZE
+}
+
+fn find_hashtags(key: &[u8]) -> Option<&[u8]> {
+    let open = key.iter().position(|v| *v == b'{')?;
+    let close = key[open..].iter().position(|v| *v == b'}')?;
+
+    let rv = &key[open + 1..open + close];
+    if rv.is_empty() {
+        None
+    } else {
+        Some(rv)
+    }
 }
 
 pub enum CurrentTimeResolution {
