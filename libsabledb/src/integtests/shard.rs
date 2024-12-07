@@ -331,7 +331,7 @@ impl Shard {
             if self.try_discover()? {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
         Ok(())
     }
@@ -667,6 +667,8 @@ mod test {
             assert_eq!(replica_primary_id, primary_node_id);
             assert!(!replica_id.is_empty());
         }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
 
         // terminate the primary node
         let old_primary_id = shard.primary().unwrap().borrow().node_id();

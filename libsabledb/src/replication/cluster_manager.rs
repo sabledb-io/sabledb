@@ -188,7 +188,7 @@ pub fn delete_self(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableEr
     check_cluster_db_or!(options, Ok(()));
     let current_node_id = Server::state().persistent_state().id();
     tracing::info!(
-        "Deleting node: {} from the cluster database",
+        "Deleting node (self): {} from the cluster database",
         current_node_id
     );
     let db = ClusterDB::with_options(options);

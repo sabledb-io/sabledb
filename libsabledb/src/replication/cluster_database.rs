@@ -306,6 +306,7 @@ impl ClusterDB {
                     "List replicas error. Invalid return value. (Expected Array)".into(),
                 ));
             };
+            tracing::debug!("SMEMBERS for {} -> {:#?}", shard_set_key, members);
             let replica_ids: Vec<String> = members
                 .iter()
                 .filter_map(|v| match v {
@@ -316,6 +317,7 @@ impl ClusterDB {
                     _ => None,
                 })
                 .collect();
+
             // for each member, retrieve its last updated property
             for node_id in &replica_ids {
                 if let Value::BulkString(last_updated) = client.hget(node_id, PROP_LAST_TXN_ID)? {
@@ -323,6 +325,8 @@ impl ClusterDB {
                         .parse::<u64>()
                         .unwrap_or(0);
                     result.push((node_id.clone(), last_updated));
+                } else {
+                    result.push((node_id.clone(), 0));
                 }
             }
             Ok(())

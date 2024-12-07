@@ -1,4 +1,6 @@
 use crate::server::ServerOptions;
+use futures_intrusive::sync::ManualResetEvent;
+
 use crate::{
     io::Archive,
     replication::{
@@ -69,18 +71,24 @@ impl ReplicationClient {
         &self,
         options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
+        event: Arc<ManualResetEvent>,
     ) -> Result<TokioSender<ReplClientCommand>, SableError> {
         let (tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
-
         // Spawn a thread to handle the replication
         let _ = std::thread::spawn(move || {
             tracing::info!("Replication client started");
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                tracing::error!("Could not create local runtime!");
+                return;
+            };
             rt.block_on(async move {
                 let primary_address = Server::state().persistent_state().primary_address();
                 tracing::info!("Connecting to primary at: {}", primary_address);
                 loop {
-                    let mut stream = match Self::connect_to_primary() {
+                    let mut stream = match Self::connect_to_primary(primary_address.clone()) {
                         Err(e) => {
                             tracing::info!("Connect failed. {e}");
                             // Check whether we should attempt to reconnect
@@ -92,6 +100,7 @@ impl ReplicationClient {
                                     info!(
                                         "Requested to terminate replication client thread. Closing connection with primary"
                                     );
+                                    event.set();
                                     break; // leave the thread
                                 }
                                 CheckShutdownResult::Timeout => {}
@@ -100,10 +109,13 @@ impl ReplicationClient {
                                         "Error occurred while reading from channel. {:?}",
                                         e
                                     );
+                                    event.set();
                                     break; // leave the thread
                                 }
                             }
-                            tracing::info!("Trying again...");
+                            // Sleep a bit before retrying
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            tracing::info!("Trying to reconnect to {primary_address}...");
                             continue;
                         }
                         Ok(stream) => stream,
@@ -113,6 +125,7 @@ impl ReplicationClient {
                     if let Err(e) = prepare_std_socket(&stream) {
                         error!("Failed to prepare socket. {:?}", e);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
+                        event.set();
                         break;
                     }
 
@@ -125,6 +138,7 @@ impl ReplicationClient {
                         JoinShardResult::Ok => {},
                         JoinShardResult::Err => {
                             let _ = stream.shutdown(std::net::Shutdown::Both);
+                            event.set();
                             break;
                         }
                     };
@@ -162,10 +176,10 @@ impl ReplicationClient {
                                 break;
                             }
                             RequestChangesResult::ExitThread => {
-                                info!("Closing connection with primary: {:?}", stream);
+                                // Fatal error, try to trigger a failover
+                                info!("Failed to process 'request_changes'. Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                                Server::state().persistent_state().set_primary_node_id(None);
-                                return; // leave the thread
+                                break;
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
@@ -178,10 +192,7 @@ impl ReplicationClient {
                         }
                     }
                 }
-                info!("Replication thread now exiting");
-
-                // Change the state back to primary
-                Server::state().persistent_state().set_primary_node_id(None);
+                tracing::info!("Replication thread with primary {} is now exiting", primary_address);
             });
         });
 
@@ -190,8 +201,7 @@ impl ReplicationClient {
         Ok(tx)
     }
 
-    fn connect_to_primary() -> Result<TcpStream, SableError> {
-        let primary_address = Server::state().persistent_state().primary_address();
+    fn connect_to_primary(primary_address: String) -> Result<TcpStream, SableError> {
         let addr = primary_address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1))?;
         Ok(stream)
@@ -364,8 +374,6 @@ impl ReplicationClient {
                         // the requested sequence was is not acceptable by the server
                         // do a full sync
                         info!("Failed to join the shard! {}", common);
-                        // Reset the node's state back to primary
-                        Server::state().persistent_state().set_primary_node_id(None);
                         JoinShardResult::Err
                     }
                 }

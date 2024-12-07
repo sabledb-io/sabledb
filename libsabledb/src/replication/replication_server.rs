@@ -471,7 +471,7 @@ impl ReplicationServer {
                 }
                 future::Either::Right(_) => {
                     // TimeOut, do a tick operation here
-                    tracing::debug!("Checking node's queue...");
+                    tracing::trace!("Checking node's queue...");
                     if let Err(e) = cluster_manager::check_node_queue(options.clone(), &store).await
                     {
                         tracing::warn!("Failed to process node command queue. {:?}", e);
@@ -546,6 +546,7 @@ impl ReplicationServer {
                         break;
                     }
                 }
+                // TODO: this could cause a spam, reduce it
                 Self::update_primary_info(server_options_clone.clone(), &store_clone);
             }
         });

@@ -272,13 +272,16 @@ impl Cron {
                                     &record,
                                     key_type,
                                 )?;
-                                tracing::info!(
-                                    "Deleted {} zombie items of type {:?} belonged to: {:?}",
-                                    count,
-                                    key_type,
-                                    user_key
-                                );
-                                items_evicted = items_evicted.saturating_add(count);
+
+                                if count > 0 {
+                                    tracing::info!(
+                                        "Deleted {} zombie items of type {:?} belonged to: {:?}",
+                                        count,
+                                        key_type,
+                                        user_key
+                                    );
+                                    items_evicted = items_evicted.saturating_add(count);
+                                }
                             }
                             write_cache.delete(&record.to_bytes())?;
 
