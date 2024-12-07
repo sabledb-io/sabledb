@@ -6,6 +6,7 @@ mod node_state;
 #[allow(clippy::module_inception)]
 mod server;
 mod server_options;
+mod slots;
 mod telemetry;
 mod watchers;
 mod worker;
@@ -20,6 +21,7 @@ pub use error_codes::*;
 pub use node_state::*;
 pub use server::*;
 pub use server_options::*;
+pub use slots::*;
 pub use telemetry::*;
 pub use watchers::*;
 pub use worker::*;

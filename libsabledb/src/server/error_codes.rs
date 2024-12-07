@@ -71,6 +71,8 @@ pub enum SableError {
     AutoFailOverError(String),
     #[error("ClusterDB error. {0}")]
     ClsuterDbError(String),
+    #[error("Index out of rage. {0}")]
+    IndexOutOfRange(String),
 }
 
 #[allow(dead_code)]
