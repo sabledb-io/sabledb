@@ -546,7 +546,6 @@ impl ReplicationServer {
                         break;
                     }
                 }
-                // TODO: this could cause a spam, reduce it
                 Self::update_primary_info(server_options_clone.clone(), &store_clone);
             }
         });
@@ -559,7 +558,8 @@ impl ReplicationServer {
             .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
             .with_role_primary();
         if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
-            tracing::warn!(
+            crate::warn_with_throttling!(
+                10,
                 "Error while updating self as Primary({:?}) in the cluster database. {:?}",
                 node_info,
                 e

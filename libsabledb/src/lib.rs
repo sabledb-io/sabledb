@@ -107,22 +107,52 @@ thread_local! {
     pub static LAST_ERROR_TS: std::cell::RefCell<u64> = const { std::cell::RefCell::new(0u64) };
 }
 
-#[macro_export]
 /// Log message with throttling in order to avoid flooding the log file
-macro_rules! error_with_throttling {
-    ($delay_seconds:expr, $($arg:tt)*) => {{
+#[macro_export]
+macro_rules! log_with_level {
+    ($delay_seconds:expr, $level:expr, $($arg:tt)*) => {{
         let current_time = $crate::utils::current_time($crate::utils::CurrentTimeResolution::Seconds);
          $crate::LAST_ERROR_TS.with(|last_ts| {
             let last_logged_ts = *last_ts.borrow();
             if current_time - last_logged_ts >= $delay_seconds {
                 *last_ts.borrow_mut() = current_time;
-                tracing::error!($($arg)*);
+                match $level {
+                    tracing::Level::DEBUG => tracing::debug!($($arg)*),
+                    tracing::Level::ERROR => tracing::error!($($arg)*),
+                    tracing::Level::INFO => tracing::info!($($arg)*),
+                    tracing::Level::TRACE => tracing::trace!($($arg)*),
+                    tracing::Level::WARN => tracing::warn!($($arg)*),
+                }
                 true
             } else {
                 false
             }
         })
     }}
+}
+
+#[macro_export]
+/// Log message with throttling in order to avoid flooding the log file
+macro_rules! error_with_throttling {
+    ($delay_seconds:expr, $($arg:tt)*) => {
+        $crate::log_with_level!($delay_seconds, tracing::Level::ERROR, $($arg)*)
+    }
+}
+
+#[macro_export]
+/// Log message with throttling in order to avoid flooding the log file
+macro_rules! warn_with_throttling {
+    ($delay_seconds:expr, $($arg:tt)*) => {
+        $crate::log_with_level!($delay_seconds, tracing::Level::WARN, $($arg)*)
+    }
+}
+
+#[macro_export]
+/// Log message with throttling in order to avoid flooding the log file
+macro_rules! debug_with_throttling {
+    ($delay_seconds:expr, $($arg:tt)*) => {
+        $crate::log_with_level!($delay_seconds, tracing::Level::DEBUG, $($arg)*)
+    }
 }
 
 #[macro_export]

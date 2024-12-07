@@ -2,11 +2,10 @@
 
 ## General (ordered by priority)
 
-- Replication server thread should be always running, regardless of the node role
-- Each node should know which slot it owns
-- Fix `calculate_slot` to include HASHTAGS
-- Add API to dump & load a complete slot
-- Add API to dump slot from a given txn ID
+* Each node should know which slot it owns
+* Fix `calculate_slot` to include HASHTAGS
+* Add API to dump & load a complete slot
+* Add API to dump slot from a given txn ID
 
 ## Statistics
 
