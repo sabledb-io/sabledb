@@ -155,22 +155,22 @@ impl SlotRange {
     }
 }
 
-impl ToString for SlotRange {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for SlotRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (Some(start), Some(end)) = (&self.start, &self.end) else {
-            return String::default();
+            return write!(f, "");
         };
 
         if self.length == 1 {
-            format!("{}", start)
+            write!(f, "{}", start)
         } else {
-            format!("{}-{}", start, end)
+            write!(f, "{}-{}", start, end)
         }
     }
 }
 
-impl ToString for SlotBitmap {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for SlotBitmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut ranges = Vec::<SlotRange>::default();
 
         let mut slot_range = SlotRange::default();
@@ -192,11 +192,15 @@ impl ToString for SlotBitmap {
         }
 
         // Join the vector into a string
-        ranges
-            .iter()
-            .map(|r| r.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
+        write!(
+            f,
+            "{}",
+            ranges
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        )
     }
 }
 
