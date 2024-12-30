@@ -93,13 +93,13 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 - TLS connections
 - Replication using tailing of the transaction log
 - Highly configurable, but comes with sensible default values
-- Use the `sabledb-benchmark` command line utility (`target/release/sabledb-benchmark`) for performance testing
+- Use the `sb` command line utility (`target/release/sb`) for performance testing
 - Transactions ( `MULTI` / `EXEC` )
 - Auto-failover & recovery
 
-## Benchmark tool - `sabledb-benchmark`
+## Benchmark tool - `sb`
 
-`SableDB` uses its own benchmarking tool named `sabledb-benchmark`. `sabledb-benchmark` supports the following commands:
+`SableDB` uses its own benchmarking tool named `sb`. `sb` supports the following commands:
 
 - `set`
 - `get`
@@ -110,11 +110,11 @@ docker exec -it sabledb-sabledb-1 /bin/bash -c "tail -f /var/lib/sabledb/log/sab
 - `incr`
 - `ping`
 - `hset`
-- `setget`
+- `setget` (a mix between SET:GET commands, the ratio is controlled by the `--setget-ratio` option. The default is set to `1:4`)
 
-Run `sabledb-benchmark --help` to get the full help message.
+Run `sb --help` to get the full help message.
 
-Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDB` and `sabledb-benchmark`...):
+Below is a simple ( `ping` ) test conducted locally using WSL2 on Windows 10 (same machine is running both `SableDB` and `sb`...):
 
 ![sabledb-benchmark progress demo](/docs/images/sabledb-benchmark-demo.gif)
 
