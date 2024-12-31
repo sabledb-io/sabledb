@@ -110,6 +110,12 @@ impl StorageRocksDb {
         options.set_log_level(rocksdb::LogLevel::Info);
         options.set_max_open_files(open_params.rocksdb.max_open_files as i32);
         options.set_wal_ttl_seconds(open_params.rocksdb.wal_ttl_seconds as u64);
+        options.set_allow_mmap_writes(open_params.rocksdb.allow_mmap_writes);
+        options.set_allow_mmap_reads(open_params.rocksdb.allow_mmap_reads);
+        options.set_min_write_buffer_number_to_merge(
+            open_params.rocksdb.min_write_buffer_number_to_merge as i32,
+        );
+
         let store = rocksdb::DB::open(&options, open_params.db_path.clone())?;
 
         let mut write_opts = rocksdb::WriteOptions::default();

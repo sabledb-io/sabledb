@@ -89,6 +89,27 @@ pub struct RocksDbParams {
     /// compaction. For universal-style compaction, you can usually set it to `-1`.
     /// Default: -1
     pub max_open_files: isize,
+
+    /// Sets the minimum number of write buffers that will be merged together
+    /// before writing to storage.  If set to `1`, then
+    /// all write buffers are flushed to L0 as individual files and this increases
+    /// read amplification because a get request has to check in all of these
+    /// files. Also, an in-memory merge may result in writing lesser
+    /// data to storage if there are duplicate records in each of these
+    /// individual write buffers.
+    ///
+    /// Default: 1
+    pub min_write_buffer_number_to_merge: usize,
+
+    /// Allow the OS to mmap file for reading sst tables.
+    ///
+    /// Default: false
+    pub allow_mmap_reads: bool,
+
+    /// Allow the OS to mmap file for writing.
+    ///
+    /// Default: false
+    pub allow_mmap_writes: bool,
 }
 
 impl Default for StorageOpenParams {
@@ -106,6 +127,9 @@ impl Default for StorageOpenParams {
                 max_open_files: -1,
                 enable_pipelined_write: true,
                 bloom_filter_bits_per_key: 10,
+                min_write_buffer_number_to_merge: 1,
+                allow_mmap_reads: false,
+                allow_mmap_writes: false,
             },
             db_path: PathBuf::from("sabledb.db"),
         }

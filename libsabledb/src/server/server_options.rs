@@ -366,6 +366,24 @@ impl ServerOptions {
             "max_open_files",
             &mut options.open_params.rocksdb.max_open_files,
         )?;
+        Self::read_usize(
+            &ini_file,
+            "rocksdb",
+            "min_write_buffer_number_to_merge",
+            &mut options.open_params.rocksdb.min_write_buffer_number_to_merge,
+        )?;
+        Self::read_bool(
+            &ini_file,
+            "rocksdb",
+            "allow_mmap_reads",
+            &mut options.open_params.rocksdb.allow_mmap_reads,
+        )?;
+        Self::read_bool(
+            &ini_file,
+            "rocksdb",
+            "allow_mmap_writes",
+            &mut options.open_params.rocksdb.allow_mmap_writes,
+        )?;
 
         // [general] section
         Self::read_path_buf(
