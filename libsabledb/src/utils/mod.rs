@@ -618,7 +618,7 @@ pub fn current_time(res: CurrentTimeResolution) -> u64 {
 /// The output is sorted.
 pub fn choose_multiple_values(
     count: usize,
-    options: &Vec<usize>,
+    options: &[usize],
     allow_dups: bool,
 ) -> Result<VecDeque<usize>, SableError> {
     let mut rng = rand::thread_rng();
@@ -628,7 +628,7 @@ pub fn choose_multiple_values(
             chosen.push(*options.choose(&mut rng).unwrap_or(&0));
         }
     } else {
-        let mut unique_values = options.clone();
+        let mut unique_values = options.to_owned();
         unique_values.sort();
         unique_values.dedup();
         loop {

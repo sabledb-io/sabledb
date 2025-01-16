@@ -304,9 +304,9 @@ impl<'a> HashDb<'a> {
         }
     }
 
-    ///=======================================================
-    /// Internal API for this class
-    ///=======================================================
+    //=======================================================
+    // Internal API for this class
+    //=======================================================
 
     /// Return a "Hash" data structure
     pub fn find_hash(&self, user_key: &BytesMut) -> Result<FindHashResult, SableError> {

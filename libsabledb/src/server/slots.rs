@@ -2,64 +2,109 @@ use crate::utils::SLOT_SIZE;
 use crate::SableError;
 use std::str::FromStr;
 use std::string::ToString;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SlotBitmap {
-    bits: Vec<u128>,
+    bits: Vec<Arc<AtomicU64>>,
 }
 
 impl Default for SlotBitmap {
+    /// Construct a default empty `SlotBitmap` (i.e. the newly created instance of `SlotBitmap` owns no slots)
     fn default() -> Self {
-        let mut bits = Vec::<u128>::default();
-        bits.resize(128, 0);
+        let mut bits = Vec::<Arc<AtomicU64>>::with_capacity(256);
+        for _ in 0..256 {
+            bits.push(Arc::<AtomicU64>::default());
+        }
         SlotBitmap { bits }
+    }
+}
+
+impl PartialEq for SlotBitmap {
+    fn eq(&self, other: &SlotBitmap) -> bool {
+        if self.bits.len() != other.bits.len() {
+            return false;
+        }
+
+        // Compare each pair of items in the vector
+        let count = self
+            .bits
+            .iter()
+            .zip(other.bits.iter())
+            .filter(|(a, b)| a.load(Ordering::Relaxed) == b.load(Ordering::Relaxed))
+            .count();
+        count == self.bits.len()
     }
 }
 
 /// This provides a mapping of slots owned by this instance of SableDB.
 /// Each slot uses a single bit to mark whether it is owned by this instance or not.
-/// We use an array of 128 `u128` primitives to keep track of the slots (total of 16K memory)
+/// We use an array of 256 items of `AtomicU64` primitives to keep track of the slots (total of ~16K memory)
 impl SlotBitmap {
     /// Set or clear `slot` in this slots set
-    pub fn set(&mut self, slot: u16, b: bool) -> Result<(), SableError> {
+    pub fn set(&self, slot: u16, b: bool) -> Result<(), SableError> {
         // Find the bucket that holds the bit
-        let bucket = self.find_bucket_mut(&slot)?;
+        let bucket = self.find_bucket(&slot)?;
         let bit = Self::position_in_bucket(&slot);
         if b {
-            *bucket |= bit;
+            // this equals: bucket |= bit
+            bucket.fetch_or(bit, Ordering::SeqCst);
         } else {
-            *bucket &= !bit;
+            // this equals: bucket &= !bit
+            bucket.fetch_and(!bit, Ordering::SeqCst);
         }
         Ok(())
+    }
+
+    /// Enable all slots for this instance of `SlotBitmap`. This operation is faster than looping over all
+    /// slots in the range.
+    /// Note that this operation is thread-safe, but not atomic
+    pub fn set_all(&self) {
+        for bucket in &self.bits {
+            bucket.store(u64::MAX, Ordering::SeqCst);
+        }
+    }
+
+    /// Clear all slots for this instance of `SlotBitmap`. This operation is faster than looping over all
+    /// slots in the range.
+    /// Note that this operation is thread-safe, but not atomic
+    pub fn clear_all(&self) {
+        for bucket in &self.bits {
+            bucket.store(0, Ordering::SeqCst);
+        }
     }
 
     /// Return true if `slot` is enabled
     pub fn is_set(&self, slot: u16) -> Result<bool, SableError> {
         let bucket = self.find_bucket(&slot)?;
         let bit = Self::position_in_bucket(&slot);
-        Ok((bucket & bit) != 0)
+        Ok((bucket.load(Ordering::SeqCst) & bit) != 0)
     }
 
-    fn find_bucket_mut(&mut self, slot: &u16) -> Result<&mut u128, SableError> {
-        let bucket_idx = slot.div_euclid(128) as usize;
-        if bucket_idx >= self.bits.len() {
-            return Err(SableError::IndexOutOfRange(format!(
-                "slot {} exceeds the max slot number of {}",
-                slot, SLOT_SIZE
-            )));
-        }
-
-        let Some(bucket) = self.bits.get_mut(bucket_idx) else {
-            return Err(SableError::InternalError(format!(
-                "could not find bucket index {} for slot {}",
-                bucket_idx, slot
-            )));
-        };
-        Ok(bucket)
+    /// Iniitialise self from string
+    /// For example:
+    ///
+    /// ```
+    /// let slots = SlotBitmap::default();
+    /// slots.from_string("0-9000,10000")?;
+    /// assert(slots.is_set(10000));
+    /// for i in 0..9000 {
+    ///     assert(slots.is_set(i));
+    /// }
+    /// ```
+    pub fn from_string(&self, s: &str) -> Result<(), SableError> {
+        let other = Self::from_str(s)?;
+        self.bits
+            .iter()
+            .zip(other.bits.iter())
+            .for_each(|(a, b)| a.store(b.load(Ordering::Relaxed), Ordering::Relaxed));
+        Ok(())
     }
 
-    fn find_bucket(&self, slot: &u16) -> Result<&u128, SableError> {
-        let bucket_idx = slot.div_euclid(128) as usize;
+    fn find_bucket(&self, slot: &u16) -> Result<Arc<AtomicU64>, SableError> {
+        let bucket_idx = slot.div_euclid(64) as usize;
         if bucket_idx >= self.bits.len() {
             return Err(SableError::IndexOutOfRange(format!(
                 "slot {} exceeds the max slot number of {}",
@@ -73,12 +118,12 @@ impl SlotBitmap {
                 bucket_idx, slot
             )));
         };
-        Ok(bucket)
+        Ok(bucket.clone())
     }
 
-    fn position_in_bucket(slot: &u16) -> u128 {
-        let index_in_bucket = slot.rem_euclid(128) as usize;
-        1u128 << index_in_bucket
+    fn position_in_bucket(slot: &u16) -> u64 {
+        let index_in_bucket = slot.rem_euclid(64) as usize;
+        1u64 << index_in_bucket
     }
 }
 
@@ -92,7 +137,7 @@ impl FromStr for SlotBitmap {
     /// we can use the following string format:
     /// `0-10000,15000`
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut slots = SlotBitmap::default();
+        let slots = SlotBitmap::default();
         let tokens: Vec<&str> = s.split(',').map(|s| s.trim()).collect();
         let into_sable_err =
             |e| SableError::OtherError(format!("Failed to parse string into u16. {}", e));
@@ -204,13 +249,20 @@ impl std::fmt::Display for SlotBitmap {
     }
 }
 
+//  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
+// | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
+// | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
+// | |  | | . ` | | |    | |   / \    | |  |  __|  \___ \   | |    | | | . ` | | |_ |
+// | |__| | |\  |_| |_   | |   \_/    | |  | |____ ____) |  | |   _| |_| |\  | |__| |
+//  \____/|_| \_|_____|  |_|          |_|  |______|_____/   |_|  |_____|_| \_|\_____|
+//
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_slot_is_set() {
-        let mut slots = SlotBitmap::default();
+        let slots = SlotBitmap::default();
         assert!(slots.set(SLOT_SIZE + 1, true).is_err());
         assert!(slots.set(SLOT_SIZE, true).is_err());
         assert!(slots.is_set(SLOT_SIZE).is_err());
@@ -222,11 +274,13 @@ mod tests {
         assert!(slots.is_set(13456).unwrap());
         assert!(slots.set(13456, false).is_ok());
         assert!(!slots.is_set(13456).unwrap());
+        // this one was never set, make sure its 0
+        assert!(!slots.is_set(234).unwrap());
     }
 
     #[test]
     fn test_slot_bitmap_to_string() {
-        let mut slots = SlotBitmap::default();
+        let slots = SlotBitmap::default();
         slots.set(0, true).unwrap();
         slots.set(2, true).unwrap();
         slots.set(3, true).unwrap();
@@ -239,5 +293,61 @@ mod tests {
 
         let slots2 = SlotBitmap::from_str("0,2-3,5,8000-8001,8003").unwrap();
         assert_eq!(slots, slots2);
+    }
+
+    #[test]
+    fn test_all_set() {
+        // All slots are disabled by default
+        let slots = SlotBitmap::default();
+        for slot in 0..SLOT_SIZE {
+            assert!(!slots.is_set(slot).unwrap());
+        }
+
+        slots.set_all();
+
+        for slot in 0..SLOT_SIZE {
+            assert!(slots.is_set(slot).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_clear_all() {
+        // All slots are disabled by default
+        let slots = SlotBitmap::default();
+        slots.set_all();
+        for slot in 0..SLOT_SIZE {
+            assert!(slots.is_set(slot).unwrap());
+        }
+
+        slots.clear_all();
+
+        for slot in 0..SLOT_SIZE {
+            assert!(!slots.is_set(slot).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_from_string() {
+        let orig = SlotBitmap::default();
+        for slot in 0..SLOT_SIZE {
+            assert!(!orig.is_set(slot).unwrap());
+        }
+        orig.from_string("0-8000,10000").unwrap();
+        for slot in 0..8000 {
+            match slot {
+                a if a < 8000 => {
+                    // 0 -> 8000
+                    assert!(orig.is_set(slot).unwrap());
+                }
+                10_000 => {
+                    // 10,000
+                    assert!(orig.is_set(slot).unwrap());
+                }
+                _ => {
+                    // Anything else should NOT be set
+                    assert!(!orig.is_set(slot).unwrap());
+                }
+            }
+        }
     }
 }

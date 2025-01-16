@@ -286,9 +286,9 @@ pub async fn fail_over_if_needed(
     Ok(())
 }
 
-///===------------------------------
-/// Private API calls
-///===------------------------------
+//===------------------------------
+// Private API calls
+//===------------------------------
 
 /// Broadcast all members of this shard that a failover is taking place
 async fn broadcast_failover(

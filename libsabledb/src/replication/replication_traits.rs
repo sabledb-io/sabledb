@@ -26,14 +26,14 @@ impl<'a> TcpStreamBytesWriter<'a> {
     }
 }
 
-impl<'a> TcpStreamBytesWriter<'a> {
+impl TcpStreamBytesWriter<'_> {
     fn write_usize(&mut self, num: usize) -> Result<(), SableError> {
         let mut num = BytesMutUtils::from_usize(&num);
         io::write_bytes(&mut self.tcp_stream, &mut num)
     }
 }
 
-impl<'a> BytesWriter for TcpStreamBytesWriter<'a> {
+impl BytesWriter for TcpStreamBytesWriter<'_> {
     fn write_message(&mut self, message: &mut BytesMut) -> Result<(), SableError> {
         self.write_usize(message.len())?;
         io::write_bytes(&mut self.tcp_stream, message)?;
@@ -47,7 +47,7 @@ pub struct TcpStreamBytesReader<'a> {
     bytes_read: BytesMut,
 }
 
-impl<'a> TcpStreamBytesReader<'a> {
+impl TcpStreamBytesReader<'_> {
     pub fn new(tcp_stream: &TcpStream) -> TcpStreamBytesReader {
         TcpStreamBytesReader {
             tcp_stream,
@@ -56,7 +56,7 @@ impl<'a> TcpStreamBytesReader<'a> {
     }
 }
 
-impl<'a> TcpStreamBytesReader<'a> {
+impl TcpStreamBytesReader<'_> {
     // TODO: MAX_BUFFER_SIZE should be configurable
     const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
     const LEN_SIZE: usize = std::mem::size_of::<usize>();
@@ -83,7 +83,7 @@ macro_rules! try_socket_read {
     };
 }
 
-impl<'a> BytesReader for TcpStreamBytesReader<'a> {
+impl BytesReader for TcpStreamBytesReader<'_> {
     fn read_message(&mut self) -> Result<Option<BytesMut>, SableError> {
         // read the length
         if self.bytes_read.len() < Self::LEN_SIZE {

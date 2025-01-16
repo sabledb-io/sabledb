@@ -16,7 +16,7 @@ pub struct IteratorAdapter<'a> {
     pub iterator: StorageIterator<'a>,
 }
 
-impl<'a> IteratorAdapter<'a> {
+impl IteratorAdapter<'_> {
     /// Seek the iterator to `prefix` or the first entry that lexicographically follows it
     pub fn seek(&mut self, prefix: &BytesMut) {
         match self.iterator {

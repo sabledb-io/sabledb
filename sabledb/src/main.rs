@@ -101,6 +101,11 @@ fn main() -> Result<(), SableError> {
         server_state_clone.persistent_state().id()
     );
 
+    info!(
+        "Node slots are: {}",
+        server_state_clone.persistent_state().slots().to_string()
+    );
+
     // Notify the replicator thread to start
     server_state_clone.notify_replicator_init_done_sync()?;
 

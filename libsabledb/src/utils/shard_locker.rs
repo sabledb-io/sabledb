@@ -15,7 +15,7 @@ pub struct ShardLockGuard<'a> {
     write_count: usize,
 }
 
-impl<'a> ShardLockGuard<'a> {
+impl ShardLockGuard<'_> {
     pub fn len(&self) -> usize {
         self.read_count.saturating_add(self.write_count)
     }

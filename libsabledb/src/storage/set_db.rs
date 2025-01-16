@@ -310,9 +310,9 @@ impl<'a> SetDb<'a> {
         self.flush_cache()
     }
 
-    ///=======================================================
-    /// Internal API for this class
-    ///=======================================================
+    //=======================================================
+    // Internal API for this class
+    //=======================================================
 
     /// Add `members` to the set identified by `user_key`
     /// If the set `user_key` does not exist, a new set is created

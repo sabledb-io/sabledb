@@ -1,4 +1,4 @@
-use crate::{file_utils, replication::ServerRole, ServerOptions};
+use crate::{file_utils, replication::ServerRole, server::SlotBitmap, ServerOptions};
 use ini::Ini;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -25,25 +25,31 @@ macro_rules! ini_read {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct ServerPersistentState {
     node_id: RwLock<String>,
     primary_node_id: RwLock<String>,
     role: AtomicU8,
     private_primary_address: RwLock<String>,
     config_file: RwLock<String>,
+    slots: SlotBitmap,
 }
 
 const ROLE_PRIMARY: u8 = 0;
 const ROLE_REPLICA: u8 = 1;
+const POISONED_MUTEX: &str = "poisoned mutex";
 
 impl ServerPersistentState {
     pub fn new() -> Self {
+        let slots = SlotBitmap::default();
+        slots.set_all(); // by default, this node owns all the slots
         ServerPersistentState {
             node_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
             primary_node_id: RwLock::<String>::default(),
             role: AtomicU8::new(ROLE_PRIMARY),
             private_primary_address: RwLock::<String>::default(),
             config_file: RwLock::<String>::default(),
+            slots,
         }
     }
 
@@ -52,13 +58,13 @@ impl ServerPersistentState {
     /// Return the current node ID
     #[inline]
     pub fn id(&self) -> String {
-        self.node_id.read().expect("poisoned mutex").clone()
+        self.node_id.read().expect(POISONED_MUTEX).clone()
     }
 
     /// Return the current node ID
     #[inline]
     pub fn set_id(&self, node_id: String) {
-        *self.node_id.write().expect("poisoned mutex") = node_id;
+        *self.node_id.write().expect(POISONED_MUTEX) = node_id;
     }
 
     /// Set the node's role to either replica or primary
@@ -77,12 +83,9 @@ impl ServerPersistentState {
             // Clear replica related values
             self.private_primary_address
                 .write()
-                .expect("poisoned mutex")
+                .expect(POISONED_MUTEX)
                 .clear();
-            self.primary_node_id
-                .write()
-                .expect("poisoned mutex")
-                .clear();
+            self.primary_node_id.write().expect(POISONED_MUTEX).clear();
         }
     }
 
@@ -106,14 +109,17 @@ impl ServerPersistentState {
         }
     }
 
+    /// Return the node's slots
+    #[inline]
+    pub fn slots(&self) -> &SlotBitmap {
+        &self.slots
+    }
+
     /// Sets the remote address of the primary. This method also changes the role
     /// of this node to "Replica"
     #[inline]
     pub fn set_primary_address(&self, address: String) {
-        *self
-            .private_primary_address
-            .write()
-            .expect("poisoned mutex") = address;
+        *self.private_primary_address.write().expect(POISONED_MUTEX) = address;
         self.set_role(ServerRole::Replica);
     }
 
@@ -122,7 +128,7 @@ impl ServerPersistentState {
     pub fn primary_address(&self) -> String {
         self.private_primary_address
             .read()
-            .expect("poisoned mutex")
+            .expect(POISONED_MUTEX)
             .clone()
     }
 
@@ -133,17 +139,14 @@ impl ServerPersistentState {
     pub fn set_primary_node_id(&self, primary_node_id: Option<String>) {
         if primary_node_id.is_some() {
             self.set_role(ServerRole::Replica);
-            *self.primary_node_id.write().expect("poisoned mutex") =
+            *self.primary_node_id.write().expect(POISONED_MUTEX) =
                 primary_node_id.unwrap_or_default();
         } else {
             self.set_role(ServerRole::Primary);
-            self.primary_node_id
-                .write()
-                .expect("poisoned mutex")
-                .clear();
+            self.primary_node_id.write().expect(POISONED_MUTEX).clear();
             self.private_primary_address
                 .write()
-                .expect("poisoned mutex")
+                .expect(POISONED_MUTEX)
                 .clear();
         }
     }
@@ -151,14 +154,13 @@ impl ServerPersistentState {
     /// Return the current's node role
     #[inline]
     pub fn primary_node_id(&self) -> String {
-        self.primary_node_id.read().expect("poisoned mutex").clone()
+        self.primary_node_id.read().expect(POISONED_MUTEX).clone()
     }
 
     /// Initialise the node ID by loading or creating it
     pub fn initialise(&self, options: Arc<RwLock<ServerOptions>>) {
         let file_path = Self::file_path_from_dir(options);
-        *self.config_file.write().expect("poisoned mutex") =
-            file_path.to_string_lossy().to_string();
+        *self.config_file.write().expect(POISONED_MUTEX) = file_path.to_string_lossy().to_string();
 
         let Some(content) = file_utils::read_file_content(&file_path) else {
             self.save();
@@ -182,6 +184,12 @@ impl ServerPersistentState {
                 uuid::Uuid::new_v4().to_string()
             );
             self.set_id(node_id);
+
+            // slots ownership
+            let slots_str = ini_read!(ini_file, "general", "slots", "0-16383".to_string());
+            if let Err(e) = self.slots.from_string(slots_str.as_str()) {
+                tracing::warn!("Failed to load slot range from string: {}", e);
+            }
 
             let role = ini_read!(
                 ini_file,
@@ -220,10 +228,13 @@ impl ServerPersistentState {
             self.set_id(uuid::Uuid::new_v4().to_string());
         }
 
-        let filepath = self.config_file.read().expect("poisoned mutex").clone();
+        let filepath = self.config_file.read().expect(POISONED_MUTEX).clone();
         let mut ini = ini::Ini::default();
 
-        ini.with_section(Some("general")).set("node_id", self.id());
+        ini.with_section(Some("general"))
+            .set("node_id", self.id())
+            .set("slots", self.slots.to_string());
+
         ini.with_section(Some("replication"))
             .set("address", self.primary_address())
             .set("role", format!("{}", self.role()));
@@ -232,6 +243,7 @@ impl ServerPersistentState {
             tracing::debug!("Failed to write INI file `{}`. {:?}", filepath, e);
             return;
         }
+
         tracing::info!("Successfully updated file: {}", filepath);
     }
 
