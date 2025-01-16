@@ -329,6 +329,8 @@ impl Shard {
     pub fn wait_for_shard_to_stabilise(&mut self) -> Result<(), SableError> {
         loop {
             if self.try_discover()? {
+                // after stabilization, let give it some time really stabilise
+                std::thread::sleep(std::time::Duration::from_secs(3));
                 break;
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -531,6 +533,7 @@ mod test {
 
     #[test]
     #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_shard_args_are_unique() {
         let args_vec = create_sabledb_args(None).1.to_vec();
         let args: HashSet<&String> = args_vec.iter().collect();
@@ -541,6 +544,7 @@ mod test {
 
     #[test]
     #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_start_shard() {
         // Start shard of 1 primary 2 replicas
         let shard = start_shard(3).unwrap();
@@ -578,6 +582,7 @@ mod test {
 
     #[test]
     #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_restart() {
         let shard = start_shard(2).unwrap();
         assert!(shard.primary().unwrap().borrow().is_running());
@@ -597,6 +602,7 @@ mod test {
 
     #[test]
     #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_cluster_set_updated() {
         // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
         let inst_count = 3usize;
@@ -651,6 +657,7 @@ mod test {
 
     #[test]
     #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_auto_failover() {
         // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
         let inst_count = 3usize;

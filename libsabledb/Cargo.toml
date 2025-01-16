@@ -49,6 +49,7 @@ redis = { version = "0", features = ["tls-native-tls"] }
 uuid = { version = "1.10.0", features = ["v4"]}
 portpicker = "0.1.1"
 futures-intrusive = "0"
+ntest_timeout  = "0"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 affinity = "0"

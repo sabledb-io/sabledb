@@ -299,6 +299,7 @@ async fn broadcast_failover(
     // get the new primary port + IP
     let db = ClusterDB::with_options(options);
     let address = db.node_address(new_primary_id)?;
+    // the node address is in the format of "IP:PORT", change it to "IP PORT"
     let address = address.replace(':', " ");
     let command = format!("REPLICAOF {}", address);
     let command_primary = String::from("REPLICAOF NO ONE");
