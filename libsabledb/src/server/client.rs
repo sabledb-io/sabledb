@@ -307,6 +307,22 @@ impl Client {
                             return Err(SableError::ConnectionClosed);
                         }
                     },
+                    Err(SableError::NotOwner(_slots)) => {
+                        // Some or all the slots in the command are not owned by this node
+                        let builder = RespBuilderV2::default();
+                        let mut response_buffer = BytesMut::new();
+                        if command.metadata().is_multi() {
+                            builder.error_string(
+                                &mut response_buffer,
+                                "CROSSSLOT Some or all the slots in the command are not owned by this node",
+                            );
+                        } else {
+                            // TODO: add the real owner of the command
+                            builder.error_string(&mut response_buffer, "MOVED");
+                        }
+                        Self::send_response(&mut tx, &response_buffer, client_state.id()).await?;
+                        break;
+                    }
                     Err(e) => {
                         // the command might contain info regarding the request, so log it in
                         // a debug verbosity

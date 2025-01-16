@@ -73,6 +73,8 @@ pub enum SableError {
     ClsuterDbError(String),
     #[error("Index out of rage. {0}")]
     IndexOutOfRange(String),
+    #[error("Some or all the slots in the command are not owned by this node")]
+    NotOwner(Vec<u16>),
 }
 
 #[allow(dead_code)]

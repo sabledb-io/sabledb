@@ -83,15 +83,25 @@ impl SlotBitmap {
         Ok((bucket.load(Ordering::SeqCst) & bit) != 0)
     }
 
+    /// Return true if all `slots` are set
+    pub fn is_set_multi(&self, slots: &[u16]) -> Result<bool, SableError> {
+        for slot in slots {
+            if !self.is_set(*slot)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Iniitialise self from string
     /// For example:
     ///
-    /// ```
+    /// ```no_compile
     /// let slots = SlotBitmap::default();
     /// slots.from_string("0-9000,10000")?;
     /// assert(slots.is_set(10000));
     /// for i in 0..9000 {
-    ///     assert(slots.is_set(i));
+    ///     assert!(slots.is_set(i));
     /// }
     /// ```
     pub fn from_string(&self, s: &str) -> Result<(), SableError> {

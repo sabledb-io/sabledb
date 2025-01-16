@@ -1,6 +1,6 @@
 use crate::server::{
-    BroadcastMessageType, Client, ClientState, SableError, ServerOptions, Telemetry, WorkerContext,
-    WorkerManager, WorkerMessage, WorkerSender,
+    BroadcastMessageType, Client, ClientState, SableError, ServerOptions, SlotBitmap, Telemetry,
+    WorkerContext, WorkerManager, WorkerMessage, WorkerSender,
 };
 use crate::{
     commands::ClientNextAction,
@@ -363,6 +363,11 @@ impl ServerState {
 
     pub fn persistent_state(&self) -> &ServerPersistentState {
         &self.persistent_state
+    }
+
+    /// Return the slots owned by this instance
+    pub fn slots(&self) -> &SlotBitmap {
+        self.persistent_state.slots()
     }
 }
 

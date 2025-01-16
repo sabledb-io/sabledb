@@ -291,9 +291,15 @@ impl CommandMetadata {
         self
     }
 
-    /// This command might block the client
+    /// This command is not allowed in transaction
     pub fn no_transaction(mut self) -> Self {
         self.set_flag(ValkeyCommandFlags::NoTxn);
+        self
+    }
+
+    /// This command operates on multiple keys
+    pub fn multi_key(mut self) -> Self {
+        self.set_flag(ValkeyCommandFlags::MultiKey);
         self
     }
 
@@ -341,6 +347,10 @@ impl CommandMetadata {
 
     pub fn is_notxn(&self) -> bool {
         self.has_flag(ValkeyCommandFlags::NoTxn)
+    }
+
+    pub fn is_multi(&self) -> bool {
+        self.has_flag(ValkeyCommandFlags::MultiKey)
     }
 
     pub fn to_resp_v2(&self) -> BytesMut {
@@ -503,7 +513,8 @@ impl Default for CommandsManager {
                 CommandMetadata::new(ValkeyCommandName::Mget)
                     .read_only()
                     .with_arity(-2)
-                    .with_last_key(-1),
+                    .with_last_key(-1)
+                    .multi_key(),
             ),
             (
                 "mset",
@@ -511,7 +522,8 @@ impl Default for CommandsManager {
                     .write()
                     .with_arity(-3)
                     .with_last_key(-1)
-                    .with_step(2),
+                    .with_step(2)
+                    .multi_key(),
             ),
             (
                 "msetnx",
@@ -519,7 +531,8 @@ impl Default for CommandsManager {
                     .write()
                     .with_arity(-3)
                     .with_last_key(-1)
-                    .with_step(2),
+                    .with_step(2)
+                    .multi_key(),
             ),
             (
                 "psetex",
@@ -647,7 +660,8 @@ impl Default for CommandsManager {
                 CommandMetadata::new(ValkeyCommandName::Lmove)
                     .write()
                     .with_arity(5)
-                    .with_last_key(2),
+                    .with_last_key(2)
+                    .multi_key(),
             ),
             (
                 "rpoplpush",
@@ -663,7 +677,8 @@ impl Default for CommandsManager {
                     .with_arity(-4)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "brpoplpush",
@@ -671,7 +686,8 @@ impl Default for CommandsManager {
                     .write()
                     .blocking()
                     .with_arity(4)
-                    .with_last_key(2),
+                    .with_last_key(2)
+                    .multi_key(),
             ),
             (
                 "blpop",
@@ -679,7 +695,8 @@ impl Default for CommandsManager {
                     .write()
                     .blocking()
                     .with_arity(-3)
-                    .with_last_key(-2),
+                    .with_last_key(-2)
+                    .multi_key(),
             ),
             (
                 "blmove",
@@ -687,7 +704,8 @@ impl Default for CommandsManager {
                     .write()
                     .blocking()
                     .with_arity(6)
-                    .with_last_key(2),
+                    .with_last_key(2)
+                    .multi_key(),
             ),
             (
                 "blmpop",
@@ -697,7 +715,8 @@ impl Default for CommandsManager {
                     .with_arity(-5)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "brpop",
@@ -705,7 +724,8 @@ impl Default for CommandsManager {
                     .write()
                     .blocking()
                     .with_arity(-3)
-                    .with_last_key(-2),
+                    .with_last_key(-2)
+                    .multi_key(),
             ),
             // Client commands
             (
@@ -776,14 +796,16 @@ impl Default for CommandsManager {
                 CommandMetadata::new(ValkeyCommandName::Del)
                     .write()
                     .with_arity(-2)
-                    .with_last_key(-1),
+                    .with_last_key(-1)
+                    .multi_key(),
             ),
             (
                 "exists",
                 CommandMetadata::new(ValkeyCommandName::Exists)
                     .read_only()
                     .with_arity(-2)
-                    .with_last_key(-1),
+                    .with_last_key(-1)
+                    .multi_key(),
             ),
             (
                 "expire",
@@ -914,7 +936,8 @@ impl Default for CommandsManager {
                     .with_arity(1)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "discard",
@@ -932,7 +955,8 @@ impl Default for CommandsManager {
                     .with_first_key(1)
                     .with_last_key(-1)
                     .with_step(1)
-                    .no_transaction(),
+                    .no_transaction()
+                    .multi_key(),
             ),
             (
                 "unwatch",
@@ -998,7 +1022,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "zdiffstore",
@@ -1007,7 +1032,8 @@ impl Default for CommandsManager {
                     .with_arity(-4)
                     .with_first_key(1)
                     .with_last_key(1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "zinter",
@@ -1016,7 +1042,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "zintercard",
@@ -1025,13 +1052,15 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "zinterstore",
                 CommandMetadata::new(ValkeyCommandName::Zinterstore)
                     .write()
-                    .with_arity(-4),
+                    .with_arity(-4)
+                    .multi_key(),
             ),
             (
                 "zlexcount",
@@ -1046,7 +1075,8 @@ impl Default for CommandsManager {
                     .with_arity(-4)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "bzmpop",
@@ -1056,7 +1086,8 @@ impl Default for CommandsManager {
                     .with_arity(-5)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "zmscore",
@@ -1084,7 +1115,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(1)
                     .with_last_key(-2)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "bzpopmin",
@@ -1094,7 +1126,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(1)
                     .with_last_key(-2)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "zrandmember",
@@ -1166,13 +1199,15 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(0)
                     .with_last_key(0)
-                    .with_step(0),
+                    .with_step(0)
+                    .multi_key(),
             ),
             (
                 "zunionstore",
                 CommandMetadata::new(ValkeyCommandName::Zunionstore)
                     .write()
-                    .with_arity(-4),
+                    .with_arity(-4)
+                    .multi_key(),
             ),
             (
                 "zscore",
@@ -1225,7 +1260,8 @@ impl Default for CommandsManager {
                     .with_arity(-2)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "sdiffstore",
@@ -1234,7 +1270,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "sinter",
@@ -1243,7 +1280,8 @@ impl Default for CommandsManager {
                     .with_arity(-2)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "sintercard",
@@ -1252,7 +1290,8 @@ impl Default for CommandsManager {
                     .with_arity(-2)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "sinterstore",
@@ -1321,7 +1360,8 @@ impl Default for CommandsManager {
                     .with_arity(-2)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "sunionstore",
@@ -1330,7 +1370,8 @@ impl Default for CommandsManager {
                     .with_arity(-3)
                     .with_first_key(1)
                     .with_last_key(-1)
-                    .with_step(1),
+                    .with_step(1)
+                    .multi_key(),
             ),
             (
                 "scan",

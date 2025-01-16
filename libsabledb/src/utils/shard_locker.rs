@@ -7,6 +7,23 @@ lazy_static::lazy_static! {
     static ref MULTI_LOCK: ShardLocker = ShardLocker::default();
 }
 
+macro_rules! check_state {
+    ($client_state:expr, $slots:expr) => {
+        if !$client_state
+            .server_inner_state()
+            .slots()
+            .is_set_multi(&$slots)?
+        {
+            return Err(SableError::NotOwner($slots));
+        } else if $client_state.is_txn_state_calc_slots() {
+            return Err(SableError::LockCancelledTxnPrep($slots));
+        } else if $client_state.is_txn_state_exec() {
+            // The client is running an active transaction, lock was already obtained
+            return Self::noop_lock();
+        }
+    };
+}
+
 #[allow(dead_code)]
 pub struct ShardLockGuard<'a> {
     read_locks: Option<Vec<RwLockReadGuard<'a, u16>>>,
@@ -151,12 +168,7 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        if client_state.is_txn_state_calc_slots() {
-            return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_state_exec() {
-            // The client is running an active transaction, lock was already obtained
-            return Self::noop_lock();
-        }
+        check_state!(client_state, slots);
 
         for idx in &slots {
             let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
@@ -190,12 +202,7 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        if client_state.is_txn_state_calc_slots() {
-            return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_state_exec() {
-            // The client is running an active transaction, lock was already obtained
-            return Self::noop_lock();
-        }
+        check_state!(client_state, slots);
 
         for idx in &slots {
             let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
@@ -225,12 +232,7 @@ impl LockManager {
         slots.sort();
         slots.dedup();
 
-        if client_state.is_txn_state_calc_slots() {
-            return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_state_exec() {
-            // The client is running an active transaction, lock was already obtained
-            return Self::noop_lock();
-        }
+        check_state!(client_state, slots);
 
         for idx in &slots {
             let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
@@ -257,14 +259,8 @@ impl LockManager {
         // Calculate the slots and sort them
         let slot = calculate_slot(key);
 
-        if client_state.is_txn_state_calc_slots() {
-            let slots = vec![slot];
-            return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_state_exec() {
-            // The client is running an active transaction, lock was already obtained
-            return Self::noop_lock();
-        }
-
+        let slots = vec![slot];
+        check_state!(client_state, slots);
         read_locks.push(
             MULTI_LOCK
                 .locks
@@ -299,13 +295,9 @@ impl LockManager {
         // Calculate the slots and sort them
         let slot = calculate_slot(key);
 
-        if client_state.is_txn_state_calc_slots() {
-            let slots = vec![slot];
-            return Err(SableError::LockCancelledTxnPrep(slots));
-        } else if client_state.is_txn_state_exec() {
-            // The client is running an active transaction, lock was already obtained
-            return Self::noop_lock();
-        }
+        let slots = vec![slot];
+        check_state!(client_state, slots);
+
         write_locks.push(
             MULTI_LOCK
                 .locks
