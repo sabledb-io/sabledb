@@ -38,6 +38,8 @@ pacman -Sy git                                  \
            mingw-w64-clang-x86_64-cmake         \
            mingw-w64-clang-x86_64-libffi        \
            unzip                                \
+           mingw-w64-clang-x86_64-rust-bindgen  \
+           mingw-w64-clang-x86_64-nasm          \
            mingw-w64-clang-x86_64-gcc-compat
 ```
 
