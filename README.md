@@ -47,7 +47,7 @@ pacman -Sy git                                  \
 git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
 git submodule update --init
-CFLAGS="-D_ISOC11_SOURCE" cargo build --release
+cargo build --release
 cargo test --release
 ```
 
