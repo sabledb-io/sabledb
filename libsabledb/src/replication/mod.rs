@@ -7,9 +7,11 @@ mod replication_messages;
 mod replication_server;
 mod replication_traits;
 mod replicator;
+mod schema;
 mod storage_updates;
 
 pub use crate::SableError;
+pub use schema::Persistence;
 
 pub use cluster_database::{ClusterDB, LockResult, UnLockResult};
 pub use cluster_lock::{BlockingLock, Lock, PrimaryLock};

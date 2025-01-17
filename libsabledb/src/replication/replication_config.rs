@@ -1,7 +1,8 @@
 use crate::SableError;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerRole {
     #[default]
     Primary,

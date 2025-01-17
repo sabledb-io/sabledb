@@ -33,6 +33,8 @@ pub struct ServerPersistentState {
     private_primary_address: RwLock<String>,
     config_file: RwLock<String>,
     slots: SlotBitmap,
+    shard_name: RwLock<String>,
+    cluster_name: RwLock<String>,
 }
 
 const ROLE_PRIMARY: u8 = 0;
@@ -50,6 +52,8 @@ impl ServerPersistentState {
             private_primary_address: RwLock::<String>::default(),
             config_file: RwLock::<String>::default(),
             slots,
+            shard_name: RwLock::<String>::default(),
+            cluster_name: RwLock::<String>::default(),
         }
     }
 
@@ -157,6 +161,26 @@ impl ServerPersistentState {
         self.primary_node_id.read().expect(POISONED_MUTEX).clone()
     }
 
+    #[inline]
+    pub fn set_shard_name(&self, shard_name: String) {
+        *self.shard_name.write().expect(POISONED_MUTEX) = shard_name;
+    }
+
+    #[inline]
+    pub fn shard_name(&self) -> String {
+        self.shard_name.read().expect(POISONED_MUTEX).clone()
+    }
+
+    #[inline]
+    pub fn set_cluster_name(&self, shard_name: String) {
+        *self.cluster_name.write().expect(POISONED_MUTEX) = shard_name;
+    }
+
+    #[inline]
+    pub fn cluster_name(&self) -> String {
+        self.cluster_name.read().expect(POISONED_MUTEX).clone()
+    }
+
     /// Initialise the node ID by loading or creating it
     pub fn initialise(&self, options: Arc<RwLock<ServerOptions>>) {
         let file_path = Self::file_path_from_dir(options);
@@ -190,6 +214,13 @@ impl ServerPersistentState {
             if let Err(e) = self.slots.from_string(slots_str.as_str()) {
                 tracing::warn!("Failed to load slot range from string: {}", e);
             }
+
+            // read the shard / cluster name
+            let shard_name = ini_read!(ini_file, "general", "shard", String::default());
+            self.set_shard_name(shard_name);
+
+            let cluster_name = ini_read!(ini_file, "general", "cluster", String::default());
+            self.set_shard_name(cluster_name);
 
             let role = ini_read!(
                 ini_file,
@@ -233,7 +264,9 @@ impl ServerPersistentState {
 
         ini.with_section(Some("general"))
             .set("node_id", self.id())
-            .set("slots", self.slots.to_string());
+            .set("slots", self.slots.to_string())
+            .set("shard", self.shard_name())
+            .set("cluster", self.cluster_name());
 
         ini.with_section(Some("replication"))
             .set("address", self.primary_address())
