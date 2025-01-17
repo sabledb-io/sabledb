@@ -7,9 +7,9 @@
    viewBox="0 0 210 210"
    version="1.1"
    id="svg846"
-   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   inkscape:version="1.4 (86a8ad7, 2024-10-11)"
    sodipodi:docname="sabledb.svg"
-   inkscape:export-filename="C:\msys64\home\eran\devl\sabledb-website\docs\images\sabledb.png"
+   inkscape:export-filename="sabledb.png"
    inkscape:export-xdpi="96"
    inkscape:export-ydpi="96"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
@@ -28,15 +28,23 @@
      showgrid="false"
      inkscape:zoom="0.69397447"
      inkscape:cx="396.98867"
-     inkscape:cy="560.53935"
+     inkscape:cy="559.81886"
      inkscape:window-width="2471"
      inkscape:window-height="1430"
-     inkscape:window-x="651"
-     inkscape:window-y="186"
+     inkscape:window-x="814"
+     inkscape:window-y="346"
      inkscape:window-maximized="0"
-     inkscape:current-layer="layer1" />
+     inkscape:current-layer="layer1"
+     inkscape:showpageshadow="2"
+     inkscape:deskcolor="#d1d1d1" />
   <defs
      id="defs843">
+    <rect
+       x="-86.458512"
+       y="-102.30924"
+       width="1080.7314"
+       height="971.21728"
+       id="rect1" />
     <rect
        x="-25.937553"
        y="936.63385"
@@ -78,13 +86,18 @@
     </g>
     <text
        xml:space="preserve"
-       transform="matrix(0.4317794,0,0,0.36506526,54.888922,-191.57858)"
+       transform="matrix(0.4317794,0,0,0.36506526,42.17422,-190.05355)"
        id="text3734"
-       style="font-style:normal;font-weight:normal;font-size:81.0012px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect3736);fill:#f57900;fill-opacity:1;stroke:none"><tspan
+       style="font-style:normal;font-weight:normal;font-size:88.8556px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect3736);display:inline;fill:#f57900;fill-opacity:1;stroke:none"><tspan
          x="-25.9375"
-         y="1010.5346"
-         id="tspan48632"><tspan
-           style="font-weight:bold;font-family:Iosevka;-inkscape-font-specification:'Iosevka Bold'"
-           id="tspan48630">SableDB</tspan></tspan></text>
+         y="1017.7004"
+         id="tspan4"><tspan
+           style="font-weight:bold;font-family:Consolas;-inkscape-font-specification:'Consolas Bold'"
+           id="tspan3">SableDB</tspan></tspan></text>
+    <text
+       xml:space="preserve"
+       transform="scale(0.26458333)"
+       id="text1"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:133.333px;line-height:1.25;font-family:Consolas;-inkscape-font-specification:'Consolas Bold';text-align:start;writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect1);display:inline;fill:#000000" />
   </g>
 </svg>
