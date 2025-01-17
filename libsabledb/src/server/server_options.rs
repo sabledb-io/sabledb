@@ -292,6 +292,10 @@ impl ServerOptions {
         self.general_settings.key.is_some() && self.general_settings.cert.is_some()
     }
 
+    pub fn get_cluster_address(&self) -> Option<String> {
+        self.general_settings.cluster_address.clone()
+    }
+
     /// Read values from INI configuration file and return `ServerOptions` structure
     pub fn from_config(config_file: String) -> Result<Self, SableError> {
         let ini_file = Ini::load_from_file(config_file)?;

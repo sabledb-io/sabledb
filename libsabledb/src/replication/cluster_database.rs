@@ -212,13 +212,6 @@ impl ClusterDB {
         Ok(node_heartbeat_ts)
     }
 
-    /// Attempt to create a lock for this node's primary
-    pub fn lock_primary(&self) -> Result<LockResult, SableError> {
-        let primary_node_id = self.node_primary_id()?;
-        let lock_key = format!("{}_LOCK", primary_node_id);
-        self.lock(&lock_key)
-    }
-
     /// Attempt to create a lock with a given name
     pub fn lock(&self, lock_name: &String) -> Result<LockResult, SableError> {
         let current_node_id = Server::state().persistent_state().id();
