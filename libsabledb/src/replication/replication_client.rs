@@ -356,17 +356,27 @@ impl ReplicationClient {
                 match msg {
                     ReplicationResponse::Ok(common) => {
                         // fall through
-                        info!("JoinShard Ok. Primary Node ID: {}", common.node_id());
+                        let shard_name = common.context();
+                        info!(
+                            "Successfull joined shard: {}. Primary Node ID: {}",
+                            shard_name,
+                            common.node_id()
+                        );
                         // Store the primary's node ID (this also changes the state to Replica)
                         Server::state()
                             .persistent_state()
                             .set_primary_node_id(Some(common.node_id().to_string()));
 
                         // Associate this node with its new primary
-                        if let Err(e) =
-                            cluster_manager::update_replicas_set(Server::state().options().clone())
-                        {
-                            tracing::warn!("Failed to update primary SET. {:?}", e);
+                        if let Err(e) = cluster_manager::add_replica_to_shard(
+                            Server::state().options().clone(),
+                            shard_name,
+                        ) {
+                            tracing::warn!(
+                                "Failed to update shard: {} record. {:?}",
+                                shard_name,
+                                e,
+                            );
                         }
                         JoinShardResult::Ok
                     }

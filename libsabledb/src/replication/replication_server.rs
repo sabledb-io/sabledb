@@ -241,13 +241,24 @@ impl ReplicationServer {
 
         match req {
             ReplicationRequest::JoinShard(common) => {
-                debug!("Received request: JoinShard({})", common);
+                info!("Received request: JoinShard({})", common);
+                let shard_name = if Server::state().persistent_state().shard_name().is_empty() {
+                    Server::state().persistent_state().id()
+                } else {
+                    Server::state().persistent_state().shard_name()
+                };
 
-                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
+                let response_ok = ReplicationResponse::Ok(
+                    ResponseCommon::new(&common).with_context(shard_name.clone()),
+                );
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
-                info!("Replica {} joined the shard", common.node_id());
+                info!(
+                    "Replica: {} joined the shard: {}",
+                    common.node_id(),
+                    shard_name
+                );
                 return HandleRequestResult::NodeJoined(common.node_id().to_string());
             }
             ReplicationRequest::FullSync(common) => {

@@ -160,8 +160,11 @@ pub fn put_node_properties(
     Ok(())
 }
 
-/// Associate current node as
-pub fn update_replicas_set(options: Arc<StdRwLock<ServerOptions>>) -> Result<(), SableError> {
+/// Associate current node as a replica in shard `shard_name`
+pub fn add_replica_to_shard(
+    options: Arc<StdRwLock<ServerOptions>>,
+    _shard_name: &String,
+) -> Result<(), SableError> {
     check_cluster_db_or!(options, Ok(()));
 
     if !Server::state().persistent_state().is_replica() {

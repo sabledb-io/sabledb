@@ -165,54 +165,86 @@ pub struct Persistence {
     options: Arc<StdRwLock<ServerOptions>>,
 }
 
+#[macro_export]
+macro_rules! impl_persistence_get_for {
+    ($func_name:ident, $type_name:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            /// Read record from the database by `key`
+            pub fn $func_name(&self, key: &String) -> Result<Option<$type_name>, SableError>
+            {
+                DB_CONN.with_borrow_mut(|db_client| {
+                    let Some(mut conn) = db_client.connection(self.options.clone()) else {
+                        return Ok(None);
+                    };
+
+                    let redis::Value::BulkString(json) = conn.get(key)? else {
+                        return Ok(None);
+                    };
+
+                    let s = String::from_utf8_lossy(&json).to_string();
+                    let v: $type_name = serde_json::from_str(&s).map_err(|e| {
+                        SableError::OtherError(format!("Failed to convert JSON to Node. {e}"))
+                    })?;
+
+                    Ok(Some(v))
+                })
+            }
+        }
+    };
+}
+
 impl Persistence {
     pub fn with_options(options: Arc<StdRwLock<ServerOptions>>) -> Self {
         Persistence { options }
     }
 
-    /// Insert or replace Node record in the database
+    /// Insert or replace Node record into the database
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {
+        self.put(&node.node_id, node)
+    }
+
+    /// Insert or replace Shard record into the database
+    pub fn put_shard(&self, shard: &Shard) -> Result<(), SableError> {
+        self.put(&shard.name, shard)
+    }
+
+    /// Insert or replace Shard record into the database
+    pub fn put_cluster(&self, cluster: &Cluster) -> Result<(), SableError> {
+        self.put(&cluster.name, cluster)
+    }
+
+    /// Delete item from the database by its ID
+    pub fn delete(&self, item_id: &String) -> Result<(), SableError> {
         DB_CONN.with_borrow_mut(|db_client| {
             let Some(mut conn) = db_client.connection(self.options.clone()) else {
                 return Ok(());
             };
 
-            let value = serde_json::to_string(&node).map_err(|e| {
+            let _: redis::Value = conn.del(item_id)?;
+            Ok(())
+        })
+    }
+
+    impl_persistence_get_for!(get_node, Node);
+    impl_persistence_get_for!(get_shard, Shard);
+    impl_persistence_get_for!(get_cluster, Cluster);
+
+    /// Insert or replace item into the database
+    fn put<T>(&self, key: &String, value: &T) -> Result<(), SableError>
+    where
+        T: ?Sized + Serialize,
+    {
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(mut conn) = db_client.connection(self.options.clone()) else {
+                return Ok(());
+            };
+
+            let value = serde_json::to_string(value).map_err(|e| {
                 SableError::OtherError(format!("Failed to convert object to JSON. {e}"))
             })?;
-            let _: redis::Value = conn.set(&node.node_id, value)?;
+            let _: redis::Value = conn.set(key, value)?;
             Ok(())
-        })
-    }
-
-    /// Delete Node from the database by its ID
-    pub fn delete_node(&self, node_id: &String) -> Result<(), SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(mut conn) = db_client.connection(self.options.clone()) else {
-                return Ok(());
-            };
-
-            let _: redis::Value = conn.del(node_id)?;
-            Ok(())
-        })
-    }
-
-    /// Read node from the database by its ID
-    pub fn get_node(&self, node_id: &String) -> Result<Option<Node>, SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(mut conn) = db_client.connection(self.options.clone()) else {
-                return Ok(None);
-            };
-
-            let redis::Value::BulkString(json) = conn.get(node_id)? else {
-                return Ok(None);
-            };
-
-            let node: Node =
-                serde_json::from_str(&String::from_utf8_lossy(&json)).map_err(|e| {
-                    SableError::OtherError(format!("Failed to convert JSON to Node. {e}"))
-                })?;
-            Ok(Some(node))
         })
     }
 }

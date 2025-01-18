@@ -220,7 +220,7 @@ impl ServerPersistentState {
             self.set_shard_name(shard_name);
 
             let cluster_name = ini_read!(ini_file, "general", "cluster", String::default());
-            self.set_shard_name(cluster_name);
+            self.set_cluster_name(cluster_name);
 
             let role = ini_read!(
                 ini_file,

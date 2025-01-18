@@ -80,6 +80,8 @@ pub struct ResponseCommon {
     reason: ResponseReason,
     /// The responding node ID
     node_id: String,
+    /// An optional context string for the response
+    context: String,
 }
 
 impl ResponseCommon {
@@ -88,6 +90,7 @@ impl ResponseCommon {
             req_id: request.request_id(),
             node_id: Server::state().persistent_state().id(),
             reason: ResponseReason::Invalid,
+            context: String::new(),
         }
     }
 
@@ -107,6 +110,15 @@ impl ResponseCommon {
     pub fn node_id(&self) -> &String {
         &self.node_id
     }
+
+    pub fn with_context(mut self, context: String) -> Self {
+        self.context = context;
+        self
+    }
+
+    pub fn context(&self) -> &String {
+        &self.context
+    }
 }
 
 impl Default for RequestCommon {
@@ -121,10 +133,12 @@ impl FromU8Reader for ResponseCommon {
         let req_id = u64::from_reader(reader)?;
         let reason = ResponseReason::from_u8(u8::from_reader(reader)?)?;
         let node_id = String::from_reader(reader)?;
+        let context = String::from_reader(reader)?;
         Some(ResponseCommon {
             req_id,
             reason,
             node_id,
+            context,
         })
     }
 }
@@ -134,6 +148,7 @@ impl ToU8Writer for ResponseCommon {
         self.req_id.to_writer(builder);
         self.reason.to_u8().to_writer(builder);
         self.node_id.to_writer(builder);
+        self.context.to_writer(builder);
     }
 }
 
@@ -141,8 +156,8 @@ impl std::fmt::Display for ResponseCommon {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "RequestId: {}, Reason: {}. NodeId: {}",
-            self.req_id, self.reason, self.node_id
+            "RequestId: {}, Reason: {}, NodeId: {}, Context: {}",
+            self.req_id, self.reason, self.node_id, self.context
         )
     }
 }
