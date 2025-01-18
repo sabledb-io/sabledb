@@ -141,10 +141,12 @@ impl Node {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Shard {
-    /// List of node IDs belong to this shard
-    nodes: HashSet<String>,
     /// The shard's name
     name: String,
+    /// List of node IDs belong to this shard
+    nodes: HashSet<String>,
+    /// The shard's primary ID
+    primary_node_id: String,
     /// The cluster name
     cluster_name: String,
     /// The slots owned by this shard

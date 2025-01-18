@@ -38,9 +38,14 @@ fn main() -> Result<(), SableError> {
         .general_settings
         .logdir
     {
-        fmtr.with_writer(tracing_appender::rolling::hourly(logdir, "sabledb.log"))
-            .with_ansi(false) // No need for colours when using file
-            .init();
+        if logdir.to_string_lossy().is_empty() {
+            // Use stdout
+            fmtr.init();
+        } else {
+            fmtr.with_writer(tracing_appender::rolling::hourly(logdir, "sabledb.log"))
+                .with_ansi(false) // No need for colours when using file
+                .init();
+        }
     } else {
         fmtr.init();
     }
