@@ -4,6 +4,7 @@ mod expiration;
 mod hash_metadata;
 mod keyprefix;
 mod list_metadata;
+mod lock_metadata;
 mod primary_key_metadata;
 mod set_metadata;
 mod string_value_metadata;
@@ -13,6 +14,7 @@ mod zset_metadata;
 pub use bookkeeping::*;
 pub use encoding::*;
 pub use expiration::Expiration;
+pub use lock_metadata::*;
 
 pub use hash_metadata::{HashFieldKey, HashValueMetadata};
 pub use set_metadata::*;

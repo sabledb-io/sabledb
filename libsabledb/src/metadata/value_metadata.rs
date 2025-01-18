@@ -69,6 +69,10 @@ impl CommonValueMetadata {
         self.value_encoding == ValueType::Hash
     }
 
+    pub fn is_lock(&self) -> bool {
+        self.value_encoding == ValueType::Lock
+    }
+
     pub fn is_set(&self) -> bool {
         self.value_encoding == ValueType::Set
     }
@@ -93,6 +97,11 @@ impl CommonValueMetadata {
 
     pub fn set_hash(mut self) -> Self {
         self.value_encoding = ValueType::Hash;
+        self
+    }
+
+    pub fn set_lock(mut self) -> Self {
+        self.value_encoding = ValueType::Lock;
         self
     }
 

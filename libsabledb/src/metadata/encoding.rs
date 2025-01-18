@@ -15,6 +15,7 @@ pub enum ValueType {
     Hash = 2,
     Zset = 3,
     Set = 4,
+    Lock = 5,
 }
 
 impl Default for ValueType {
@@ -45,6 +46,7 @@ impl FromRaw for ValueType {
             2 => Some(Self::Hash),
             3 => Some(Self::Zset),
             4 => Some(Self::Set),
+            5 => Some(Self::Lock),
             _ => None,
         }
     }
@@ -59,6 +61,7 @@ impl FromStr for ValueType {
             "hash" => Ok(Self::Hash),
             "set" => Ok(Self::Set),
             "zset" => Ok(Self::Zset),
+            "lock" => Ok(Self::Lock),
             _ => Err(crate::SableError::InvalidArgument(format!(
                 "Could not convert '{}' into ValueType",
                 s
@@ -87,6 +90,8 @@ pub enum KeyType {
     SetItem = 6,
     /// Database metadata record (contains info regarding the current db schema)
     Metadata = 7,
+    /// Lock data type
+    Lock = 8,
 }
 
 impl Default for KeyType {
@@ -119,6 +124,8 @@ impl FromRaw for KeyType {
             4 => Some(Self::ZsetMemberItem),
             5 => Some(Self::ZsetScoreItem),
             6 => Some(Self::SetItem),
+            7 => Some(Self::Metadata),
+            8 => Some(Self::Lock),
             _ => None,
         }
     }

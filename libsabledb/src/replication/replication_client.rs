@@ -358,7 +358,7 @@ impl ReplicationClient {
                         // fall through
                         let shard_name = common.context();
                         info!(
-                            "Successfull joined shard: {}. Primary Node ID: {}",
+                            "Successfully joined shard: {}. Primary Node ID: {}",
                             shard_name,
                             common.node_id()
                         );
