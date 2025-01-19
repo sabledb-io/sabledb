@@ -1,7 +1,4 @@
-use crate::{
-    replication::{ClusterDB, LockResult, UnLockResult},
-    SableError, Server, ServerOptions,
-};
+use crate::{replication::Persistence, SableError, Server, ServerOptions};
 use std::sync::{Arc, RwLock as StdRwLock};
 
 pub trait Lock {
@@ -32,40 +29,22 @@ impl Lock for BlockingLock {
     }
 
     fn lock(&mut self) -> Result<(), SableError> {
-        let db = ClusterDB::with_options(self.options.clone());
-        loop {
-            let res = db.lock(&self.name)?;
-            match res {
-                LockResult::Ok => {
-                    break;
-                }
-                LockResult::AlreadyExist(owner) => {
-                    tracing::debug!(
-                        "Unable to lock '{}'. Already locked by '{}'",
-                        self.name,
-                        owner
-                    );
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
+        let db = Persistence::with_options(self.options.clone());
+        if let Err(e) = db.lock(&self.name, 60_000) {
+            tracing::warn!("{e}");
+        } else {
+            self.locked = true;
         }
-        self.locked = true;
         Ok(())
     }
 
     fn unlock(&mut self) -> Result<(), SableError> {
         if self.is_locked() {
-            self.locked = false;
-            let db = ClusterDB::with_options(self.options.clone());
-            let res = db.unlock(&self.name)?;
-            match res {
-                UnLockResult::Ok => {}
-                UnLockResult::NotOwner(owner) => {
-                    tracing::warn!("Failed to unlock '{}'. New owner {}", self.name, owner);
-                }
-                UnLockResult::NoSuchLock => {
-                    tracing::warn!("Failed to unlock '{}'. No such lock", self.name);
-                }
+            let db = Persistence::with_options(self.options.clone());
+            if let Err(e) = db.unlock(&self.name) {
+                tracing::warn!("{e}");
+            } else {
+                self.locked = false;
             }
         }
         Ok(())

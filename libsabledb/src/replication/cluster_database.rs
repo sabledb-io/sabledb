@@ -212,63 +212,6 @@ impl ClusterDB {
         Ok(node_heartbeat_ts)
     }
 
-    /// Attempt to create a lock with a given name
-    pub fn lock(&self, lock_name: &String) -> Result<LockResult, SableError> {
-        let current_node_id = Server::state().persistent_state().id();
-        let mut result = LockResult::Ok;
-        get_conn_and_run(self.options.clone(), |client| {
-            let set_options = redis::SetOptions::default()
-                .with_expiration(redis::SetExpiry::EX(60))
-                .conditional_set(redis::ExistenceCheck::NX);
-            let res = client.set_options(lock_name, &current_node_id, set_options)?;
-            match res {
-                Value::Nil => {
-                    let lock_value = if let Value::BulkString(s) = client.get(lock_name)? {
-                        String::from_utf8_lossy(&s).to_string()
-                    } else {
-                        String::default()
-                    };
-                    result = LockResult::AlreadyExist(lock_value);
-                    Ok(())
-                }
-                Value::Okay => {
-                    result = LockResult::Ok;
-                    Ok(())
-                }
-                other => Err(SableError::OtherError(format!(
-                    "Create lock error. Invalid return value. {:?}",
-                    other
-                ))),
-            }
-        })?;
-        Ok(result)
-    }
-
-    /// Attempt to create a lock with a given name
-    pub fn unlock(&self, lock_name: &String) -> Result<UnLockResult, SableError> {
-        let current_node_id = Server::state().persistent_state().id();
-        let mut result = UnLockResult::Ok;
-        get_conn_and_run(self.options.clone(), |client| {
-            let res = client.get::<&String, redis::Value>(lock_name)?;
-            match res {
-                Value::BulkString(val) => {
-                    let owner_node_id = String::from_utf8_lossy(&val).to_string();
-                    if owner_node_id.eq(&current_node_id) {
-                        client.del::<&String, redis::Value>(lock_name)?;
-                        result = UnLockResult::Ok;
-                    } else {
-                        result = UnLockResult::NotOwner(owner_node_id);
-                    }
-                }
-                _ => {
-                    result = UnLockResult::NoSuchLock;
-                }
-            }
-            Ok(())
-        })?;
-        Ok(result)
-    }
-
     /// Add `replica_node_id` to the set identified by the key `<primary_node_id>_replicas`
     pub fn update_replicas_set(
         &self,

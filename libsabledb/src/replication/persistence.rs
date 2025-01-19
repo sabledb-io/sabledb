@@ -16,25 +16,16 @@ thread_local! {
 #[derive(Default)]
 struct DbClient {
     client: Option<ValkeyClient>,
+    conn: Option<redis::Connection>,
     is_completed: bool,
 }
 
 impl DbClient {
-    pub fn connection(
-        &mut self,
-        options: Arc<StdRwLock<ServerOptions>>,
-    ) -> Option<redis::Connection> {
-        self.open_connection_if_needed(options.clone());
-        let Some(client) = &self.client else {
+    pub fn connection(&mut self) -> Option<&mut redis::Connection> {
+        let Some(ref mut conn) = &mut self.conn else {
             return None;
         };
-        match client.get_connection_with_timeout(std::time::Duration::from_secs(1)) {
-            Ok(con) => Some(con),
-            Err(e) => {
-                tracing::error!("Could not connect to cluster database. {e}");
-                None
-            }
-        }
+        Some(conn)
     }
 
     /// Attempt to open redis connection. If a connection is already opened,
@@ -51,6 +42,13 @@ impl DbClient {
             tracing::debug!("Cluster database is not configured");
             return;
         };
+
+        tracing::debug!(
+            "Initializing connection to redis cluster database {} for PID: {}/{:?}",
+            cluster_address,
+            std::process::id(),
+            std::thread::current().id(),
+        );
 
         // Build the connection string
         let cluster_address = if cluster_address.starts_with("tls://") {
@@ -73,7 +71,16 @@ impl DbClient {
             }
             Ok(client) => client,
         };
-        self.client = Some(client);
+        match client.get_connection_with_timeout(std::time::Duration::from_secs(3)) {
+            Ok(con) => {
+                self.client = Some(client);
+                self.conn = Some(con);
+            }
+            Err(e) => {
+                tracing::error!("Could not connect to cluster database. {e}");
+                return;
+            }
+        }
         tracing::trace!("Success");
     }
 }
@@ -161,6 +168,7 @@ pub struct Cluster {
     name: String,
 }
 
+#[allow(dead_code)]
 pub struct Persistence {
     options: Arc<StdRwLock<ServerOptions>>,
 }
@@ -174,7 +182,7 @@ macro_rules! impl_persistence_get_for {
             pub fn $func_name(&self, key: &String) -> Result<Option<$type_name>, SableError>
             {
                 DB_CONN.with_borrow_mut(|db_client| {
-                    let Some(mut conn) = db_client.connection(self.options.clone()) else {
+                    let Some(conn) = db_client.connection() else {
                         return Ok(None);
                     };
 
@@ -196,6 +204,9 @@ macro_rules! impl_persistence_get_for {
 
 impl Persistence {
     pub fn with_options(options: Arc<StdRwLock<ServerOptions>>) -> Self {
+        DB_CONN.with_borrow_mut(|db_client| {
+            db_client.open_connection_if_needed(options.clone());
+        });
         Persistence { options }
     }
 
@@ -217,10 +228,9 @@ impl Persistence {
     /// Delete item from the database by its ID
     pub fn delete(&self, item_id: &String) -> Result<(), SableError> {
         DB_CONN.with_borrow_mut(|db_client| {
-            let Some(mut conn) = db_client.connection(self.options.clone()) else {
+            let Some(conn) = db_client.connection() else {
                 return Ok(());
             };
-
             let _: redis::Value = conn.del(item_id)?;
             Ok(())
         })
@@ -230,13 +240,56 @@ impl Persistence {
     impl_persistence_get_for!(get_shard, Shard);
     impl_persistence_get_for!(get_cluster, Cluster);
 
+    pub fn lock(&self, lock_name: &String, timeout_ms: u64) -> Result<(), SableError> {
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok(());
+            };
+
+            let res: redis::Value = redis::cmd("LOCK")
+                .arg(lock_name)
+                .arg(timeout_ms)
+                .query(conn)?;
+            match res {
+                redis::Value::Okay => {
+                    // we got the lock
+                    Ok(())
+                }
+                other => Err(SableError::OtherError(format!(
+                    "Failed to lock: {lock_name}. {:?}",
+                    other
+                ))),
+            }
+        })
+    }
+
+    pub fn unlock(&self, lock_name: &String) -> Result<(), SableError> {
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok(());
+            };
+
+            let res: redis::Value = redis::cmd("UNLOCK").arg(lock_name).query(conn)?;
+            match res {
+                redis::Value::Okay => {
+                    // we got the lock
+                    Ok(())
+                }
+                other => Err(SableError::OtherError(format!(
+                    "Failed to unlock: {lock_name}. {:?}",
+                    other
+                ))),
+            }
+        })
+    }
+
     /// Insert or replace item into the database
     fn put<T>(&self, key: &String, value: &T) -> Result<(), SableError>
     where
         T: ?Sized + Serialize,
     {
         DB_CONN.with_borrow_mut(|db_client| {
-            let Some(mut conn) = db_client.connection(self.options.clone()) else {
+            let Some(conn) = db_client.connection() else {
                 return Ok(());
             };
 
