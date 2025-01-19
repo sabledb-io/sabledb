@@ -175,6 +175,9 @@ pub enum ValkeyCommandName {
     Sscan,
     Sunion,
     Sunionstore,
+    // Lock commands
+    Lock,
+    Unlock,
     NotSupported(String),
 }
 
@@ -1381,6 +1384,18 @@ impl Default for CommandsManager {
                     .with_first_key(0)
                     .with_last_key(0)
                     .with_step(0),
+            ),
+            (
+                "lock",
+                CommandMetadata::new(ValkeyCommandName::Lock)
+                    .read_only() // this is a meta command, it does not affect the actual data
+                    .no_transaction(),
+            ),
+            (
+                "unlock",
+                CommandMetadata::new(ValkeyCommandName::Unlock)
+                    .read_only() // this is a meta command, it does not affect the actual data
+                    .no_transaction(),
             ),
         ]);
 

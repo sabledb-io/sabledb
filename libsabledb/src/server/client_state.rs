@@ -5,7 +5,7 @@ use crate::{
 };
 
 use bytes::BytesMut;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -78,6 +78,7 @@ pub struct ClientState {
     attributes: DashMap<String, String>,
     flags: AtomicU32,
     cursors: DashMap<u64, Rc<ScanCursor>>,
+    keys_locked: DashSet<BytesMut>,
 }
 
 impl ClientState {
@@ -96,6 +97,7 @@ impl ClientState {
             attributes: DashMap::<String, String>::default(),
             flags: AtomicU32::new(0),
             cursors: DashMap::<u64, Rc<ScanCursor>>::default(),
+            keys_locked: DashSet::<BytesMut>::default(),
         }
     }
 
@@ -335,6 +337,29 @@ impl ClientState {
     /// return the number of active cursors for this client
     pub fn cursors_count(&self) -> usize {
         self.cursors.len()
+    }
+
+    /// Add `key` as locked key by this client
+    pub fn locked_key_add(&self, key: &[u8]) {
+        self.keys_locked.insert(BytesMut::from(key));
+    }
+
+    /// Add `key` as locked key by this client
+    pub fn locked_key_remove(&self, key: &[u8]) {
+        self.keys_locked.remove(key);
+    }
+
+    /// Clear all locks tracked by this client
+    pub fn locked_key_clear_all(&self) {
+        self.keys_locked.clear();
+    }
+
+    /// Return list of all locked keys by this client
+    pub fn locked_key_get_all(&self) -> Vec<BytesMut> {
+        self.keys_locked
+            .iter()
+            .map(|k| BytesMut::from(k.as_ref()))
+            .collect()
     }
 
     // Helper methods

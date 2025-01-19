@@ -1,5 +1,5 @@
 use crate::{
-    commands::{HandleCommandResult, Strings, TimeoutResponse},
+    commands::{HandleCommandResult, Strings, TimeoutResponse, TryAgainResponse},
     io::RespWriter,
     metadata::{ZSetMemberItem, ZSetScoreItem},
     server::ClientState,
@@ -1585,6 +1585,7 @@ impl ZSetCommands {
             rx,
             std::time::Duration::from_millis(timeout_ms),
             TimeoutResponse::NullArrray,
+            TryAgainResponse::RunCommandAgain,
         )))
     }
 
@@ -1776,6 +1777,7 @@ impl ZSetCommands {
             rx,
             std::time::Duration::from_millis(timeout_ms),
             TimeoutResponse::NullArrray,
+            TryAgainResponse::RunCommandAgain,
         )))
     }
 

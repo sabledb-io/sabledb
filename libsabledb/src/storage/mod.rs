@@ -2,6 +2,7 @@ mod generic_db;
 mod hash_db;
 mod limits;
 mod list_db;
+mod lock_db;
 mod scan_cursor;
 mod set_db;
 mod storage_adapter;
@@ -20,6 +21,7 @@ pub use hash_db::{
 };
 pub use limits::*;
 pub use list_db::*;
+pub use lock_db::*;
 pub use scan_cursor::ScanCursor;
 pub use set_db::*;
 pub use storage_rocksdb::StorageRocksDb;

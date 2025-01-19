@@ -318,62 +318,106 @@ and visit this page again in couple of days
 | ping | ✓ |✓ |   |
 
 
+### Locking commands
+
+`SableDB` offers locking capabilities for application that requires it. Locks in `SableDB` are ephemeral data commands,
+this means, that the data is not persistent and is not replicated from primary to replica. These commands are marked as
+`readonly` so they can be used with replica servers.
+
+Note about the locks:
+
+- Locks are non recursive - if a client attempts to lock an already lock that it owns, it will get the `DEADLOCK` error
+- Lock names are using their own namespace. This is means that you can have a string (or any other type) with name "my-lock" and a lock with the same name
+- The LOCK command can be a blocking command if timeout is provided
+- If a client terminates while holding a lock, the lock is released automatically by `SableDB`
+
+The syntax is:
+
+```
+LOCK <LOCK-NAME> [TIMEOUT-MS]
+UNLOCK <LOCK-NAME>
+```
+
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| LOCK | ✓ |✓ | If timeout is provided, this is a blocking command |
+| UNLOCK | ✓ |✓ | |
+
 ## Benchmarks
+
+### Benchmark machine
+
+```
+Processor:      AMD Ryzen 9 7950X 16-Core Processor 4.50 GHz
+Installed RAM:	64.0 GB (63.2 GB usable)
+System type:    64-bit operating system, x64-based processor
+Disk:           Crucial T700, 2TB PCIe Gen5 NVMe M.2 SSD
+```
+
+### Benchmark setup
+
+- Used 5M unique keys with varying payload size
+- 512 clients on multiple threads
+- `get` tests used randomg keys in the range of `0000001` - `5000000` (key size = 7Bytes)
+- Before each test, the database was removed complete
+- Before each `get` & `setget` test:
+    - Delete the database
+    - Fill the database with 5M unique keys with the test payload size (64/128/256)
+    - Run the use case
 
 ### Command `set`
 
+Command used:
+
+```bash
+sb --threads 6 -c 512 -t set -n 5000000 -r 5000000 -d <64|128|256>
+```
+
 | Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| 64   | 448K  | 1.127  | 1.279  | 1.423  |
-| 128  | 420K  | 1.199  | 1.375  | 1.551  |
-| 256  | 363K  | 1.375  | 1.567  | 1.799  |
-
+| 64   | 781K  | 0.559ms  | 0.751ms  |  1.919ms  |
+| 128  | 715K  | 0.595ms  | 0.919ms  | 2.015ms  |
+| 256  | 656K  | 0.583ms  | 1.359ms  | 2.007ms  |
 
 ### Command `get`
 
-| Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
-|---|---|---|---|---|
-| 64   | 950K  | 0.495  | 0.671  | 1.087  |
-| 128  | 907K  | 0.511  | 0.695  | 1.111  |
-| 256  | 905K  | 0.519  | 0.711  | 1.119  |
+Command used:
 
-
-### Command `mset`
-
-Note: Each `mset` command is equivalent of `10` `set` commands
-
+```bash
+sb --threads 6 -c 512 -t set -n 5000000 -r 5000000 -d <64|128|256> -z
+```
 
 | Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| 64   | 116K  | 3.8  | 4.6  | 6.3  |
-| 128  | 72K  | 6.375  | 7.039  | 54.111  |
-| 256  | 41.5K  | 0.432  | 7.279  | 226.943  |
+| 64  | 1.04M  | 0.457ms  | 0.607ms  | 0.783ms  |
+| 128   | 1.03M  | 0.469ms  | 0.607ms  | 0.735ms  |
+| 256  | 931K  | 0.483ms  | 0.635ms  | 0.795ms  |
 
 
-### Command `incr`
+### Mixed load `setget` with `1:4` ratio (1 `SET` for every `4` `GET` calls)
 
-The increment command is unique because it uses a "read-modify-update" in order to ensure the atomicity of the action which in a
-multi-threaded environment causes a challenge
+Command used:
+
+```bash
+sb --threads 6 -c 512 -t setget -n 5000000 -r 5000000 -d <64|128|256> -z
+```
 
 | Payload size (bytes) | rps | p50 (ms) | p90 (ms) | p99 (ms) |
 |---|---|---|---|---|
-| N/A   | 443K  | 1.127  | 1.295  | 1.383  |
+| 64  | 923K  | 0.483ms  | 0.635ms  | 1.239ms  |
+| 128   | 911K  | 0.481ms  | 0.639ms  | 1.495ms  |
+| 256  | 787K  | 0.563ms  | 0.755ms  | 1.727ms  |
+
 
 ### Network only (`ping` command)
 
-
 | Command | rps | pipeline | p50 (ms) | p90 (ms) | p99 (ms) |
 |---|---|---|---|---|---|
-| ping_inline | 1.05M  | 1 | 0.407  | 0.775  | 1.143  |
-| ping_inline | 6.65M  | 20 | 0.855  | 1.551  | 1.815  |
-| ping_mbulk | 1.05M  | 1 | 0.399  | 0.727  | 1.127  |
-| ping_mbulk | 7.96M  | 20 | 0.807  | 1.471  | 1.711  |
+| ping | 1.6M  | 1 | 0.407  | 0.775  | 1.143  |
 
 ---
 
-Command executions can be seen [here][2]
-
 [1]: https://github.com/valkey-io/valkey
-[2]: https://github.com/sabledb-io/sabledb/blob/main/BENCHMARK.md
 [3]: https://rocksdb.org/
 [4]: https://tokio.rs/

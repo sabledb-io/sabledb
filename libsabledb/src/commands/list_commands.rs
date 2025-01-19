@@ -1,5 +1,5 @@
 use crate::{
-    commands::{HandleCommandResult, Strings, TimeoutResponse},
+    commands::{HandleCommandResult, Strings, TimeoutResponse, TryAgainResponse},
     server::ClientState,
     storage::{
         ListDb, ListFlags, ListIndexOfResult, ListInsertAtResult, ListInsertResult, ListItemAt,
@@ -386,6 +386,7 @@ impl ListCommands {
                             rx,
                             blocking_duration,
                             TimeoutResponse::NullString,
+                            TryAgainResponse::RunCommandAgain,
                         )));
                     }
                 }
@@ -584,6 +585,7 @@ impl ListCommands {
                     rx,
                     Duration::from_millis(timeout_ms as u64),
                     TimeoutResponse::NullArrray,
+                    TryAgainResponse::RunCommandAgain,
                 )));
             }
         }
@@ -745,6 +747,7 @@ impl ListCommands {
                 rx,
                 std::time::Duration::from_millis(timeout_ms),
                 TimeoutResponse::NullArrray,
+                TryAgainResponse::RunCommandAgain,
             )))
         } else {
             // failed to block the client (e.g. active txn in the current client)
@@ -1369,7 +1372,7 @@ mod tests {
                     ClientNextAction::NoAction => {
                         assert_eq!(&sink.read_all().await, expected_value);
                     }
-                    ClientNextAction::Wait((rx, duration, timeout_response)) => {
+                    ClientNextAction::Wait((rx, duration, timeout_response, _)) => {
                         println!("--> got Wait for duration of {:?}", duration);
                         let sw = crate::stopwatch::StopWatch::default();
                         let response = match Client::wait_for(rx, duration).await {
@@ -1392,6 +1395,12 @@ mod tests {
                                     }
                                     TimeoutResponse::Number(num) => {
                                         builder.number_i64(&mut response, num)
+                                    }
+                                    TimeoutResponse::Ok => {
+                                        builder.ok(&mut response);
+                                    }
+                                    TimeoutResponse::Err(msg) => {
+                                        builder.error_string(&mut response, &msg);
                                     }
                                 }
                                 response

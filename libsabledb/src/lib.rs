@@ -9,8 +9,9 @@ pub mod storage;
 pub mod utils;
 
 pub use commands::{
-    ClientCommands, GenericCommands, HashCommands, ListCommands, ServerCommands, SetCommands,
-    StringCommands, TransactionCommands, ValkeyCommand, ValkeyCommandName, ZSetCommands,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, LockCommands, ServerCommands,
+    SetCommands, StringCommands, TransactionCommands, ValkeyCommand, ValkeyCommandName,
+    ZSetCommands,
 };
 pub use metadata::{CommonValueMetadata, Expiration, PrimaryKeyMetadata, StringValueMetadata};
 pub use net::Transport;
@@ -306,7 +307,7 @@ mod tests {
             ClientNextAction::TerminateConnection => {
                 panic!("TerminateConnection: expected to be blocked")
             }
-            ClientNextAction::Wait((rx, duration, timout_response)) => {
+            ClientNextAction::Wait((rx, duration, timout_response, _)) => {
                 (rx, duration, timout_response)
             }
         }

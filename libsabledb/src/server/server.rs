@@ -5,17 +5,15 @@ use crate::server::{
 use crate::{
     commands::ClientNextAction,
     replication::{ReplicationWorkerMessage, Replicator, ReplicatorContext},
+    storage::{LockDb, LockResult, UnlockResult},
     Cron, CronContext, CronMessage, ServerPersistentState, StorageAdapter, ValkeyCommand,
 };
 use bytes::BytesMut;
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
-use std::sync::{
-    //atomic::{AtomicBool, Ordering},
-    Arc,
-};
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio::sync::RwLock as TokioRwLock;
@@ -74,7 +72,7 @@ impl BlockedClients {
 
             list.retain(|(id, _)| id.ne(client_id));
             if list.is_empty() {
-                // no more blocked clients for this key, remove this entire reocrd
+                // no more blocked clients for this key, remove the entire record
                 let _ = self.keys_map.remove(k);
             }
         }
@@ -94,6 +92,7 @@ pub enum BlockClientResult {
     TxnActive,
 }
 
+#[allow(dead_code)]
 pub struct ServerState {
     blocked_clients: TokioRwLock<BlockedClients>,
     telemetry: Arc<StdRwLock<Telemetry>>,
@@ -103,6 +102,7 @@ pub struct ServerState {
     worker_tx_channels: DashMap<std::thread::ThreadId, WorkerSender>,
     /// This state is persisted to the disk
     persistent_state: ServerPersistentState,
+    locks: LockDb,
 }
 
 pub struct Server {
@@ -125,6 +125,7 @@ impl ServerState {
             evictor_context: None,
             worker_tx_channels: DashMap::<std::thread::ThreadId, WorkerSender>::new(),
             persistent_state: ServerPersistentState::new(),
+            locks: LockDb::default(),
         }
     }
 
@@ -369,6 +370,27 @@ impl ServerState {
     pub fn slots(&self) -> &SlotBitmap {
         self.persistent_state.slots()
     }
+
+    /// Clear all locks owned by `client_id`. If there are pending clients for these locks
+    /// they will be waken up
+    pub fn clear_locks(&self, keys: &[&BytesMut], client_id: u128) -> Result<(), SableError> {
+        let _ = self.locks.unlock_multi(keys, client_id)?;
+        Ok(())
+    }
+
+    /// Lock a key
+    pub fn lock(&self, key: &BytesMut, client_id: u128) -> Result<LockResult, SableError> {
+        self.locks.lock(key, client_id)
+    }
+
+    /// Lock a key
+    pub fn try_lock(&self, key: &BytesMut, client_id: u128) -> Result<LockResult, SableError> {
+        self.locks.try_lock(key, client_id)
+    }
+
+    pub fn unlock(&self, key: &BytesMut, client_id: u128) -> Result<UnlockResult, SableError> {
+        self.locks.unlock(key, client_id)
+    }
 }
 
 impl Server {
@@ -415,7 +437,7 @@ impl Server {
             }
             ClientNextAction::TerminateConnection => Err(SableError::ConnectionClosed),
             ClientNextAction::SendResponse(buf) => Ok(buf),
-            ClientNextAction::Wait((_, _, _)) => Err(SableError::OtherError(
+            ClientNextAction::Wait(_) => Err(SableError::OtherError(
                 "Internal blocking commands are not allowed".into(),
             )),
         }

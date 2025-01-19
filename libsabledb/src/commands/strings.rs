@@ -34,4 +34,7 @@ impl Strings {
     pub const ERR_NUMKEYS: &'static str = "ERR Number of keys can't be greater than number of args";
     pub const NO_SUCH_KEY: &'static str = "ERR no such key";
     pub const ERR_NUM_KEYS_MUST_BE_GT_ZERO: &'static str = "ERR numkeys should be greater than 0";
+    pub const ERR_EAGAIN: &'static str = "EAGAIN resource is not available, try again later";
+    pub const ERR_DEADLOCK: &'static str = "DEADLOCK lock is already owned by the calling client";
+    pub const ERR_NOT_OWNER: &'static str = "ERR resource is not owned by the calling client";
 }

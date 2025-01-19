@@ -573,6 +573,23 @@ pub enum TimeoutResponse {
     NullString,
     NullArrray,
     Number(i64),
+    Ok,
+    Err(String),
+}
+
+use bytes::BytesMut;
+
+#[derive(Debug)]
+/// Defines the action in the case we got a "TryAgain" from the `WaitResult`
+pub enum TryAgainResponse {
+    /// Respond to the client with "BytesMut"
+    RespondWith(BytesMut),
+    /// Special case where the core assigns the lock to the client
+    /// but the client does not add in its internal tracking list. This
+    /// action makes sure that the lock name ("BytesMut") is added to the list of locks for this client
+    ClientAcquiredLock(BytesMut),
+    /// Re-run the command
+    RunCommandAgain,
 }
 
 /// Possible return value for a "process_command" function
@@ -580,7 +597,7 @@ pub enum TimeoutResponse {
 #[allow(dead_code)]
 pub enum HandleCommandResult {
     ResponseBufferUpdated(bytes::BytesMut),
-    Blocked((Receiver<u8>, Duration, TimeoutResponse)),
+    Blocked((Receiver<u8>, Duration, TimeoutResponse, TryAgainResponse)),
     ResponseSent,
 }
 
@@ -588,7 +605,7 @@ pub enum HandleCommandResult {
 #[allow(dead_code)]
 pub enum ClientNextAction {
     SendResponse(bytes::BytesMut),
-    Wait((Receiver<u8>, Duration, TimeoutResponse)),
+    Wait((Receiver<u8>, Duration, TimeoutResponse, TryAgainResponse)),
     TerminateConnection,
     /// Response was already sent to the client
     NoAction,
@@ -601,6 +618,7 @@ mod commander;
 mod generic_commands;
 mod hash_commands;
 mod list_commands;
+mod lock_commands;
 mod server_commands;
 mod set_commands;
 mod string_commands;
@@ -617,6 +635,7 @@ pub use commander::{CommandMetadata, CommandsManager, ValkeyCommandName};
 pub use generic_commands::GenericCommands;
 pub use hash_commands::HashCommands;
 pub use list_commands::ListCommands;
+pub use lock_commands::LockCommands;
 pub use server_commands::ServerCommands;
 pub use set_commands::SetCommands;
 pub use string_commands::StringCommands;

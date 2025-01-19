@@ -1,12 +1,12 @@
 use crate::{
-    commands::{ClientNextAction, HandleCommandResult, Strings, TimeoutResponse},
+    commands::{ClientNextAction, HandleCommandResult, Strings, TimeoutResponse, TryAgainResponse},
     io::RespWriter,
     server::{ClientState, Telemetry},
     utils::RequestParser,
     utils::RespBuilderV2,
-    ClientCommands, GenericCommands, HashCommands, ListCommands, ParserError, SableError,
-    ServerCommands, ServerState, SetCommands, StorageAdapter, StringCommands, TransactionCommands,
-    ValkeyCommand, ValkeyCommandName, ZSetCommands,
+    ClientCommands, GenericCommands, HashCommands, ListCommands, LockCommands, ParserError,
+    SableError, ServerCommands, ServerState, SetCommands, StorageAdapter, StringCommands,
+    TransactionCommands, ValkeyCommand, ValkeyCommandName, ZSetCommands,
 };
 
 use bytes::BytesMut;
@@ -62,7 +62,9 @@ enum PreHandleCommandResult {
 /// Used by the `block_until` return code
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitResult {
+    /// Caller can try again
     TryAgain,
+    /// Timeout occurred
     Timeout,
 }
 
@@ -267,10 +269,15 @@ impl Client {
                             Self::send_response(&mut tx, &response, client_state.id()).await?;
                             break;
                         }
-                        ClientNextAction::Wait((rx, duration, timeout_response)) => {
+                        ClientNextAction::Wait((
+                            rx,
+                            duration,
+                            timeout_response,
+                            try_again_response,
+                        )) => {
                             // suspend the client for the specified duration or until a wakeup bit arrives
-                            match Self::wait_for(rx, duration).await {
-                                WaitResult::Timeout => {
+                            match (Self::wait_for(rx, duration).await, try_again_response) {
+                                (WaitResult::Timeout, _) => {
                                     if log_enabled!(Level::Debug) {
                                         client_state.debug("timeout occurred");
                                     }
@@ -293,13 +300,32 @@ impl Client {
                                     .await?;
                                     break;
                                 }
-                                WaitResult::TryAgain => {
+                                (WaitResult::TryAgain, TryAgainResponse::RunCommandAgain) => {
                                     if !client_state.active() {
                                         // Client is no longer active
                                         tracing::debug!("Client terminated while waiting");
                                         return Err(SableError::ConnectionClosed);
                                     }
+                                    // re-run the command
                                     continue;
+                                }
+                                (WaitResult::TryAgain, TryAgainResponse::RespondWith(response)) => {
+                                    Self::send_response(&mut tx, &response, client_state.id())
+                                        .await?;
+                                    break;
+                                }
+                                (
+                                    WaitResult::TryAgain,
+                                    TryAgainResponse::ClientAcquiredLock(lock_name),
+                                ) => {
+                                    client_state.locked_key_add(&lock_name);
+                                    Self::send_response(
+                                        &mut tx,
+                                        &BytesMut::from("+OK\r\n"),
+                                        client_state.id(),
+                                    )
+                                    .await?;
+                                    break;
                                 }
                             }
                         }
@@ -368,6 +394,12 @@ impl Client {
             }
             TimeoutResponse::Number(num) => {
                 builder.number_i64(&mut response_buffer, num);
+            }
+            TimeoutResponse::Ok => {
+                builder.ok(&mut response_buffer);
+            }
+            TimeoutResponse::Err(msg) => {
+                builder.error_string(&mut response_buffer, &msg);
             }
         }
         Ok(response_buffer)
@@ -485,6 +517,25 @@ impl Client {
         let builder = RespBuilderV2::default();
         let kind = command.metadata().name();
         let client_action = match kind {
+            ValkeyCommandName::Lock | ValkeyCommandName::Unlock => {
+                match LockCommands::handle_command(client_state.clone(), command.clone(), tx)
+                    .await?
+                {
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.id()).await?;
+                        ClientNextAction::NoAction
+                    }
+                    HandleCommandResult::Blocked((
+                        rx,
+                        duration,
+                        timeout_response,
+                        try_again_response,
+                    )) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response, try_again_response))
+                    }
+                    HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
+                }
+            }
             ValkeyCommandName::Ping => {
                 tx.write_all(PONG).await?;
                 Telemetry::inc_net_bytes_written(PONG.len() as u128);
@@ -521,7 +572,7 @@ impl Client {
                     HandleCommandResult::ResponseSent => {}
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
+                            "Internal error: client is in invalid state".to_string(),
                         ));
                     }
                 }
@@ -542,7 +593,7 @@ impl Client {
                     HandleCommandResult::ResponseSent => {}
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
+                            "Internal error: client is in invalid state".to_string(),
                         ));
                     }
                 }
@@ -600,8 +651,13 @@ impl Client {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
                         ClientNextAction::NoAction
                     }
-                    HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
-                        ClientNextAction::Wait((rx, duration, timeout_response))
+                    HandleCommandResult::Blocked((
+                        rx,
+                        duration,
+                        timeout_response,
+                        try_again_response,
+                    )) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response, try_again_response))
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                 }
@@ -612,7 +668,7 @@ impl Client {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
                     }
-                    HandleCommandResult::Blocked((_rx, _duration, _timeout_response)) => {}
+                    HandleCommandResult::Blocked(_) => {}
                     HandleCommandResult::ResponseSent => {}
                 }
                 ClientNextAction::NoAction
@@ -628,7 +684,7 @@ impl Client {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;
                     }
-                    HandleCommandResult::Blocked((_rx, _duration, _timeout_response)) => {}
+                    HandleCommandResult::Blocked(_) => {}
                     HandleCommandResult::ResponseSent => {}
                 }
                 ClientNextAction::NoAction
@@ -684,7 +740,7 @@ impl Client {
                 match HashCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
+                            "Internal error: client is in invalid state".to_string(),
                         ));
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
@@ -707,7 +763,7 @@ impl Client {
                 {
                     HandleCommandResult::Blocked(_) => {
                         return Err(SableError::OtherError(
-                            "Inernal error: client is in invalid state".to_string(),
+                            "Internal error: client is in invalid state".to_string(),
                         ));
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
@@ -753,8 +809,13 @@ impl Client {
             | ValkeyCommandName::Zscore
             | ValkeyCommandName::Zscan => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
-                    HandleCommandResult::Blocked((rx, duration, timeout_response)) => {
-                        ClientNextAction::Wait((rx, duration, timeout_response))
+                    HandleCommandResult::Blocked((
+                        rx,
+                        duration,
+                        timeout_response,
+                        try_again_response,
+                    )) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response, try_again_response))
                     }
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
@@ -810,7 +871,21 @@ impl Drop for Client {
             let _ = clients.borrow_mut().remove(&self.state.id());
         });
 
-        // drop any transcation related info for this client
+        // drop any transaction related info for this client
         self.state.discard_transaction();
+
+        let all_keys: Vec<BytesMut> = self.state.locked_key_get_all();
+        if !all_keys.is_empty() {
+            tracing::warn!(
+                "Client {} dropped while holding locks. Forcing lock release for: {:?}",
+                self.state.id(),
+                all_keys
+            );
+            let all_keys: Vec<&BytesMut> = all_keys.iter().collect();
+            let _ = self
+                .state
+                .server_inner_state()
+                .clear_locks(&all_keys, self.state.id());
+        }
     }
 }

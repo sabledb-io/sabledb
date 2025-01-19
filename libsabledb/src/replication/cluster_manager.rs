@@ -163,7 +163,7 @@ pub fn put_node_properties(
 /// Associate current node as a replica in shard `shard_name`
 pub fn add_replica_to_shard(
     options: Arc<StdRwLock<ServerOptions>>,
-    _shard_name: &String,
+    _shard_name: &str,
 ) -> Result<(), SableError> {
     check_cluster_db_or!(options, Ok(()));
 
