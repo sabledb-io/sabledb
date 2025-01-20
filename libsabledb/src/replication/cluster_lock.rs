@@ -1,4 +1,4 @@
-use crate::{replication::Persistence, SableError, Server, ServerOptions};
+use crate::{replication::Persistence, SableError, ServerOptions};
 use std::sync::{Arc, RwLock as StdRwLock};
 
 pub trait Lock {
@@ -57,26 +57,28 @@ impl Drop for BlockingLock {
     }
 }
 
-pub struct PrimaryLock {
+pub struct ClusterShardLock {
     lock: BlockingLock,
 }
 
-impl PrimaryLock {
-    pub fn new(options: Arc<StdRwLock<ServerOptions>>) -> Result<Self, SableError> {
-        let primary_node_id = Server::state().persistent_state().primary_node_id();
-        if primary_node_id.is_empty() {
+impl ClusterShardLock {
+    pub fn with_name(
+        shard_name: &String,
+        options: Arc<StdRwLock<ServerOptions>>,
+    ) -> Result<Self, SableError> {
+        if shard_name.is_empty() {
             return Err(SableError::InvalidArgument(
-                "Failed to create PrimaryLock. No primary".into(),
+                "Failed to create ClusterShardLock. Empty shard name provided".into(),
             ));
         }
 
-        Ok(PrimaryLock {
-            lock: BlockingLock::new(options, format!("{}_PRIMARY_LOCK", primary_node_id)),
+        Ok(ClusterShardLock {
+            lock: BlockingLock::new(options, format!("{}", shard_name)),
         })
     }
 }
 
-impl Lock for PrimaryLock {
+impl Lock for ClusterShardLock {
     fn is_locked(&self) -> bool {
         self.lock.is_locked()
     }

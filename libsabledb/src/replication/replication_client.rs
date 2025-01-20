@@ -367,7 +367,7 @@ impl ReplicationClient {
                             .persistent_state()
                             .set_primary_node_id(Some(common.node_id().to_string()));
 
-                        // Associate this node with its new primary
+                        // Add this node to the shard
                         if let Err(e) = cluster_manager::add_replica_to_shard(
                             Server::state().options().clone(),
                             shard_name,

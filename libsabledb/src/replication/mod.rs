@@ -14,7 +14,7 @@ pub use crate::SableError;
 pub use persistence::Persistence;
 
 pub use cluster_database::{ClusterDB, LockResult, UnLockResult};
-pub use cluster_lock::{BlockingLock, Lock, PrimaryLock};
+pub use cluster_lock::{BlockingLock, Lock, ClusterShardLock};
 pub use cluster_manager::NodeProperties;
 
 pub use replication_client::{ReplClientCommand, ReplicationClient};

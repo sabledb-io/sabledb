@@ -3,7 +3,7 @@ use crate::replication::{
     PROP_ROLE,
 };
 use crate::{
-    replication::{ClusterDB, Lock, PrimaryLock, ServerRole},
+    replication::{ClusterDB, ClusterShardLock, Lock, ServerRole},
     utils::{RespResponseParserV2, ResponseParseResult, TimeUtils, ValkeyObject},
     SableError, Server, ServerOptions, StorageAdapter, ValkeyCommand,
 };
@@ -163,7 +163,7 @@ pub fn put_node_properties(
 /// Associate current node as a replica in shard `shard_name`
 pub fn add_replica_to_shard(
     options: Arc<StdRwLock<ServerOptions>>,
-    _shard_name: &str,
+    shard_name: &String,
 ) -> Result<(), SableError> {
     check_cluster_db_or!(options, Ok(()));
 
@@ -171,19 +171,14 @@ pub fn add_replica_to_shard(
         return Ok(());
     }
 
-    let primary_node_id = Server::state().persistent_state().primary_node_id();
     let current_node_id = Server::state().persistent_state().id();
-    if primary_node_id.is_empty() {
-        tracing::warn!(
-            "Can't associate Replica({}) with Primary({})",
-            current_node_id,
-            primary_node_id
-        );
+    if shard_name.is_empty() {
+        tracing::warn!("{}: empty shard name", current_node_id,);
         return Ok(());
     }
 
     let db = ClusterDB::with_options(options);
-    db.update_replicas_set(&primary_node_id, &current_node_id)
+    db.update_replicas_set(shard_name, &current_node_id)
 }
 
 /// Update the cluster database that this node is a primary
@@ -223,19 +218,15 @@ pub async fn fail_over_if_needed(
     check_cluster_db_or!(options, Ok(()));
 
     // In order to be able to perform a failover, this instance needs to have a valid primary node ID
-    if Server::state()
-        .persistent_state()
-        .primary_node_id()
-        .is_empty()
-        && Server::state().persistent_state().is_replica()
-    {
+    if !Server::state().persistent_state().is_replica() {
         tracing::debug!("No primary is set yet, fail-over is ignored");
         return Ok(());
     }
 
+    let shard_name = Server::state().persistent_state().shard_name();
     // Synchronized the operations by using the shard lock
-    let mut primary_lock = PrimaryLock::new(options.clone())?;
-    primary_lock.lock()?;
+    let mut shard_lock = ClusterShardLock::with_name(&shard_name, options.clone())?;
+    shard_lock.lock()?;
 
     if !is_commands_queue_empty(options.clone()).await? {
         // Got commands to process, do it now
