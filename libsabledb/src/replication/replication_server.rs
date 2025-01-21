@@ -1,4 +1,4 @@
-use crate::replication::{cluster_manager, cluster_manager::NodeProperties, prepare_std_socket};
+use crate::replication::{cluster_manager, prepare_std_socket};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 use crate::storage::GetChangesLimits;
@@ -103,22 +103,6 @@ impl Drop for ReplicationThreadMarker {
         replication_thread_decr();
         if let Some(address) = &self.address {
             ReplicationTelemetry::remove_replica(address);
-
-            // If we are the last replica, clear our entry from the cluster database
-            if ReplicationTelemetry::connected_replicas() == 0 {
-                let options = Server::state().options();
-                tracing::info!(
-                    "Deleting entry {} from cluster database",
-                    Server::state().persistent_state().id()
-                );
-
-                if let Err(e) = cluster_manager::delete_self(options.clone()) {
-                    tracing::warn!(
-                        "Failed to delete primary entry from cluster database. {:?}",
-                        e
-                    );
-                }
-            }
         }
     }
 }
@@ -565,14 +549,14 @@ impl ReplicationServer {
 
     fn update_primary_info(options: Arc<StdRwLock<ServerOptions>>, store: &StorageAdapter) {
         // Update the current node info in the cluster manager database as primary
-        let node_info = NodeProperties::current(options.clone())
+        let node = crate::replication::NodeBuilder::default()
             .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
-            .with_role_primary();
-        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+            .build();
+        if let Err(e) = cluster_manager::put_node(options.clone(), node.clone()) {
             crate::warn_with_throttling!(
                 10,
                 "Error while updating self as Primary({:?}) in the cluster database. {:?}",
-                node_info,
+                node,
                 e
             );
         }

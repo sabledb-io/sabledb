@@ -1,11 +1,10 @@
 use crate::server::ServerOptions;
 use futures_intrusive::sync::ManualResetEvent;
 
+#[allow(unused_imports)]
 use crate::{
     io::Archive,
-    replication::{
-        cluster_manager, cluster_manager::NodeProperties, StorageUpdates, StorageUpdatesIterItem,
-    },
+    replication::{cluster_manager, NodeBuilder, StorageUpdates, StorageUpdatesIterItem},
     BatchUpdate, SableError, Server, StorageAdapter, U8ArrayReader,
 };
 use crate::{
@@ -105,10 +104,7 @@ impl ReplicationClient {
                                 }
                                 CheckShutdownResult::Timeout => {}
                                 CheckShutdownResult::Err(e) => {
-                                    error!(
-                                        "Error occurred while reading from channel. {:?}",
-                                        e
-                                    );
+                                    error!("{:?}",e);
                                     event.set();
                                     break; // leave the thread
                                 }
@@ -159,14 +155,13 @@ impl ReplicationClient {
                         match result {
                             RequestChangesResult::Success(sequence_number)
                             | RequestChangesResult::NoChanges(sequence_number) => {
-                                // Note: if there are no changes, the primary server will stall
-                                // the response. Update the cluster manager with the current info
-                                let node_info = NodeProperties::current(options.clone())
-                                    .with_last_txn_id(sequence_number)
-                                    .with_role_replica()
-                                    .with_primary_node_id(Server::state().persistent_state().primary_node_id());
-
-                                if let Err(e) = cluster_manager::put_node_properties(options.clone(), &node_info) {
+                                // update the cluster database
+                                if let Err(e) = cluster_manager::put_node(
+                                    options.clone(),
+                                    NodeBuilder::default()
+                                        .with_last_txn_id(sequence_number)
+                                        .build(),
+                                ) {
                                     tracing::warn!("Error while updating cluster manager. {:?}", e);
                                 }
                             }
@@ -245,7 +240,7 @@ impl ReplicationClient {
         writer.write_message(&mut buffer)?;
 
         // We now expect an ACK
-        let ReplicationResponse::Ok(common) = Self::read_replication_message(&mut reader)? else {
+        let ReplicationResponse::Ok(_) = Self::read_replication_message(&mut reader)? else {
             return Err(SableError::ProtocolError(
                 "Expected ReplicationResponse::Ok".to_string(),
             ));
@@ -301,12 +296,10 @@ impl ReplicationClient {
         }
 
         // Update the cluster manager with the current info
-        let node_info = NodeProperties::current(options.clone())
-            .with_last_txn_id(last_txn_id)
-            .with_role_replica()
-            .with_primary_node_id(common.node_id().to_string());
-
-        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+        if let Err(e) = cluster_manager::put_node(
+            options.clone(),
+            NodeBuilder::default().with_last_txn_id(last_txn_id).build(),
+        ) {
             tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
 
@@ -362,22 +355,13 @@ impl ReplicationClient {
                             shard_name,
                             common.node_id()
                         );
-                        // Store the primary's node ID (this also changes the state to Replica)
+                        // Store the primary's node ID (this also changes the role to ServerRole::Replica)
                         Server::state()
                             .persistent_state()
                             .set_primary_node_id(Some(common.node_id().to_string()));
-
-                        // Add this node to the shard
-                        if let Err(e) = cluster_manager::add_replica_to_shard(
-                            Server::state().options().clone(),
-                            shard_name,
-                        ) {
-                            tracing::warn!(
-                                "Failed to update shard: {} record. {:?}",
-                                shard_name,
-                                e,
-                            );
-                        }
+                        Server::state()
+                            .persistent_state()
+                            .set_shard_name(shard_name.clone());
                         JoinShardResult::Ok
                     }
                     ReplicationResponse::NotOk(common) => {
@@ -546,16 +530,19 @@ impl ReplicationClient {
             sequence_number.to_formatted_string(&Locale::en)
         );
 
-        // Update the current node info in the cluster manager database
-        let node_info = NodeProperties::current(options.clone())
-            .with_last_txn_id(sequence_number)
-            .with_role_replica()
-            .with_primary_node_id(common.node_id().to_string());
+        // Make sure that the global state is configured with the correct primary node ID
+        Server::state()
+            .persistent_state()
+            .set_primary_node_id(Some(common.node_id().to_string()));
 
-        if let Err(e) = cluster_manager::put_node_properties(options, &node_info) {
+        if let Err(e) = cluster_manager::put_node(
+            options.clone(),
+            NodeBuilder::default()
+                .with_last_txn_id(sequence_number)
+                .build(),
+        ) {
             tracing::warn!("Error while updating cluster manager. {:?}", e);
         }
-
         Self::write_next_sequence(sequence_file, sequence_number)
     }
 

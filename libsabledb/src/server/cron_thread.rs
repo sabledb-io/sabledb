@@ -1,9 +1,10 @@
 use crate::{
     metadata::{Bookkeeping, KeyPrefix, KeyType, ValueType},
+    replication::{cluster_manager, NodeBuilder},
     server::telemetry::Telemetry,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
-    LockManager, SableError, ServerOptions, StorageAdapter, ToU8Writer, U8ArrayBuilder,
+    LockManager, SableError, Server, ServerOptions, StorageAdapter, ToU8Writer, U8ArrayBuilder,
     U8ArrayReader, WorkerHandle,
 };
 use bytes::BytesMut;
@@ -157,6 +158,7 @@ impl Cron {
                 .scan_keys_secs as u64,
         ));
 
+        let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Seconds(5));
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
@@ -176,11 +178,30 @@ impl Cron {
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
                     if evict_ticker.try_tick()? {
+
                         Self::evict(&self.store).await?;
                     }
-
                     if scan_ticker.try_tick()? {
+                        // Scan the database for statistics purposes
                         Self::scan(&self.store).await?;
+                    }
+                    if cluster_db_updater_ticker.try_tick()? {
+                        // update the cluster database
+                        if let Some(updated_node) = cluster_manager::put_node(
+                            self.server_options.clone(),
+                            NodeBuilder::default()
+                                .with_last_txn_id(self.store.latest_sequence_number()?)
+                                .build(),
+                        )? {
+                            if !Server::state()
+                                    .persistent_state()
+                                    .slots()
+                                    .to_string()
+                                    .eq(updated_node.slots()) {
+                                tracing::info!("Slots updated to: {}", updated_node.slots());
+                                Server::state().persistent_state().set_slots(updated_node.slots())?;
+                            }
+                        }
                     }
                 }
             }
@@ -377,6 +398,7 @@ impl Cron {
         builder.write_key_type(KeyType::PrimaryKey);
         let mut db_iter = store.create_iterator(&prefix)?;
         let mut storage_metadata = StorageMetadata::default();
+        let mut counter = 0u64;
         while db_iter.valid() {
             let Some(key) = db_iter.key() else {
                 break;
@@ -397,6 +419,13 @@ impl Cron {
 
             storage_metadata.incr_keys(db_id);
             db_iter.next();
+
+            counter = counter.saturating_add(1);
+
+            if counter.rem_euclid(1_000) == 0 {
+                // free the CPU to some other task on this thread
+                tokio::task::yield_now().await;
+            }
         }
 
         tracing::debug!("Scan output: {:?}", storage_metadata);

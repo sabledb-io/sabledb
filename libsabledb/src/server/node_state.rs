@@ -119,6 +119,11 @@ impl ServerPersistentState {
         &self.slots
     }
 
+    #[inline]
+    pub fn set_slots(&self, slots: &String) -> Result<(), crate::SableError> {
+        self.slots.from_string(slots.as_str())
+    }
+
     /// Sets the remote address of the primary. This method also changes the role
     /// of this node to "Replica"
     #[inline]

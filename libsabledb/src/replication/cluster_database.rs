@@ -83,7 +83,7 @@ fn open_connection(options: Arc<StdRwLock<ServerOptions>>) {
 
     // Successfully opened the connection
     *CM_CONN.write().expect(MUTEX_ERR) = Some(client);
-    tracing::trace!("Success");
+    tracing::info!("Success");
 }
 
 /// Close the current connection, making sure that the next call to `open_connection`
@@ -284,50 +284,6 @@ impl ClusterDB {
             Ok(())
         })?;
         Ok(address_mut)
-    }
-
-    /// Push a command to the node-id
-    pub fn push_command(&self, node_id: &String, command: &String) -> Result<(), SableError> {
-        get_conn_and_run(self.options.clone(), |client| {
-            let queue_name = format!("{}_QUEUE", node_id);
-            tracing::info!("Sending command '{}' to queue '{}'", command, queue_name);
-            client.lpush::<&String, &String, redis::Value>(&queue_name, command)?;
-            tracing::info!("Success");
-            Ok(())
-        })
-    }
-
-    /// Pop a command from the top of the queue with a timeout
-    pub fn pop_command_with_timeout(
-        &self,
-        node_id: &String,
-        timeout_secs: f64,
-    ) -> Result<Option<String>, SableError> {
-        let mut val = Option::<String>::None;
-        get_conn_and_run(self.options.clone(), |client| {
-            let queue_name = format!("{}_QUEUE", node_id);
-            if let Value::Array(arr) =
-                client.brpop::<&String, redis::Value>(&queue_name, timeout_secs)?
-            {
-                if let Some(Value::BulkString(cmd)) = arr.get(1) {
-                    val = Some(String::from_utf8_lossy(cmd).to_string());
-                }
-            }
-            Ok(())
-        })?;
-        Ok(val)
-    }
-
-    pub fn command_queue_len(&self, node_id: &String) -> Result<usize, SableError> {
-        let mut qlen = 0usize;
-        get_conn_and_run(self.options.clone(), |client| {
-            let queue_name = format!("{}_QUEUE", node_id);
-            if let Value::Int(len) = client.llen::<&String, redis::Value>(&queue_name)? {
-                qlen = len.try_into().unwrap_or(0);
-            }
-            Ok(())
-        })?;
-        Ok(qlen)
     }
 
     /// ========---------------------------------------------

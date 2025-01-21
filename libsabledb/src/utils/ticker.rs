@@ -18,7 +18,7 @@ impl Ticker {
         }
     }
 
-    /// Check whether a "tick" occured. If a tick occured,
+    /// Check whether a "tick" occurred. If a tick occurred,
     /// this method also updates the "last_tick" timestamp
     pub fn try_tick(&mut self) -> Result<bool, SableError> {
         let (curts, interval) = match self.tick_interval {

@@ -1,4 +1,7 @@
-use crate::{replication::ServerRole, utils::TimeUtils, SableError, Server, ServerOptions};
+use crate::{
+    impl_builder_with_fn, replication::ServerRole, utils::TimeUtils, SableError, Server,
+    ServerOptions,
+};
 use redis::Client as ValkeyClient;
 use redis::Commands;
 use serde::{Deserialize, Serialize};
@@ -35,11 +38,11 @@ impl DbClient {
             return;
         }
 
-        self.is_completed = true;
         let Some(cluster_address) = options.read().expect(POISONED_MUTEX).get_cluster_address()
         else {
             // No cluster address
             tracing::debug!("Cluster database is not configured");
+            self.is_completed = true;
             return;
         };
 
@@ -75,13 +78,19 @@ impl DbClient {
             Ok(con) => {
                 self.client = Some(client);
                 self.conn = Some(con);
+                self.is_completed = true;
+            }
+            Err(e) if e.kind() == redis::ErrorKind::IoError => {
+                tracing::error!("Could not connect to cluster database. (IoError): {e}");
+                return;
             }
             Err(e) => {
                 tracing::error!("Could not connect to cluster database. {e}");
+                self.is_completed = true;
                 return;
             }
         }
-        tracing::trace!("Success");
+        tracing::info!("Success");
     }
 }
 
@@ -94,6 +103,8 @@ impl DbClient {
 pub struct Node {
     /// The node ID
     node_id: String,
+    /// The node ID of the primary (will be empty for primary node)
+    primary_node_id: String,
     /// The name of the shard this node belongs to
     shard_name: String,
     /// Last timestamp for this node. In microseconds since epoch
@@ -106,23 +117,30 @@ pub struct Node {
     public_address: String,
     /// The last txn ID stored on this node's database
     last_txn_id: u64,
+    /// The slots owned by this node
+    slots: String,
 }
 
 impl Default for Node {
     fn default() -> Self {
+        let server_state = Server::state();
+        let pstate = server_state.persistent_state();
+
         Node {
-            node_id: Server::state().persistent_state().id(),
-            shard_name: Server::state().persistent_state().shard_name(),
+            node_id: pstate.id(),
+            shard_name: pstate.shard_name(),
             last_updated: TimeUtils::epoch_micros().unwrap_or(0),
-            role: Server::state().persistent_state().role(),
-            private_address: Server::state()
+            role: pstate.role(),
+            primary_node_id: pstate.primary_node_id(),
+            slots: pstate.slots().to_string(),
+            private_address: server_state
                 .options()
                 .read()
                 .expect(POISONED_MUTEX)
                 .general_settings
                 .private_address
                 .clone(),
-            public_address: Server::state()
+            public_address: server_state
                 .options()
                 .read()
                 .expect(POISONED_MUTEX)
@@ -144,6 +162,114 @@ impl Node {
         self.role = role;
         self
     }
+
+    pub fn shard_name(&self) -> &String {
+        &self.shard_name
+    }
+
+    pub fn node_id(&self) -> &String {
+        &self.node_id
+    }
+
+    pub fn slots(&self) -> &String {
+        &self.slots
+    }
+
+    pub fn set_slots(&mut self, slots: String) {
+        self.slots = slots;
+    }
+
+    pub fn set_primary_node_id(&mut self, primary_node_id: String) {
+        self.primary_node_id = primary_node_id;
+    }
+
+    pub fn primary_node_id(&self) -> &String {
+        &self.primary_node_id
+    }
+
+    pub fn is_primary(&self) -> bool {
+        self.role == ServerRole::Primary
+    }
+
+    pub fn is_replica(&self) -> bool {
+        self.role == ServerRole::Replica
+    }
+
+    pub fn last_updated(&self) -> u64 {
+        self.last_updated
+    }
+
+    pub fn last_txn_id(&self) -> u64 {
+        self.last_txn_id
+    }
+
+    pub fn private_address(&self) -> String {
+        self.private_address.to_string()
+    }
+
+    pub fn public_address(&self) -> String {
+        self.public_address.to_string()
+    }
+
+    /// Return the queue name for this node
+    pub fn queue_name(&self) -> String {
+        format!("{}.QUEUE.{}", self.shard_name, self.node_id)
+    }
+}
+
+pub struct NodeBuilder {
+    node_id: String,
+    shard_name: String,
+    last_updated: u64,
+    role: ServerRole,
+    private_address: String,
+    public_address: String,
+    last_txn_id: u64,
+    slots: String,
+    primary_node_id: String,
+}
+
+impl Default for NodeBuilder {
+    fn default() -> NodeBuilder {
+        let node = Node::default();
+        NodeBuilder {
+            node_id: node.node_id,
+            shard_name: node.shard_name,
+            last_updated: node.last_updated,
+            role: node.role,
+            private_address: node.private_address,
+            public_address: node.public_address,
+            last_txn_id: node.last_txn_id,
+            slots: node.slots,
+            primary_node_id: node.primary_node_id,
+        }
+    }
+}
+
+impl NodeBuilder {
+    impl_builder_with_fn!(node_id, String);
+    impl_builder_with_fn!(shard_name, String);
+    impl_builder_with_fn!(last_updated, u64);
+    impl_builder_with_fn!(role, ServerRole);
+    impl_builder_with_fn!(private_address, String);
+    impl_builder_with_fn!(public_address, String);
+    impl_builder_with_fn!(last_txn_id, u64);
+    impl_builder_with_fn!(slots, String);
+    impl_builder_with_fn!(primary_node_id, String);
+
+    pub fn build(self) -> Node {
+        Node {
+            node_id: self.node_id,
+            shard_name: self.shard_name,
+            last_updated: self.last_updated,
+            role: self.role,
+            private_address: self.private_address,
+            public_address: self.public_address,
+            last_txn_id: self.last_txn_id,
+            slots: self.slots,
+            primary_node_id: self.primary_node_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -152,12 +278,61 @@ pub struct Shard {
     name: String,
     /// List of node IDs belong to this shard
     nodes: HashSet<String>,
-    /// The shard's primary ID
-    primary_node_id: String,
     /// The cluster name
     cluster_name: String,
     /// The slots owned by this shard
     slots: String,
+}
+
+#[derive(Default)]
+pub struct ShardBuilder {
+    name: String,
+    nodes: HashSet<String>,
+    cluster_name: String,
+    slots: String,
+}
+
+impl ShardBuilder {
+    pub fn with_nodes(mut self, nodes: &[&Node]) -> Self {
+        for node in nodes {
+            self.nodes.insert(node.node_id.clone());
+        }
+        self
+    }
+
+    impl_builder_with_fn!(name, String);
+    impl_builder_with_fn!(cluster_name, String);
+    impl_builder_with_fn!(slots, String);
+
+    pub fn build(self) -> Shard {
+        Shard {
+            name: self.name,
+            nodes: self.nodes,
+            cluster_name: self.cluster_name,
+            slots: self.slots,
+        }
+    }
+}
+
+impl Shard {
+    pub fn with_name(name: &str) -> Self {
+        Shard {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn add_node(&mut self, node: &Node) {
+        self.nodes.insert(node.node_id.clone());
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        self.name = name.to_string();
+    }
+
+    pub fn name(&self) -> &String {
+        &self.name
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -192,7 +367,7 @@ macro_rules! impl_persistence_get_for {
 
                     let s = String::from_utf8_lossy(&json).to_string();
                     let v: $type_name = serde_json::from_str(&s).map_err(|e| {
-                        SableError::OtherError(format!("Failed to convert JSON to Node. {e}"))
+                        SableError::OtherError(format!("Failed to convert JSON to Object. {e}"))
                     })?;
 
                     Ok(Some(v))
@@ -200,6 +375,61 @@ macro_rules! impl_persistence_get_for {
             }
         }
     };
+}
+
+#[derive(Debug, Clone)]
+pub enum ShardPrimaryResult {
+    /// Managed to find primary
+    Ok(Node),
+    /// Shard has multiple primaries
+    MultiplePrimaries,
+    /// Shard has no primary
+    NoPrimary,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ShardIsStableResult {
+    /// The shard is stable
+    Ok,
+    /// Shard has multiple primaries
+    MultiplePrimaries,
+    /// Shard has no primary
+    NoPrimary,
+    /// Members of the shard do not share the same slot range
+    MultipleSlotRange,
+    /// A replica node has no primary node ID set
+    ReplicaIsMissingPrimary,
+}
+
+impl PartialEq for ShardPrimaryResult {
+    fn eq(&self, other: &ShardPrimaryResult) -> bool {
+        matches!(
+            (self, other),
+            (Self::Ok(_), Self::Ok(_))
+                | (Self::MultiplePrimaries, Self::MultiplePrimaries)
+                | (Self::NoPrimary, Self::NoPrimary)
+        )
+    }
+}
+
+impl ShardPrimaryResult {
+    /// Convert `ShardPrimaryResult::Ok(node)` -> `Some(node)`, anything else is converted into `None`
+    pub fn ok(self) -> Option<Node> {
+        match self {
+            Self::Ok(node) => Some(node),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ShardPrimaryResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Self::Ok(_) => write!(f, "Ok(..)"),
+            Self::MultiplePrimaries => write!(f, "MultiplePrimaries"),
+            Self::NoPrimary => write!(f, "NoPrimary"),
+        }
+    }
 }
 
 impl Persistence {
@@ -212,7 +442,8 @@ impl Persistence {
 
     /// Insert or replace Node record into the database
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {
-        self.put(&node.node_id, node)
+        let key = format!("{}.{}", node.shard_name, node.node_id);
+        self.put(&key, node)
     }
 
     /// Insert or replace Shard record into the database
@@ -242,6 +473,12 @@ impl Persistence {
 
     pub fn lock(&self, lock_name: &String, timeout_ms: u64) -> Result<(), SableError> {
         DB_CONN.with_borrow_mut(|db_client| {
+            if lock_name.is_empty() {
+                return Err(SableError::InvalidArgument(
+                    "Unable to construct LOCK. Empty lock name provided".to_string(),
+                ));
+            }
+
             let Some(conn) = db_client.connection() else {
                 return Ok(());
             };
@@ -283,6 +520,167 @@ impl Persistence {
         })
     }
 
+    /// Retrieve the nodes of a given shard from the database
+    pub fn shard_nodes(&self, shard: &Shard) -> Result<Vec<Node>, SableError> {
+        let mut result = Vec::<Node>::default();
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok(());
+            };
+
+            // the nodes are kept in the form of "<shard>.<node-id>"
+            let node_keys: Vec<String> = shard
+                .nodes
+                .iter()
+                .map(|node_id| format!("{}.{}", &shard.name, node_id))
+                .collect();
+
+            let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
+            match res {
+                redis::Value::Array(arr) => {
+                    let mut it = arr.iter();
+                    while let Some(json) = it.next() {
+                        match json {
+                            redis::Value::Nil => { /* not found */ }
+                            redis::Value::BulkString(json) => {
+                                let s = String::from_utf8_lossy(&json).to_string();
+                                let v: Node = serde_json::from_str(&s).map_err(|e| {
+                                    SableError::OtherError(format!(
+                                        "Failed to convert JSON to Node. {e}"
+                                    ))
+                                })?;
+                                result.push(v);
+                            }
+                            other => {
+                                return Err(SableError::Corrupted(format!(
+                                    "Expected BulkString value. Found: {:?}",
+                                    other
+                                )));
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                other => Err(SableError::OtherError(format!(
+                    "Failed to get shard: '{}' nodes. {:?}",
+                    shard.name, other
+                ))),
+            }
+        })?;
+        Ok(result)
+    }
+
+    /// Find the primary node of a shard
+    pub fn shard_primary(&self, shard: &Shard) -> Result<ShardPrimaryResult, SableError> {
+        let nodes = self.shard_nodes(shard)?;
+        let nodes: Vec<&Node> = nodes.iter().collect();
+        Self::find_primary_node(&nodes)
+    }
+
+    /// Given a list of nodes, check to see if they form a shard. In case of true, return the
+    /// primary node
+    pub fn is_shard_stable(&self, nodes: &[&Node]) -> Result<ShardIsStableResult, SableError> {
+        // The primary node ID for this shard
+        let mut primary_node: Option<&Node> = None;
+
+        // Confirm exactly 1 primary node and find it
+        for node in nodes {
+            if node.role == ServerRole::Primary {
+                if primary_node.is_none() {
+                    primary_node = Some(node);
+                } else {
+                    // 2 primaries?
+                    return Ok(ShardIsStableResult::MultiplePrimaries);
+                }
+            }
+        }
+
+        if !primary_node.is_some() {
+            return Ok(ShardIsStableResult::NoPrimary);
+        }
+
+        let Some(primary_node) = primary_node else {
+            return Err(SableError::InternalError("Unexpected None!".into()));
+        };
+
+        // Confirm that all nodes have the same slots and all replicas are pointing to the same primary
+        for node in nodes {
+            if node.slots != primary_node.slots {
+                return Ok(ShardIsStableResult::MultipleSlotRange);
+            }
+
+            if node.role == ServerRole::Replica {
+                if node.primary_node_id.is_empty() {
+                    return Ok(ShardIsStableResult::ReplicaIsMissingPrimary);
+                }
+
+                // A replica that does not point to the correct primary node
+                if node.primary_node_id != primary_node.node_id {
+                    return Ok(ShardIsStableResult::MultiplePrimaries);
+                }
+            }
+        }
+        Ok(ShardIsStableResult::Ok)
+    }
+
+    /// Push a command to the node-id
+    pub fn queue_push_command(&self, node: &Node, command: &String) -> Result<(), SableError> {
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok(());
+            };
+
+            tracing::info!(
+                "Sending command '{}' to queue '{}'",
+                command,
+                &node.queue_name()
+            );
+            conn.lpush::<&String, &String, redis::Value>(&node.queue_name(), command)?;
+            tracing::info!("Success");
+            Ok(())
+        })
+    }
+
+    /// Pop a command from the top of the queue with a timeout
+    pub fn queue_pop_command_with_timeout(
+        &self,
+        node: &Node,
+        timeout_secs: f64,
+    ) -> Result<Option<String>, SableError> {
+        let mut val = Option::<String>::None;
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok::<(), SableError>(());
+            };
+            if let redis::Value::Array(arr) =
+                conn.brpop::<&String, redis::Value>(&node.queue_name(), timeout_secs)?
+            {
+                if let Some(redis::Value::BulkString(cmd)) = arr.get(1) {
+                    val = Some(String::from_utf8_lossy(cmd).to_string());
+                }
+            }
+            Ok(())
+        })?;
+        Ok(val)
+    }
+
+    /// Return the length of node's queue
+    pub fn queue_len(&self, node: &Node) -> Result<usize, SableError> {
+        let mut qlen = 0usize;
+        DB_CONN.with_borrow_mut(|db_client| {
+            let Some(conn) = db_client.connection() else {
+                return Ok::<(), SableError>(());
+            };
+            if let redis::Value::Int(len) =
+                conn.llen::<&String, redis::Value>(&node.queue_name())?
+            {
+                qlen = len.try_into().unwrap_or(0);
+            }
+            Ok(())
+        })?;
+        Ok(qlen)
+    }
+
     /// Insert or replace item into the database
     fn put<T>(&self, key: &String, value: &T) -> Result<(), SableError>
     where
@@ -299,6 +697,34 @@ impl Persistence {
             let _: redis::Value = conn.set(key, value)?;
             Ok(())
         })
+    }
+
+    /// Given a list of nodes, check to see if they form a shard. In case of true, return the
+    /// primary node
+    fn find_primary_node(nodes: &[&Node]) -> Result<ShardPrimaryResult, SableError> {
+        // The primary node ID for this shard
+        let mut primary_node: Option<&Node> = None;
+
+        // Confirm exactly 1 primary node and find it
+        for node in nodes {
+            if node.role == ServerRole::Primary {
+                if primary_node.is_none() {
+                    primary_node = Some(node);
+                } else {
+                    // 2 primaries?
+                    return Ok(ShardPrimaryResult::MultiplePrimaries);
+                }
+            }
+        }
+
+        if !primary_node.is_some() {
+            return Ok(ShardPrimaryResult::NoPrimary);
+        }
+
+        let Some(primary_node) = primary_node else {
+            return Err(SableError::InternalError("Unexpected None!".into()));
+        };
+        Ok(ShardPrimaryResult::Ok(primary_node.clone()))
     }
 }
 
@@ -322,5 +748,61 @@ mod tests {
 
         let de_node: Node = serde_json::from_str(s.as_str()).unwrap();
         assert_eq!(node, de_node);
+    }
+
+    #[test]
+    fn test_find_primary() {
+        let mut node1 = NodeBuilder::default()
+            .with_node_id("1".to_string())
+            .with_slots("0-100".to_string())
+            .with_role(ServerRole::Replica)
+            .build();
+        assert_eq!(node1.role, ServerRole::Replica);
+
+        let mut node2 = NodeBuilder::default()
+            .with_node_id("2".to_string())
+            .with_slots("100-200".to_string())
+            .with_role(ServerRole::Replica)
+            .build();
+        assert_eq!(node1.role, ServerRole::Replica);
+
+        // should fail: 2 replicas
+        assert_eq!(
+            ShardPrimaryResult::NoPrimary,
+            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
+        );
+
+        node1.set_role(ServerRole::Primary);
+        assert_eq!(node1.role, ServerRole::Primary);
+        assert_eq!(node2.role, ServerRole::Replica);
+
+        // We have Primary, but different slot range
+        assert_eq!(
+            ShardPrimaryResult::MultipleSlotRange,
+            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
+        );
+
+        // Fix the slot range issue
+        node2.set_slots(node1.slots().clone());
+
+        // We have a primary and corrected the slot range, but the replica points to an empty node ID
+        assert_eq!(
+            ShardPrimaryResult::ReplicaIsMissingPrimary,
+            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
+        );
+
+        node2.set_primary_node_id(node1.node_id.clone());
+        assert_eq!(
+            ShardPrimaryResult::Ok(Node::default()),
+            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
+        );
+
+        node2.set_role(ServerRole::Primary); // we now have 2 primaries
+
+        // Should fail: 2 primaries
+        assert_eq!(
+            ShardPrimaryResult::MultiplePrimaries,
+            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
+        );
     }
 }

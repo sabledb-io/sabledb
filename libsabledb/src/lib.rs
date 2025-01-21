@@ -216,6 +216,19 @@ macro_rules! impl_from_u8_reader_for_atomic {
     };
 }
 
+#[macro_export]
+macro_rules! impl_builder_with_fn {
+    ($prop_name:ident, $prop_type:ident) => {
+        // The macro will expand into the contents of this block.
+        paste::item! {
+            pub fn [< with_ $prop_name >](mut self, $prop_name: $prop_type) -> Self {
+                self.$prop_name = $prop_name;
+                self
+            }
+        }
+    };
+}
+
 //  _    _ _   _ _____ _______      _______ ______  _____ _______ _____ _   _  _____
 // | |  | | \ | |_   _|__   __|    |__   __|  ____|/ ____|__   __|_   _| \ | |/ ____|
 // | |  | |  \| | | |    | |    _     | |  | |__  | (___    | |    | | |  \| | |  __|
