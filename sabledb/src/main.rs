@@ -1,7 +1,7 @@
 use clap::Parser;
 use libsabledb::{
-    replication::cluster_manager, utils::IpPort, CommandLineArgs, SableError, Server,
-    ServerOptions, Transport, WorkerManager, WorkerMessage,
+    replication::ClusterManager, utils::IpPort, CommandLineArgs, SableError, Server, ServerOptions,
+    Transport, WorkerManager, WorkerMessage,
 };
 use std::net::TcpListener;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -125,7 +125,7 @@ fn main() -> Result<(), SableError> {
     }
 
     // Initialise the cluster manager
-    cluster_manager::initialise(options.clone());
+    ClusterManager::initialise();
 
     let _ = ctrlc::set_handler(move || {
         info!("Received Ctrl-C");

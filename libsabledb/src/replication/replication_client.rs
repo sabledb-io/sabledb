@@ -4,7 +4,7 @@ use futures_intrusive::sync::ManualResetEvent;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
-    replication::{cluster_manager, NodeBuilder, StorageUpdates, StorageUpdatesIterItem},
+    replication::{ClusterManager, NodeBuilder, StorageUpdates, StorageUpdatesIterItem},
     BatchUpdate, SableError, Server, StorageAdapter, U8ArrayReader,
 };
 use crate::{
@@ -86,12 +86,13 @@ impl ReplicationClient {
             rt.block_on(async move {
                 let primary_address = Server::state().persistent_state().primary_address();
                 tracing::info!("Connecting to primary at: {}", primary_address);
+                let cm = ClusterManager::with_options(options.clone());
                 loop {
                     let mut stream = match Self::connect_to_primary(primary_address.clone()) {
                         Err(e) => {
                             tracing::info!("Connect failed. {e}");
                             // Check whether we should attempt to reconnect
-                            if let Err(e) =  cluster_manager::fail_over_if_needed(options.clone(), &store).await {
+                            if let Err(e) = cm.fail_over_if_needed(&store).await {
                                 tracing::warn!("Cluster manager error. {:?}", e);
                             }
                             match Self::check_command_channel(&mut rx) {
@@ -144,25 +145,24 @@ impl ReplicationClient {
                     // and store them in our database
                     let mut request_id = 0u64;
                     loop {
-                        if let Err(e) = cluster_manager::fail_over_if_needed(options.clone(), &store).await {
-                            tracing::warn!("Cluster manager error. {:?}", e);
+                        if let Err(e) = cm.fail_over_if_needed(&store).await {
+                            tracing::warn!("Fail over check failed. {}", e);
                         }
 
                         let mut reader = TcpStreamBytesReader::new(&stream);
                         let mut writer = TcpStreamBytesWriter::new(&stream);
                         let result =
-                            Self::request_changes(&store, options.clone(), &mut reader, &mut writer, &mut rx, &mut request_id);
+                            Self::request_changes(&store, &cm, options.clone(), &mut reader, &mut writer, &mut rx, &mut request_id);
                         match result {
                             RequestChangesResult::Success(sequence_number)
                             | RequestChangesResult::NoChanges(sequence_number) => {
                                 // update the cluster database
-                                if let Err(e) = cluster_manager::put_node(
-                                    options.clone(),
+                                if let Err(e) = cm.put_node(
                                     NodeBuilder::default()
                                         .with_last_txn_id(sequence_number)
                                         .build(),
                                 ) {
-                                    tracing::warn!("Error while updating cluster manager. {:?}", e);
+                                    tracing::warn!("(run) error while updating cluster manager. {:?}", e);
                                 }
                             }
                             RequestChangesResult::Reconnect => {
@@ -178,7 +178,8 @@ impl ReplicationClient {
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) = Self::fullsync(&store, options.clone(), &mut stream, &mut request_id).await {
+                                if let Err(e) 
+                                    = Self::fullsync(&store, &cm, options.clone(), &mut stream, &mut request_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
                                     break;
@@ -222,6 +223,7 @@ impl ReplicationClient {
     /// Perform a fullsync with the primary
     async fn fullsync(
         store: &StorageAdapter,
+        cm: &ClusterManager,
         options: Arc<StdRwLock<ServerOptions>>,
         stream: &mut std::net::TcpStream,
         request_id: &mut u64,
@@ -296,11 +298,8 @@ impl ReplicationClient {
         }
 
         // Update the cluster manager with the current info
-        if let Err(e) = cluster_manager::put_node(
-            options.clone(),
-            NodeBuilder::default().with_last_txn_id(last_txn_id).build(),
-        ) {
-            tracing::warn!("Error while updating cluster manager. {:?}", e);
+        if let Err(e) = cm.put_node(NodeBuilder::default().with_last_txn_id(last_txn_id).build()) {
+            tracing::warn!("(fullsync) error while updating cluster manager. {:?}", e);
         }
 
         let _ = std::fs::remove_file(&output_file_name);
@@ -387,6 +386,7 @@ impl ReplicationClient {
     /// request to change role from replica -> primary)
     fn request_changes(
         store: &StorageAdapter,
+        cm: &ClusterManager,
         options: Arc<StdRwLock<ServerOptions>>,
         reader: &mut impl BytesReader,
         writer: &mut impl BytesWriter,
@@ -535,13 +535,15 @@ impl ReplicationClient {
             .persistent_state()
             .set_primary_node_id(Some(common.node_id().to_string()));
 
-        if let Err(e) = cluster_manager::put_node(
-            options.clone(),
+        if let Err(e) = cm.put_node(
             NodeBuilder::default()
                 .with_last_txn_id(sequence_number)
                 .build(),
         ) {
-            tracing::warn!("Error while updating cluster manager. {:?}", e);
+            tracing::warn!(
+                "(request_changes) error while updating cluster manager. {:?}",
+                e
+            );
         }
         Self::write_next_sequence(sequence_file, sequence_number)
     }
@@ -653,10 +655,12 @@ mod tests {
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
         let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
+        let cm = ClusterManager::with_options(server_options.clone());
         let mut request_id = 0u64;
         server_options.write().unwrap().open_params = replica_db.open_params().clone();
         let res = ReplicationClient::request_changes(
             &replica_db,
+            &cm,
             server_options,
             &mut reader,
             &mut writer,
@@ -706,9 +710,11 @@ mod tests {
         let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
         server_options.write().unwrap().open_params = replica_db.open_params().clone();
 
+        let cm = ClusterManager::with_options(server_options.clone());
         let mut request_id = 1u64;
         ReplicationClient::request_changes(
             &replica_db,
+            &cm,
             server_options,
             &mut reader,
             &mut writer,

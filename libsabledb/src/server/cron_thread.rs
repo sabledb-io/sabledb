@@ -1,6 +1,6 @@
 use crate::{
     metadata::{Bookkeeping, KeyPrefix, KeyType, ValueType},
-    replication::{cluster_manager, NodeBuilder},
+    replication::{ClusterManager, NodeBuilder},
     server::telemetry::Telemetry,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
@@ -159,6 +159,7 @@ impl Cron {
         ));
 
         let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Seconds(5));
+        let cm = ClusterManager::with_options(self.server_options.clone());
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
@@ -187,8 +188,7 @@ impl Cron {
                     }
                     if cluster_db_updater_ticker.try_tick()? {
                         // update the cluster database
-                        if let Some(updated_node) = cluster_manager::put_node(
-                            self.server_options.clone(),
+                        if let Some(updated_node) = cm.put_node(
                             NodeBuilder::default()
                                 .with_last_txn_id(self.store.latest_sequence_number()?)
                                 .build(),

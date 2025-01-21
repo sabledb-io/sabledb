@@ -5,7 +5,6 @@ use crate::{
     commands::{HandleCommandResult, StringCommands},
     metadata::{CommonValueMetadata, KeyType},
     parse_string_to_number,
-    replication::cluster_manager,
     server::ClientState,
     storage::StringsDb,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError,

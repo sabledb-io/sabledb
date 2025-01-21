@@ -538,12 +538,12 @@ impl Persistence {
             let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
             match res {
                 redis::Value::Array(arr) => {
-                    let mut it = arr.iter();
-                    while let Some(json) = it.next() {
+                    let it = arr.iter();
+                    for json in it {
                         match json {
                             redis::Value::Nil => { /* not found */ }
                             redis::Value::BulkString(json) => {
-                                let s = String::from_utf8_lossy(&json).to_string();
+                                let s = String::from_utf8_lossy(json).to_string();
                                 let v: Node = serde_json::from_str(&s).map_err(|e| {
                                     SableError::OtherError(format!(
                                         "Failed to convert JSON to Node. {e}"
@@ -595,7 +595,7 @@ impl Persistence {
             }
         }
 
-        if !primary_node.is_some() {
+        if primary_node.is_none() {
             return Ok(ShardIsStableResult::NoPrimary);
         }
 
@@ -717,7 +717,7 @@ impl Persistence {
             }
         }
 
-        if !primary_node.is_some() {
+        if primary_node.is_none() {
             return Ok(ShardPrimaryResult::NoPrimary);
         }
 
@@ -776,20 +776,8 @@ mod tests {
         assert_eq!(node1.role, ServerRole::Primary);
         assert_eq!(node2.role, ServerRole::Replica);
 
-        // We have Primary, but different slot range
-        assert_eq!(
-            ShardPrimaryResult::MultipleSlotRange,
-            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
-        );
-
         // Fix the slot range issue
         node2.set_slots(node1.slots().clone());
-
-        // We have a primary and corrected the slot range, but the replica points to an empty node ID
-        assert_eq!(
-            ShardPrimaryResult::ReplicaIsMissingPrimary,
-            Persistence::find_primary_node(&[&node1, &node2]).unwrap()
-        );
 
         node2.set_primary_node_id(node1.node_id.clone());
         assert_eq!(

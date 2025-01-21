@@ -69,8 +69,6 @@ pub enum SableError {
     /// Failover related error
     #[error("AutoFailOverError error. {0}")]
     AutoFailOverError(String),
-    #[error("ClusterDB error. {0}")]
-    ClsuterDbError(String),
     #[error("Index out of rage. {0}")]
     IndexOutOfRange(String),
     #[error("Some or all the slots in the command are not owned by this node")]

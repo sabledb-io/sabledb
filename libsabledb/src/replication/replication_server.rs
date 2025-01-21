@@ -1,4 +1,4 @@
-use crate::replication::{cluster_manager, prepare_std_socket};
+use crate::replication::{prepare_std_socket, ClusterManager};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 use crate::storage::GetChangesLimits;
@@ -125,7 +125,6 @@ impl ReplicationServer {
     /// changes
     fn send_checkpoint(
         store: &StorageAdapter,
-        _options: Arc<StdRwLock<ServerOptions>>,
         replica_addr: &String,
         stream: &mut std::net::TcpStream,
     ) -> Result<u64, SableError> {
@@ -190,6 +189,7 @@ impl ReplicationServer {
     /// This function reads a single replication request and responds with the proper response.
     fn handle_single_request(
         store: &StorageAdapter,
+        cm: &ClusterManager,
         options: Arc<StdRwLock<ServerOptions>>,
         stream: &mut std::net::TcpStream,
         replica_node_id: &String,
@@ -216,7 +216,7 @@ impl ReplicationServer {
                             "Received request to shutdown - bye".into(),
                         );
                     }
-                    Self::update_primary_info(options.clone(), store);
+                    Self::update_primary_info(store, cm);
                     continue;
                 }
             };
@@ -254,16 +254,15 @@ impl ReplicationServer {
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
-                let changes_count =
-                    match Self::send_checkpoint(store, options.clone(), replica_node_id, stream) {
-                        Err(e) => {
-                            return HandleRequestResult::NetError(format!(
-                                "Failed sending db checkpoint to replica {}. {:?}",
-                                replica_node_id, e
-                            ));
-                        }
-                        Ok(count) => count,
-                    };
+                let changes_count = match Self::send_checkpoint(store, replica_node_id, stream) {
+                    Err(e) => {
+                        return HandleRequestResult::NetError(format!(
+                            "Failed sending db checkpoint to replica {}. {:?}",
+                            replica_node_id, e
+                        ));
+                    }
+                    Ok(count) => count,
+                };
 
                 let replinfo = ReplicaTelemetry {
                     last_change_sequence_number: changes_count,
@@ -272,8 +271,9 @@ impl ReplicationServer {
                 ReplicationTelemetry::update_replica_info(replica_node_id.to_string(), replinfo);
 
                 // Update the current node info in the cluster manager database as primary
-                Self::update_primary_info(options.clone(), store);
+                Self::update_primary_info(store, cm);
             }
+
             ReplicationRequest::GetUpdatesSince((common, seq)) => {
                 debug!(
                     "Received request GetUpdatesSince({}, ChangesSince:{})",
@@ -451,6 +451,7 @@ impl ReplicationServer {
                 .private_address
         );
 
+        let cm = ClusterManager::with_options(options.clone());
         loop {
             // Accept with timeout
             let accept_fut = listener.accept();
@@ -467,8 +468,7 @@ impl ReplicationServer {
                 future::Either::Right(_) => {
                     // TimeOut, do a tick operation here
                     tracing::trace!("Checking node's queue...");
-                    if let Err(e) = cluster_manager::check_node_queue(options.clone(), &store).await
-                    {
+                    if let Err(e) = cm.check_node_queue(&store).await {
                         tracing::warn!("Failed to process node command queue. {:?}", e);
                     }
                 }
@@ -515,9 +515,11 @@ impl ReplicationServer {
                 return;
             }
 
+            let cm = ClusterManager::with_options(server_options_clone.clone());
             loop {
                 match Self::handle_single_request(
                     &store_clone,
+                    &cm,
                     server_options_clone.clone(),
                     &mut stream,
                     &replica_name,
@@ -541,18 +543,18 @@ impl ReplicationServer {
                         break;
                     }
                 }
-                Self::update_primary_info(server_options_clone.clone(), &store_clone);
+                Self::update_primary_info(&store_clone, &cm);
             }
         });
         Ok(())
     }
 
-    fn update_primary_info(options: Arc<StdRwLock<ServerOptions>>, store: &StorageAdapter) {
+    fn update_primary_info(store: &StorageAdapter, cm: &ClusterManager) {
         // Update the current node info in the cluster manager database as primary
         let node = crate::replication::NodeBuilder::default()
             .with_last_txn_id(store.latest_sequence_number().unwrap_or_default())
             .build();
-        if let Err(e) = cluster_manager::put_node(options.clone(), node.clone()) {
+        if let Err(e) = cm.put_node(node.clone()) {
             crate::warn_with_throttling!(
                 10,
                 "Error while updating self as Primary({:?}) in the cluster database. {:?}",

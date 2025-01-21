@@ -120,8 +120,8 @@ impl ServerPersistentState {
     }
 
     #[inline]
-    pub fn set_slots(&self, slots: &String) -> Result<(), crate::SableError> {
-        self.slots.from_string(slots.as_str())
+    pub fn set_slots(&self, slots: &str) -> Result<(), crate::SableError> {
+        self.slots.from_string(slots)
     }
 
     /// Sets the remote address of the primary. This method also changes the role
