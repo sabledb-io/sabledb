@@ -106,7 +106,25 @@ impl std::fmt::Display for ReplicationTelemetry {
             "node_id:{}",
             Server::state().persistent_state().id()
         ));
-
+        lines.push(format!(
+            "shard:{}",
+            Server::state().persistent_state().shard_name()
+        ));
+        lines.push(format!(
+            "slots:{}",
+            Server::state().persistent_state().slots()
+        ));
+        lines.push(format!(
+            "cluster_database:{}",
+            Server::state()
+                .options()
+                .read()
+                .expect("poisoned mutex")
+                .general_settings
+                .cluster_address
+                .clone()
+                .unwrap_or_default()
+        ));
         lines.push(format!(
             "last_db_update_sequence_number:{}",
             self.last_change_sequence_number

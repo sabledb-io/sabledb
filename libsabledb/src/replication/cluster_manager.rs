@@ -285,7 +285,11 @@ impl ClusterManager {
         };
 
         if let Some(primary_node) = primary_node {
-            node.set_slots(primary_node.slots().to_string());
+            if node.is_replica() {
+                // We only copy over the slots when the node that we want to update in the database
+                // is the replica, otherwise, we use the provided slots (i.e. we do not change them)
+                node.set_slots(primary_node.slots().to_string());
+            }
             node.set_primary_node_id(primary_node.node_id().to_string());
         }
 
@@ -293,6 +297,7 @@ impl ClusterManager {
         db.put_node(&node)?;
         Ok(Some(node))
     }
+
     /// Broadcast all members of this shard that a failover is taking place
     async fn broadcast_failover(
         &self,

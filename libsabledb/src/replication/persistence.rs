@@ -401,9 +401,8 @@ macro_rules! impl_persistence_get_for {
                     })?;
 
                     Ok(Some(v))
-                }).map(|v| {
+                }).inspect(|_| {
                     cg.mark_success();
-                    v
                 })
             }
         }
@@ -472,7 +471,7 @@ impl Persistence {
         });
         Persistence { options }
     }
-    
+
     /// Mainly used by tests
     pub fn with_connection(
         options: Arc<StdRwLock<ServerOptions>>,
@@ -489,27 +488,24 @@ impl Persistence {
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
         let key = format!("{}.{}", node.shard_name, node.node_id);
-        self.put(&key, node).map(|v| {
+        self.put(&key, node).inspect(|_| {
             cg.mark_success();
-            v
         })
     }
 
     /// Insert or replace Shard record into the database
     pub fn put_shard(&self, shard: &Shard) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
-        self.put(&shard.name, shard).map(|v| {
+        self.put(&shard.name, shard).inspect(|_| {
             cg.mark_success();
-            v
         })
     }
 
     /// Insert or replace Shard record into the database
     pub fn put_cluster(&self, cluster: &Cluster) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
-        self.put(&cluster.name, cluster).map(|v| {
+        self.put(&cluster.name, cluster).inspect(|_| {
             cg.mark_success();
-            v
         })
     }
 
@@ -524,9 +520,8 @@ impl Persistence {
                 let _: redis::Value = conn.del(item_id)?;
                 Ok(())
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })
     }
 
@@ -563,9 +558,8 @@ impl Persistence {
                     ))),
                 }
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })
     }
 
@@ -589,9 +583,8 @@ impl Persistence {
                     ))),
                 }
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })
     }
 
@@ -644,9 +637,8 @@ impl Persistence {
                     ))),
                 }
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })?;
         Ok(result)
     }
@@ -656,9 +648,8 @@ impl Persistence {
         let mut cg = ConnectionGuard::default();
         let nodes = self.shard_nodes(shard)?;
         let nodes: Vec<&Node> = nodes.iter().collect();
-        Self::find_primary_node(&nodes).map(|v| {
+        Self::find_primary_node(&nodes).inspect(|_| {
             cg.mark_success();
-            v
         })
     }
 
@@ -726,9 +717,8 @@ impl Persistence {
                 tracing::info!("Success");
                 Ok(())
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })
     }
 
@@ -754,9 +744,8 @@ impl Persistence {
                 }
                 Ok(())
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })?;
         Ok(val)
     }
@@ -777,9 +766,8 @@ impl Persistence {
                 }
                 Ok(())
             })
-            .map(|v| {
+            .inspect(|_| {
                 cg.mark_success();
-                v
             })?;
         Ok(qlen)
     }
