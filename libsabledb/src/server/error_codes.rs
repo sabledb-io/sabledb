@@ -24,6 +24,8 @@ pub enum SableError {
     EmptyCommand,
     #[error("Connection closed")]
     ConnectionClosed,
+    #[error("Connection is not opened")]
+    ConnectionNotOpened,
     #[error("Broken pipe")]
     BrokenPipe,
     #[error("Not found")]
@@ -73,6 +75,8 @@ pub enum SableError {
     IndexOutOfRange(String),
     #[error("Some or all the slots in the command are not owned by this node")]
     NotOwner(Vec<u16>),
+    #[error("Try again later. Backoff triggered")]
+    Backoff,
 }
 
 #[allow(dead_code)]

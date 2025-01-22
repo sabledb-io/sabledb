@@ -5,7 +5,7 @@ use crate::{
         ShardPrimaryResult,
     },
     utils::{RespResponseParserV2, ResponseParseResult, TimeUtils, ValkeyObject},
-    SableError, Server, ServerOptions, StorageAdapter, ValkeyCommand,
+    SableError, Server, ServerOptions, SimpleBackoff, StorageAdapter, ValkeyCommand,
 };
 use num_format::{Locale, ToFormattedString};
 use rand::Rng;
@@ -60,79 +60,92 @@ macro_rules! check_cluster_db_or {
 
 pub struct ClusterManager {
     options: Arc<StdRwLock<ServerOptions>>,
+    backoff: SimpleBackoff,
 }
+
+use std::sync::Once;
+static START: Once = Once::new();
 
 impl ClusterManager {
     pub fn with_options(options: Arc<StdRwLock<ServerOptions>>) -> Self {
+        START.call_once(|| {
+            let mut rng = rand::thread_rng();
+            let us = rng.gen_range(5000000..10_000000);
+            CHECK_PRIMARY_ALIVE_INTERVAL.store(us, Ordering::Relaxed);
+            tracing::info!(
+                "Check primary interval is set to {} microseconds",
+                us.to_formatted_string(&Locale::en)
+            );
+            NOT_RESPONDING_COUNTER.store(0, Ordering::Relaxed);
+        });
         ClusterManager {
             options: options.clone(),
+            // delay between errors is min of 100ms and up to 5,000ms
+            // we use backoff which doubles the value after each failure,
+            // so the delays are: [100, 200, 400, 800... 5000]
+            backoff: SimpleBackoff::with_range(1_000, 5_000),
         }
-    }
-
-    /// Initialise the cluster manager API
-    pub fn initialise() {
-        let mut rng = rand::thread_rng();
-        let us = rng.gen_range(5000000..10_000000);
-        CHECK_PRIMARY_ALIVE_INTERVAL.store(us, Ordering::Relaxed);
-        tracing::info!(
-            "Check primary interval is set to {} microseconds",
-            us.to_formatted_string(&Locale::en)
-        );
-        NOT_RESPONDING_COUNTER.store(0, Ordering::Relaxed);
     }
 
     /// Update this node with the server manager database. A node is always associated with a shard
     /// If the shard does not exist, this function will also create it
     ///
     /// If update was done successfully, return the updated node
-    pub fn put_node(&self, mut node: Node) -> Result<Option<Node>, SableError> {
-        check_cluster_db_or!(self.options, Ok(None));
-        if node.shard_name().is_empty() {
-            tracing::warn!(
-                "No shard name is provided. Can not add node '{}' to cluster database",
-                node.node_id(),
-            );
+    pub fn put_node(&self, node: Node) -> Result<Option<Node>, SableError> {
+        if self.backoff.can_try().gt(&0) {
             return Ok(None);
         }
+        self.put_node_internal(node)
+            .map_err(|e| {
+                self.backoff.incr_error();
+                e
+            })
+            .map(|v| {
+                self.backoff.reset();
+                v
+            })
+    }
 
-        let db = Persistence::with_options(self.options.clone());
-
-        // Lock the shard
-        let mut lk = BlockingLock::with_db(&db, node.shard_name().to_string());
-        lk.lock()?;
-        // Make sure that this node appears in the Shard information
-        let (shard, primary_node) = if let Some(mut shard) = db.get_shard(node.shard_name())? {
-            shard.add_node(&node);
-            let primary_node = db.shard_primary(&shard)?.ok();
-            (shard, primary_node)
-        } else {
-            let server_state = Server::state();
-            let server_state = server_state.persistent_state();
-
-            // first time, create the shard entry and put it in the database
-            (
-                ShardBuilder::default()
-                    .with_name(node.shard_name().clone())
-                    .with_nodes(&[&node])
-                    .with_slots(server_state.slots().to_string())
-                    .with_cluster_name(server_state.cluster_name())
-                    .build(),
-                None,
-            )
-        };
-
-        if let Some(primary_node) = primary_node {
-            node.set_slots(primary_node.slots().to_string());
-            node.set_primary_node_id(primary_node.node_id().to_string());
+    /// Check and perform failover is needed
+    pub async fn fail_over_if_needed(&self, store: &StorageAdapter) -> Result<(), SableError> {
+        if self.backoff.can_try().gt(&0) {
+            return Ok(());
         }
-
-        db.put_shard(&shard)?;
-        db.put_node(&node)?;
-        Ok(Some(node))
+        self.fail_over_if_needed_internal(store)
+            .await
+            .map_err(|e| {
+                self.backoff.incr_error();
+                e
+            })
+            .map(|v| {
+                self.backoff.reset();
+                v
+            })
     }
 
     /// If there are commands on this node's queue, process one
     pub async fn check_node_queue(&self, store: &StorageAdapter) -> Result<(), SableError> {
+        if self.backoff.can_try().gt(&0) {
+            return Ok(());
+        }
+        self.check_node_queue_internal(store)
+            .await
+            .map_err(|e| {
+                self.backoff.incr_error();
+                e
+            })
+            .map(|v| {
+                self.backoff.reset();
+                v
+            })
+    }
+
+    //===------------------------------
+    // Private API calls
+    //===------------------------------
+
+    /// If there are commands on this node's queue, process one
+    async fn check_node_queue_internal(&self, store: &StorageAdapter) -> Result<(), SableError> {
         check_cluster_db_or!(self.options, Ok(()));
 
         let db = Persistence::with_options(self.options.clone());
@@ -145,7 +158,7 @@ impl ClusterManager {
     }
 
     /// Check and perform failover is needed
-    pub async fn fail_over_if_needed(&self, store: &StorageAdapter) -> Result<(), SableError> {
+    async fn fail_over_if_needed_internal(&self, store: &StorageAdapter) -> Result<(), SableError> {
         check_cluster_db_or!(self.options, Ok(()));
 
         // In order to be able to perform a failover, this instance needs to be a replica
@@ -237,11 +250,51 @@ impl ClusterManager {
         }
         Ok(())
     }
+    fn put_node_internal(&self, mut node: Node) -> Result<Option<Node>, SableError> {
+        check_cluster_db_or!(self.options, Ok(None));
+        if node.shard_name().is_empty() {
+            tracing::warn!(
+                "No shard name is provided. Can not add node '{}' to cluster database",
+                node.node_id(),
+            );
+            return Ok(None);
+        }
 
-    //===------------------------------
-    // Private API calls
-    //===------------------------------
+        let db = Persistence::with_options(self.options.clone());
 
+        // Lock the shard
+        let mut lk = BlockingLock::with_db(&db, node.shard_name().to_string());
+        lk.lock()?;
+        // Make sure that this node appears in the Shard information
+        let (shard, primary_node) = if let Some(mut shard) = db.get_shard(node.shard_name())? {
+            shard.add_node(&node);
+            let primary_node = db.shard_primary(&shard)?.ok();
+            (shard, primary_node)
+        } else {
+            let server_state = Server::state();
+            let server_state = server_state.persistent_state();
+
+            // first time, create the shard entry and put it in the database
+            (
+                ShardBuilder::default()
+                    .with_name(node.shard_name().clone())
+                    .with_nodes(&[&node])
+                    .with_slots(server_state.slots().to_string())
+                    .with_cluster_name(server_state.cluster_name())
+                    .build(),
+                None,
+            )
+        };
+
+        if let Some(primary_node) = primary_node {
+            node.set_slots(primary_node.slots().to_string());
+            node.set_primary_node_id(primary_node.node_id().to_string());
+        }
+
+        db.put_shard(&shard)?;
+        db.put_node(&node)?;
+        Ok(Some(node))
+    }
     /// Broadcast all members of this shard that a failover is taking place
     async fn broadcast_failover(
         &self,

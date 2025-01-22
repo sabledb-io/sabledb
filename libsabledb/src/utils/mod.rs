@@ -4,10 +4,13 @@ pub mod request_parser;
 pub mod resp_builder_v2;
 pub mod resp_response_parser_v2;
 pub mod shard_locker;
+mod simple_backoff;
 pub mod stopwatch;
 pub mod ticker;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
+
+pub use simple_backoff::*;
 
 pub use crate::{
     impl_from_u8_reader_for, impl_from_u8_reader_for_atomic, impl_to_u8_builder_for,

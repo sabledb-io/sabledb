@@ -16,6 +16,35 @@ thread_local! {
     static DB_CONN: RefCell<DbClient> = RefCell::<DbClient>::default();
 }
 
+struct ConnectionGuard {
+    reset_connection: bool,
+}
+
+impl ConnectionGuard {
+    pub fn mark_success(&mut self) {
+        self.reset_connection = false;
+    }
+}
+
+impl Default for ConnectionGuard {
+    fn default() -> Self {
+        ConnectionGuard {
+            reset_connection: true,
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        if self.reset_connection {
+            DB_CONN.with_borrow_mut(|db_client| {
+                db_client.is_completed = false;
+                db_client.conn = None;
+            });
+        }
+    }
+}
+
 #[derive(Default)]
 struct DbClient {
     client: Option<ValkeyClient>,
@@ -356,9 +385,10 @@ macro_rules! impl_persistence_get_for {
             /// Read record from the database by `key`
             pub fn $func_name(&self, key: &String) -> Result<Option<$type_name>, SableError>
             {
+                let mut cg = ConnectionGuard::default();
                 DB_CONN.with_borrow_mut(|db_client| {
                     let Some(conn) = db_client.connection() else {
-                        return Ok(None);
+                        return Err(SableError::ConnectionNotOpened);
                     };
 
                     let redis::Value::BulkString(json) = conn.get(key)? else {
@@ -371,6 +401,9 @@ macro_rules! impl_persistence_get_for {
                     })?;
 
                     Ok(Some(v))
+                }).map(|v| {
+                    cg.mark_success();
+                    v
                 })
             }
         }
@@ -442,29 +475,47 @@ impl Persistence {
 
     /// Insert or replace Node record into the database
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {
+        let mut cg = ConnectionGuard::default();
         let key = format!("{}.{}", node.shard_name, node.node_id);
-        self.put(&key, node)
+        self.put(&key, node).map(|v| {
+            cg.mark_success();
+            v
+        })
     }
 
     /// Insert or replace Shard record into the database
     pub fn put_shard(&self, shard: &Shard) -> Result<(), SableError> {
-        self.put(&shard.name, shard)
+        let mut cg = ConnectionGuard::default();
+        self.put(&shard.name, shard).map(|v| {
+            cg.mark_success();
+            v
+        })
     }
 
     /// Insert or replace Shard record into the database
     pub fn put_cluster(&self, cluster: &Cluster) -> Result<(), SableError> {
-        self.put(&cluster.name, cluster)
+        let mut cg = ConnectionGuard::default();
+        self.put(&cluster.name, cluster).map(|v| {
+            cg.mark_success();
+            v
+        })
     }
 
     /// Delete item from the database by its ID
     pub fn delete(&self, item_id: &String) -> Result<(), SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok(());
-            };
-            let _: redis::Value = conn.del(item_id)?;
-            Ok(())
-        })
+        let mut cg = ConnectionGuard::default();
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
+                let _: redis::Value = conn.del(item_id)?;
+                Ok(())
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })
     }
 
     impl_persistence_get_for!(get_node, Node);
@@ -472,109 +523,131 @@ impl Persistence {
     impl_persistence_get_for!(get_cluster, Cluster);
 
     pub fn lock(&self, lock_name: &String, timeout_ms: u64) -> Result<(), SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            if lock_name.is_empty() {
-                return Err(SableError::InvalidArgument(
-                    "Unable to construct LOCK. Empty lock name provided".to_string(),
-                ));
-            }
-
-            let Some(conn) = db_client.connection() else {
-                return Ok(());
-            };
-
-            let res: redis::Value = redis::cmd("LOCK")
-                .arg(lock_name)
-                .arg(timeout_ms)
-                .query(conn)?;
-            match res {
-                redis::Value::Okay => {
-                    // we got the lock
-                    Ok(())
+        let mut cg = ConnectionGuard::default();
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                if lock_name.is_empty() {
+                    return Err(SableError::InvalidArgument(
+                        "Unable to construct LOCK. Empty lock name provided".to_string(),
+                    ));
                 }
-                other => Err(SableError::OtherError(format!(
-                    "Failed to lock: {lock_name}. {:?}",
-                    other
-                ))),
-            }
-        })
+
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
+
+                let res: redis::Value = redis::cmd("LOCK")
+                    .arg(lock_name)
+                    .arg(timeout_ms)
+                    .query(conn)?;
+                match res {
+                    redis::Value::Okay => {
+                        // we got the lock
+                        Ok(())
+                    }
+                    other => Err(SableError::OtherError(format!(
+                        "Failed to lock: {lock_name}. {:?}",
+                        other
+                    ))),
+                }
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })
     }
 
     pub fn unlock(&self, lock_name: &String) -> Result<(), SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok(());
-            };
+        let mut cg = ConnectionGuard::default();
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
 
-            let res: redis::Value = redis::cmd("UNLOCK").arg(lock_name).query(conn)?;
-            match res {
-                redis::Value::Okay => {
-                    // we got the lock
-                    Ok(())
+                let res: redis::Value = redis::cmd("UNLOCK").arg(lock_name).query(conn)?;
+                match res {
+                    redis::Value::Okay => {
+                        // we got the lock
+                        Ok(())
+                    }
+                    other => Err(SableError::OtherError(format!(
+                        "Failed to unlock: {lock_name}. {:?}",
+                        other
+                    ))),
                 }
-                other => Err(SableError::OtherError(format!(
-                    "Failed to unlock: {lock_name}. {:?}",
-                    other
-                ))),
-            }
-        })
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })
     }
 
     /// Retrieve the nodes of a given shard from the database
     pub fn shard_nodes(&self, shard: &Shard) -> Result<Vec<Node>, SableError> {
+        let mut cg = ConnectionGuard::default();
         let mut result = Vec::<Node>::default();
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok(());
-            };
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
 
-            // the nodes are kept in the form of "<shard>.<node-id>"
-            let node_keys: Vec<String> = shard
-                .nodes
-                .iter()
-                .map(|node_id| format!("{}.{}", &shard.name, node_id))
-                .collect();
+                // the nodes are kept in the form of "<shard>.<node-id>"
+                let node_keys: Vec<String> = shard
+                    .nodes
+                    .iter()
+                    .map(|node_id| format!("{}.{}", &shard.name, node_id))
+                    .collect();
 
-            let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
-            match res {
-                redis::Value::Array(arr) => {
-                    let it = arr.iter();
-                    for json in it {
-                        match json {
-                            redis::Value::Nil => { /* not found */ }
-                            redis::Value::BulkString(json) => {
-                                let s = String::from_utf8_lossy(json).to_string();
-                                let v: Node = serde_json::from_str(&s).map_err(|e| {
-                                    SableError::OtherError(format!(
-                                        "Failed to convert JSON to Node. {e}"
-                                    ))
-                                })?;
-                                result.push(v);
-                            }
-                            other => {
-                                return Err(SableError::Corrupted(format!(
-                                    "Expected BulkString value. Found: {:?}",
-                                    other
-                                )));
+                let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
+                match res {
+                    redis::Value::Array(arr) => {
+                        let it = arr.iter();
+                        for json in it {
+                            match json {
+                                redis::Value::Nil => { /* not found */ }
+                                redis::Value::BulkString(json) => {
+                                    let s = String::from_utf8_lossy(json).to_string();
+                                    let v: Node = serde_json::from_str(&s).map_err(|e| {
+                                        SableError::OtherError(format!(
+                                            "Failed to convert JSON to Node. {e}"
+                                        ))
+                                    })?;
+                                    result.push(v);
+                                }
+                                other => {
+                                    return Err(SableError::Corrupted(format!(
+                                        "Expected BulkString value. Found: {:?}",
+                                        other
+                                    )));
+                                }
                             }
                         }
+                        Ok(())
                     }
-                    Ok(())
+                    other => Err(SableError::OtherError(format!(
+                        "Failed to get shard: '{}' nodes. {:?}",
+                        shard.name, other
+                    ))),
                 }
-                other => Err(SableError::OtherError(format!(
-                    "Failed to get shard: '{}' nodes. {:?}",
-                    shard.name, other
-                ))),
-            }
-        })?;
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })?;
         Ok(result)
     }
 
     /// Find the primary node of a shard
     pub fn shard_primary(&self, shard: &Shard) -> Result<ShardPrimaryResult, SableError> {
+        let mut cg = ConnectionGuard::default();
         let nodes = self.shard_nodes(shard)?;
         let nodes: Vec<&Node> = nodes.iter().collect();
-        Self::find_primary_node(&nodes)
+        Self::find_primary_node(&nodes).map(|v| {
+            cg.mark_success();
+            v
+        })
     }
 
     /// Given a list of nodes, check to see if they form a shard. In case of true, return the
@@ -625,20 +698,26 @@ impl Persistence {
 
     /// Push a command to the node-id
     pub fn queue_push_command(&self, node: &Node, command: &String) -> Result<(), SableError> {
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok(());
-            };
+        let mut cg = ConnectionGuard::default();
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
 
-            tracing::info!(
-                "Sending command '{}' to queue '{}'",
-                command,
-                &node.queue_name()
-            );
-            conn.lpush::<&String, &String, redis::Value>(&node.queue_name(), command)?;
-            tracing::info!("Success");
-            Ok(())
-        })
+                tracing::info!(
+                    "Sending command '{}' to queue '{}'",
+                    command,
+                    &node.queue_name()
+                );
+                conn.lpush::<&String, &String, redis::Value>(&node.queue_name(), command)?;
+                tracing::info!("Success");
+                Ok(())
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })
     }
 
     /// Pop a command from the top of the queue with a timeout
@@ -647,37 +726,49 @@ impl Persistence {
         node: &Node,
         timeout_secs: f64,
     ) -> Result<Option<String>, SableError> {
+        let mut cg = ConnectionGuard::default();
         let mut val = Option::<String>::None;
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok::<(), SableError>(());
-            };
-            if let redis::Value::Array(arr) =
-                conn.brpop::<&String, redis::Value>(&node.queue_name(), timeout_secs)?
-            {
-                if let Some(redis::Value::BulkString(cmd)) = arr.get(1) {
-                    val = Some(String::from_utf8_lossy(cmd).to_string());
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
+                if let redis::Value::Array(arr) =
+                    conn.brpop::<&String, redis::Value>(&node.queue_name(), timeout_secs)?
+                {
+                    if let Some(redis::Value::BulkString(cmd)) = arr.get(1) {
+                        val = Some(String::from_utf8_lossy(cmd).to_string());
+                    }
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })?;
         Ok(val)
     }
 
     /// Return the length of node's queue
     pub fn queue_len(&self, node: &Node) -> Result<usize, SableError> {
+        let mut cg = ConnectionGuard::default();
         let mut qlen = 0usize;
-        DB_CONN.with_borrow_mut(|db_client| {
-            let Some(conn) = db_client.connection() else {
-                return Ok::<(), SableError>(());
-            };
-            if let redis::Value::Int(len) =
-                conn.llen::<&String, redis::Value>(&node.queue_name())?
-            {
-                qlen = len.try_into().unwrap_or(0);
-            }
-            Ok(())
-        })?;
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
+                if let redis::Value::Int(len) =
+                    conn.llen::<&String, redis::Value>(&node.queue_name())?
+                {
+                    qlen = len.try_into().unwrap_or(0);
+                }
+                Ok(())
+            })
+            .map(|v| {
+                cg.mark_success();
+                v
+            })?;
         Ok(qlen)
     }
 
@@ -688,7 +779,7 @@ impl Persistence {
     {
         DB_CONN.with_borrow_mut(|db_client| {
             let Some(conn) = db_client.connection() else {
-                return Ok(());
+                return Err(SableError::ConnectionNotOpened);
             };
 
             let value = serde_json::to_string(value).map_err(|e| {

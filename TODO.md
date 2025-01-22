@@ -3,6 +3,7 @@
 ## General (ordered by priority)
 
 * Each node should know which slot it owns
+* Add exponential backoff when attempting to re-connect to the cluster manager database (class: `ClusterManager`)
 * Add API to dump & load a complete slot
 * Add API to dump slot from a given txn ID
 
