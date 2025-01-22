@@ -226,12 +226,7 @@ impl ReplicationServer {
         match req {
             ReplicationRequest::JoinShard(common) => {
                 info!("Received request: JoinShard({})", common);
-                let shard_name = if Server::state().persistent_state().shard_name().is_empty() {
-                    Server::state().persistent_state().id()
-                } else {
-                    Server::state().persistent_state().shard_name()
-                };
-
+                let shard_name = Server::state().persistent_state().shard_name();
                 let response_ok = ReplicationResponse::Ok(
                     ResponseCommon::new(&common).with_context(shard_name.clone()),
                 );
@@ -239,7 +234,7 @@ impl ReplicationServer {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
                 info!(
-                    "Replica: {} joined the shard: {}",
+                    "Replica: {} joined the shard: '{}'",
                     common.node_id(),
                     shard_name
                 );

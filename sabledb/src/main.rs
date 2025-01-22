@@ -101,6 +101,14 @@ fn main() -> Result<(), SableError> {
     server_state_clone
         .persistent_state()
         .initialise(options.clone());
+
+    if let Some(shard_name) = args.shard_name() {
+        server_state_clone
+            .persistent_state()
+            .set_shard_name(shard_name);
+        server_state_clone.persistent_state().save();
+    }
+
     info!(
         "NodeID is set to: {}",
         server_state_clone.persistent_state().id()
@@ -109,6 +117,11 @@ fn main() -> Result<(), SableError> {
     info!(
         "Node slots are: {}",
         server_state_clone.persistent_state().slots().to_string()
+    );
+
+    info!(
+        "This node is member of shard: '{}'",
+        server_state_clone.persistent_state().shard_name()
     );
 
     // Notify the replicator thread to start

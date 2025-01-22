@@ -55,6 +55,10 @@ macro_rules! check_cluster_db_or {
         {
             return $ret_val;
         }
+
+        if Server::state().persistent_state().shard_name().is_empty() {
+            return $ret_val;
+        }
     }};
 }
 
@@ -96,13 +100,11 @@ impl ClusterManager {
             return Ok(None);
         }
         self.put_node_internal(node)
-            .map_err(|e| {
+            .inspect_err(|_| {
                 self.backoff.incr_error();
-                e
             })
-            .map(|v| {
+            .inspect(|_| {
                 self.backoff.reset();
-                v
             })
     }
 
@@ -113,13 +115,11 @@ impl ClusterManager {
         }
         self.fail_over_if_needed_internal(store)
             .await
-            .map_err(|e| {
+            .inspect_err(|_| {
                 self.backoff.incr_error();
-                e
             })
-            .map(|v| {
+            .inspect(|_| {
                 self.backoff.reset();
-                v
             })
     }
 
@@ -130,13 +130,11 @@ impl ClusterManager {
         }
         self.check_node_queue_internal(store)
             .await
-            .map_err(|e| {
+            .inspect_err(|_| {
                 self.backoff.incr_error();
-                e
             })
-            .map(|v| {
+            .inspect(|_| {
                 self.backoff.reset();
-                v
             })
     }
 

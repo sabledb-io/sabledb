@@ -472,6 +472,18 @@ impl Persistence {
         });
         Persistence { options }
     }
+    
+    /// Mainly used by tests
+    pub fn with_connection(
+        options: Arc<StdRwLock<ServerOptions>>,
+        conn: redis::Connection,
+    ) -> Self {
+        DB_CONN.with_borrow_mut(|db_client| {
+            db_client.is_completed = true;
+            db_client.conn = Some(conn);
+        });
+        Persistence { options }
+    }
 
     /// Insert or replace Node record into the database
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {

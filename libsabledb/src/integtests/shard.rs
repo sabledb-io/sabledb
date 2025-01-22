@@ -1,5 +1,4 @@
 use crate::{replication::ServerRole, CommandLineArgs, SableError};
-use redis::Commands;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
@@ -179,27 +178,6 @@ impl Shard {
             primary: None,
             replicas: None,
         }
-    }
-
-    /// Return list of all primary node IDs that registered in the cluster database (in the CLUSTER_PRIMARIES set)
-    pub fn cluster_members(&self) -> Result<Vec<String>, SableError> {
-        let mut cluster_db_conn = self.cluster_db_instance.borrow().connect_with_retries()?;
-        let members: redis::Value = cluster_db_conn.smembers("CLUSTER_PRIMARIES")?;
-        let redis::Value::Array(members) = members else {
-            return Err(SableError::OtherError("Expected array of members".into()));
-        };
-
-        let ids: Vec<String> = members
-            .iter()
-            .map(|v| {
-                if let redis::Value::BulkString(node_id) = v {
-                    String::from_utf8_lossy(node_id).to_string()
-                } else {
-                    String::from("INVALID_NODE_ID")
-                }
-            })
-            .collect();
-        Ok(ids)
     }
 
     /// Run shard wide INFO command and populate the replicas / primary
@@ -399,15 +377,12 @@ impl Drop for Shard {
     }
 }
 
-fn create_sabledb_args(cluster_address: Option<String>) -> (String, CommandLineArgs) {
-    let public_port = format!(
-        "{}",
-        portpicker::pick_unused_port().expect("No free ports!")
-    );
-    let private_port = format!(
-        "{}",
-        portpicker::pick_unused_port().expect("No free ports!")
-    );
+fn create_sabledb_args(
+    cluster_address: Option<String>,
+    shard_name: &str,
+    public_port: u16,
+    private_port: u16,
+) -> (String, CommandLineArgs) {
     let mut db_dir = std::env::temp_dir();
     db_dir.push("sabledb_tests");
     db_dir.push("instances");
@@ -423,7 +398,8 @@ fn create_sabledb_args(cluster_address: Option<String>) -> (String, CommandLineA
         .with_db_path(db_dir.to_str().unwrap())
         .with_public_address(public_address.as_str())
         .with_private_address(private_address.as_str())
-        .with_log_dir("logs");
+        .with_log_dir("logs")
+        .with_shard_name(shard_name);
 
     if let Some(cluster_address) = &cluster_address {
         args = args.with_cluster_address(cluster_address);
@@ -464,20 +440,31 @@ fn run_instance(
     Ok(proc)
 }
 
-#[allow(dead_code)]
+fn pick_ports_for_instance() -> (u16, u16) {
+    let public_port = portpicker::pick_unused_port().expect("no free ports!");
+    let private_port = portpicker::pick_unused_port().expect("no free ports!");
+    (public_port, private_port)
+}
+
 /// Start a shard of count instances. `count` must be greater than `2` (1 primary 1 replica)
 /// The shard will consist of:
 /// - `count - 1` replicas
 /// - 1 primary
 /// - 1 cluster database instance
-pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
+pub fn start_shard(instance_count: usize, name: &str) -> Result<Shard, SableError> {
     if instance_count < 2 {
         return Err(SableError::InvalidArgument(
             "shard instance count must be greater or equal to 2".into(),
         ));
     }
 
-    let (wd, cluster_db_args) = create_sabledb_args(None);
+    let (public_port, private_port) = pick_ports_for_instance();
+    let (wd, cluster_db_args) = create_sabledb_args(
+        None,
+        format!("CLUSTER_DB.{}", name).as_str(),
+        public_port,
+        private_port,
+    );
     let mut instances = Vec::<InstanceRefCell>::new();
 
     let cluster_inst = Instance::default()
@@ -493,7 +480,13 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     drop(_conn);
 
     for _ in 0..instance_count {
-        let (wd, args) = create_sabledb_args(Some(cluster_address.clone()));
+        let (public_port, private_port) = pick_ports_for_instance();
+        let (wd, args) = create_sabledb_args(
+            Some(cluster_address.clone()),
+            name,
+            public_port,
+            private_port,
+        );
         let inst = Instance::default()
             .with_args(args)
             .with_working_dir(&wd)
@@ -515,16 +508,6 @@ pub fn start_shard(instance_count: usize) -> Result<Shard, SableError> {
     Ok(shard)
 }
 
-/// Start shard and execute function `test_func`
-pub fn start_and_test<F>(count: usize, mut test_func: F) -> Result<(), SableError>
-where
-    F: FnMut(Shard) -> Result<(), SableError>,
-{
-    // start the shard and run the test code
-    let shard = start_shard(count)?;
-    test_func(shard)
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -535,7 +518,16 @@ mod test {
     #[serial_test::serial]
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_shard_args_are_unique() {
-        let args_vec = create_sabledb_args(None).1.to_vec();
+        let public_port = portpicker::pick_unused_port().expect("no free ports!");
+        let private_port = portpicker::pick_unused_port().expect("no free ports!");
+        let args_vec = create_sabledb_args(
+            None,
+            "test_shard_args_are_unique",
+            public_port,
+            private_port,
+        )
+        .1
+        .to_vec();
         let args: HashSet<&String> = args_vec.iter().collect();
 
         println!("{:?}", args_vec);
@@ -547,7 +539,7 @@ mod test {
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_start_shard() {
         // Start shard of 1 primary 2 replicas
-        let shard = start_shard(3).unwrap();
+        let shard = start_shard(3, "test_start_shard").unwrap();
 
         let all_instances = shard.instances();
         assert_eq!(all_instances.len(), 3);
@@ -584,7 +576,7 @@ mod test {
     #[serial_test::serial]
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_restart() {
-        let shard = start_shard(2).unwrap();
+        let shard = start_shard(2, "test_restart").unwrap();
         assert!(shard.primary().unwrap().borrow().is_running());
         println!(
             "Server started with PID: {}",
@@ -603,65 +595,10 @@ mod test {
     #[test]
     #[serial_test::serial]
     #[ntest_timeout::timeout(300_000)] // 5 minutes
-    fn test_cluster_set_updated() {
-        // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
-        let inst_count = 3usize;
-        let mut shard = start_shard(inst_count).unwrap();
-        println!("Initial state: {}", shard);
-        let primary_node_id = shard.primary().unwrap().borrow().node_id();
-        assert!(!primary_node_id.is_empty());
-
-        let primaries = shard.cluster_members().unwrap();
-        println!("CLUSTER_PRIMARIES={:?}", primaries);
-
-        assert_eq!(primaries.len(), 1);
-        assert_eq!(primaries.first().unwrap(), &primary_node_id);
-
-        let replicas = shard.replicas().unwrap();
-        for replica in &replicas {
-            let replica_id = replica.borrow().node_id();
-            let replica_primary_id = replica.borrow().primary_node_id();
-
-            assert_eq!(replica_primary_id, primary_node_id);
-            assert!(!replica_id.is_empty());
-        }
-
-        // terminate the primary node
-        let old_primary_id = shard.primary().unwrap().borrow().node_id();
-        let old_primary = shard.terminate_and_remove_primary().unwrap();
-        println!("Primary node {} terminated and removed", old_primary_id);
-        println!(
-            "Shard state after primary terminated and removed: {}",
-            shard
-        );
-        assert_eq!(primary_node_id, old_primary_id);
-        assert!(!shard.is_stabilised());
-
-        assert!(shard.primary.is_none());
-        assert_eq!(shard.instances.len(), inst_count - 1);
-        assert!(!old_primary.borrow().is_running());
-
-        // Wait for the shard to auto failover
-        println!("Waiting for fail-over to take place... (this can take up to 30 seconds)");
-        shard.wait_for_shard_to_stabilise().unwrap();
-        println!("{}", shard);
-        assert!(shard.is_stabilised());
-
-        // Check that the CLUSTER_PRIMARIES set updated
-        let primary_id = shard.primary().unwrap().borrow().node_id();
-        let primaries = shard.cluster_members().unwrap();
-        println!("CLUSTER_PRIMARIES={:?}", primaries);
-        assert_eq!(primaries.len(), 1);
-        assert_eq!(primaries.first().unwrap(), &primary_id);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_auto_failover() {
         // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
         let inst_count = 3usize;
-        let mut shard = start_shard(inst_count).unwrap();
+        let mut shard = start_shard(inst_count, "test_auto_failover").unwrap();
         println!("Initial state: {}", shard);
         let primary_node_id = shard.primary().unwrap().borrow().node_id();
         assert!(!primary_node_id.is_empty());

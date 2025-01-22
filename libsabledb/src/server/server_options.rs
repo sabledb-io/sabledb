@@ -133,8 +133,12 @@ pub struct CommandLineArgs {
     pub logdir: Option<String>,
 
     #[arg(short, long)]
-    /// Server workers count. set to 0 to let sabledb decide which defaults to `(number of CPUs / 2)`
+    /// Server workers count. set to 0 to let SableDB decide which defaults to `(number of CPUs / 2)`
     pub workers: Option<usize>,
+
+    /// An optional shard name (this will override the value from the NODE configuration file)
+    #[arg(long)]
+    pub shard_name: Option<String>,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub parameters: Vec<String>,
@@ -176,6 +180,11 @@ impl CommandLineArgs {
         self
     }
 
+    pub fn with_shard_name(mut self, shard_name: &str) -> Self {
+        self.shard_name = Some(shard_name.into());
+        self
+    }
+
     pub fn to_vec(&self) -> Vec<String> {
         let mut args = Vec::<String>::new();
         if let Some(public_address) = &self.public_address {
@@ -211,6 +220,11 @@ impl CommandLineArgs {
         if let Some(workers) = &self.workers {
             args.push("--workers".into());
             args.push(format!("{}", workers));
+        }
+
+        if let Some(shard_name) = &self.shard_name {
+            args.push("--shard-name".into());
+            args.push(shard_name.into());
         }
         args
     }
@@ -275,6 +289,10 @@ impl CommandLineArgs {
     /// Return the configuration file passed (if any)
     pub fn config_file(&self) -> Option<String> {
         self.parameters.first().cloned()
+    }
+
+    pub fn shard_name(&self) -> Option<String> {
+        self.shard_name.clone()
     }
 }
 
