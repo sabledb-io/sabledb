@@ -12,7 +12,7 @@ pub struct SimpleBackoff {
     min_delay: u64,
     /// Maximum value for backoff, in milliseconds
     max_delay: u64,
-    /// Are we in error state?
+    /// Are we in an error state?
     error_state: AtomicBool,
 }
 
@@ -28,7 +28,7 @@ impl SimpleBackoff {
         }
     }
 
-    /// Return how long to should the caller wait until an operation can be tried
+    /// Return how long should the caller wait until an operation can be re-tried (in milliseconds)
     pub fn can_try(&self) -> u64 {
         let curts = TimeUtils::epoch_ms().unwrap_or_default();
         if curts.saturating_sub(self.last_tick.load(Ordering::Relaxed))

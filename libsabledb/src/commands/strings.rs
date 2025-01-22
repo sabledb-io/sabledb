@@ -2,6 +2,8 @@ pub struct Strings {}
 
 #[allow(dead_code)]
 impl Strings {
+    // Error codes
+
     pub const VALUE_NOT_AN_INT_OR_OUT_OF_RANGE: &'static str =
         "ERR value is not an integer or out of range";
     pub const VALUE_NOT_VALID_FLOAT: &'static str = "ERR value is not a valid float";
@@ -37,4 +39,7 @@ impl Strings {
     pub const ERR_EAGAIN: &'static str = "EAGAIN resource is not available, try again later";
     pub const ERR_DEADLOCK: &'static str = "DEADLOCK lock is already owned by the calling client";
     pub const ERR_NOT_OWNER: &'static str = "ERR resource is not owned by the calling client";
+
+    // General strings
+    pub const POISONED_MUTEX: &'static str = "poisoned mutex";
 }

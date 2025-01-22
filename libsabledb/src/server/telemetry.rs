@@ -1,4 +1,4 @@
-use crate::{replication::ServerRole, storage::StorageMetadata, Server};
+use crate::{commands::Strings, replication::ServerRole, storage::StorageMetadata, Server};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub struct PrimaryTelemetry {
 impl ReplicationTelemetry {
     /// Replication: update the last change in the database
     pub fn set_last_change(seq_num: u64) {
-        let mut d = REPLICATION_INFO.write().expect("poisoned mutex");
+        let mut d = REPLICATION_INFO.write().expect(Strings::POISONED_MUTEX);
         d.last_change_sequence_number = seq_num;
 
         let role = Server::state().persistent_state().role();
@@ -61,7 +61,7 @@ impl ReplicationTelemetry {
     }
 
     pub fn update_replica_info(replica_id: String, info: ReplicaTelemetry) {
-        let mut replication_telemetry = REPLICATION_INFO.write().expect("poisoned mutex");
+        let mut replication_telemetry = REPLICATION_INFO.write().expect(Strings::POISONED_MUTEX);
         if let Some(replica_data) = replication_telemetry
             .primary_telemetry
             .replicas
@@ -77,7 +77,7 @@ impl ReplicationTelemetry {
     }
 
     pub fn remove_replica(replica_id: &String) {
-        let mut replication_telemetry = REPLICATION_INFO.write().expect("poisoned mutex");
+        let mut replication_telemetry = REPLICATION_INFO.write().expect(Strings::POISONED_MUTEX);
         replication_telemetry
             .primary_telemetry
             .replicas
@@ -114,17 +114,19 @@ impl std::fmt::Display for ReplicationTelemetry {
             "slots:{}",
             Server::state().persistent_state().slots()
         ));
-        lines.push(format!(
-            "cluster_database:{}",
-            Server::state()
-                .options()
-                .read()
-                .expect("poisoned mutex")
-                .general_settings
-                .cluster_address
-                .clone()
-                .unwrap_or_default()
-        ));
+
+        if let Some(cluster_address) = &Server::state()
+            .options()
+            .read()
+            .expect(Strings::POISONED_MUTEX)
+            .general_settings
+            .cluster_address
+        {
+            lines.push(format!("management_database:{}", cluster_address));
+        } else {
+            lines.push("management_database:".into());
+        }
+
         lines.push(format!(
             "last_db_update_sequence_number:{}",
             self.last_change_sequence_number
@@ -388,7 +390,7 @@ impl std::fmt::Display for Telemetry {
             f,
             "{}\n{}",
             as_str,
-            REPLICATION_INFO.read().expect("poisoned mutex")
+            REPLICATION_INFO.read().expect(Strings::POISONED_MUTEX)
         )
     }
 }
