@@ -57,7 +57,7 @@ impl LockCommands {
             HandleCommandResult::ResponseBufferUpdated(response_buffer)
         );
         let lock_name = command_arg_at!(command, 1);
-        let slot = crate::utils::calculate_slot(&lock_name);
+        let slot = crate::utils::calculate_slot(lock_name);
 
         if !client_state.server_inner_state().slots().is_set(slot)? {
             return Err(SableError::NotOwner(vec![slot]));
@@ -143,7 +143,7 @@ impl LockCommands {
             HandleCommandResult::ResponseBufferUpdated(response_buffer)
         );
         let lock_name = command_arg_at!(command, 1);
-        let slot = crate::utils::calculate_slot(&lock_name);
+        let slot = crate::utils::calculate_slot(lock_name);
 
         if !client_state.server_inner_state().slots().is_set(slot)? {
             return Err(SableError::NotOwner(vec![slot]));

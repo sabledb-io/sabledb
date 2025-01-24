@@ -297,6 +297,7 @@ and visit this page again in couple of days
 | flushall | ✓ | ✓ |   |
 | flushdb | ✓ | ✓ |   |
 | dbsize | ✓ | ✓ | Data is accurate for the last scan performed on the storage |
+| slot <num> count | ✓ | ✓ | Extension command. Count the number of keys belongs to a slot |
 
 ### Transaction
 

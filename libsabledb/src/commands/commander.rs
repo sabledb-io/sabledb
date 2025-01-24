@@ -91,6 +91,7 @@ pub enum ValkeyCommandName {
     FlushAll,
     FlushDb,
     DbSize,
+    Slot,
     // Generic commands
     Ttl,
     Del,
@@ -1395,6 +1396,12 @@ impl Default for CommandsManager {
                 "unlock",
                 CommandMetadata::new(ValkeyCommandName::Unlock)
                     .write()
+                    .no_transaction(),
+            ),
+            (
+                "slot",
+                CommandMetadata::new(ValkeyCommandName::Slot)
+                    .read_only()
                     .no_transaction(),
             ),
         ]);

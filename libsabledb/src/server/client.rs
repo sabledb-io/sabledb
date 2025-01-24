@@ -662,7 +662,7 @@ impl Client {
                     HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
                 }
             }
-            // Server commands
+            // Client commands
             ValkeyCommandName::Client | ValkeyCommandName::Select => {
                 match ClientCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
@@ -679,7 +679,8 @@ impl Client {
             | ValkeyCommandName::Command
             | ValkeyCommandName::FlushDb
             | ValkeyCommandName::FlushAll
-            | ValkeyCommandName::DbSize => {
+            | ValkeyCommandName::DbSize
+            | ValkeyCommandName::Slot => {
                 match ServerCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::ResponseBufferUpdated(buffer) => {
                         Self::send_response(tx, &buffer, client_state.id()).await?;

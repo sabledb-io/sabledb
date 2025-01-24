@@ -7,7 +7,8 @@ use crate::{
     parse_string_to_number,
     server::ClientState,
     storage::StringsDb,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError,
+    utils::SLOT_SIZE,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError, Slot,
     StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder, ValkeyCommand,
     ValkeyCommandName,
 };
@@ -41,6 +42,9 @@ impl ServerCommands {
             }
             ValkeyCommandName::DbSize => {
                 Self::dbsize(client_state, command, &mut response_buffer).await?;
+            }
+            ValkeyCommandName::Slot => {
+                Self::slot(client_state, command, &mut response_buffer).await?;
             }
             _ => {
                 return Err(SableError::InvalidArgument(format!(
@@ -163,6 +167,49 @@ impl ServerCommands {
             response_buffer,
             Telemetry::db_key_count(client_state.database_id()),
         );
+        Ok(())
+    }
+
+    /// `SLOT`
+    /// Slot management command.
+    /// - `SLOT <NUMBER> COUNT` return the number of items are stored for this slot
+    /// - `SLOT <NUMBER> SENDTO <IP> <PORT>` - move slot ownership to node at a given address
+    async fn slot(
+        client_state: Rc<ClientState>,
+        command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        // Min of 3 arguments
+        check_args_count!(command, 3, response_buffer);
+        let slot_number = command_arg_at!(command, 1);
+
+        let builder = RespBuilderV2::default();
+
+        // Make sure that slot passed is a u16
+        let Some(slot_number) = BytesMutUtils::parse::<u16>(slot_number) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // And it is in the valid range [0..SLOT_SIZE)
+        if slot_number >= SLOT_SIZE {
+            builder_return_value_not_int!(builder, response_buffer);
+        }
+
+        let sub_command = String::from_utf8_lossy(command_arg_at!(command, 2)).to_ascii_uppercase();
+
+        match sub_command.as_str() {
+            "COUNT" => {
+                let slot = Slot::with_slot(slot_number);
+                let items_count = slot.count(client_state).await?;
+                builder.number_u64(response_buffer, items_count);
+            }
+            "SENDTO" => {
+                builder.error_string(response_buffer, "Command `SLOT SENDTO` not implemented yet");
+            }
+            _ => {
+                builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
+            }
+        }
         Ok(())
     }
 
@@ -310,6 +357,26 @@ mod test {
         ("hgetall myhash_1", "*6\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n"),
         ("hgetall heroes_1", "*6\r\n$5\r\norisa\r\n$4\r\ntank\r\n$4\r\nrein\r\n$4\r\ntank\r\n$6\r\ntracer\r\n$3\r\ndps\r\n"),
     ]; "test_flushdb")]
+    // key1=9189
+    // key2=4998
+    // key3=935
+    // key4=13120
+    #[test_case(vec![
+        ("set key1 v", "+OK\r\n"),
+        ("set key2 v", "+OK\r\n"),
+        ("set key3 v", "+OK\r\n"),
+        ("set key4 v", "+OK\r\n"),
+        ("slot", "-ERR wrong number of arguments for 'slot' command\r\n"),
+        ("slot abc abc", "-ERR value is not an integer or out of range\r\n"),
+        ("slot 100 abc", "-ERR syntax error\r\n"),
+        ("slot 9189 COUNT", ":1\r\n"),
+        ("slot 4998 COUNT", ":1\r\n"),
+        ("slot 935 COUNT", ":1\r\n"),
+        ("slot 13120 COUNT", ":1\r\n"),
+        ("slot 0 COUNT", ":0\r\n"),
+        ("slot 16383 COUNT", ":0\r\n"),
+        ("slot 16384 COUNT", "-ERR value is not an integer or out of range\r\n"),
+    ]; "test_slot")]
     fn test_server_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {

@@ -78,7 +78,7 @@ impl From<&bytes::BytesMut> for ValueType {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, enum_iterator::Sequence)]
 pub enum KeyType {
     /// Used internally to track all complex records
     Bookkeeping = 0,
@@ -88,7 +88,6 @@ pub enum KeyType {
     ZsetMemberItem = 4,
     ZsetScoreItem = 5,
     SetItem = 6,
-    /// Database metadata record (contains info regarding the current db schema)
     Metadata = 7,
     /// Lock data type
     Lock = 8,

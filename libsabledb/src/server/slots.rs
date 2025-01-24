@@ -1,5 +1,9 @@
 use crate::utils::SLOT_SIZE;
-use crate::SableError;
+#[allow(unused_imports)]
+use crate::{storage::GenericDb, utils::U8ArrayBuilder, ClientState, KeyType, SableError};
+use bytes::BytesMut;
+use enum_iterator::next;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::atomic::AtomicU64;
@@ -256,6 +260,75 @@ impl std::fmt::Display for SlotBitmap {
                 .collect::<Vec<String>>()
                 .join(",")
         )
+    }
+}
+
+// Slot operations
+#[derive(Default)]
+pub struct Slot {
+    slot: u16,
+}
+
+impl Slot {
+    pub fn with_slot(slot: u16) -> Self {
+        Slot { slot }
+    }
+
+    /// Count the number of items belong to this slot exist in the database
+    pub async fn count(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
+        // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
+        let prefix =
+            self.create_prefix_for_key_type(KeyType::PrimaryKey, client_state.database_id());
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
+        let mut items_count = 0u64;
+        while db_iter.valid() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            items_count = items_count.saturating_add(1);
+            db_iter.next();
+
+            if items_count.rem_euclid(10_000) == 0 {
+                // Let other tasks process as well
+                tokio::task::yield_now().await;
+            }
+        }
+        Ok(items_count)
+    }
+
+    /// Records are kept in the database in the form of:
+    /// [KeyType, u16(db_id), u16(slot)] (see `KeyPrefix` struct)
+    /// this method creates an array of prefixes that allow us to iterate the database
+    /// over all items belong to the slot
+    #[allow(dead_code)]
+    fn create_prefix_array(&self, db_id: u16) -> Result<Vec<BytesMut>, SableError> {
+        let mut prefix_arr = Vec::<BytesMut>::default();
+        let mut key_type = KeyType::Bookkeeping;
+        loop {
+            key_type = next(&key_type).ok_or(SableError::InternalError(
+                "Expected valid enumerator".into(),
+            ))?;
+
+            if key_type.eq(&KeyType::Metadata) {
+                break;
+            }
+            prefix_arr.push(self.create_prefix_for_key_type(key_type, db_id));
+        }
+        Ok(prefix_arr)
+    }
+
+    fn create_prefix_for_key_type(&self, key_type: KeyType, db_id: u16) -> BytesMut {
+        let mut prefix = BytesMut::new();
+        let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
+        builder.write_key_type(key_type);
+        builder.write_u16(db_id);
+        builder.write_u16(self.slot);
+        prefix
     }
 }
 
