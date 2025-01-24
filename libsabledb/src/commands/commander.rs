@@ -1388,13 +1388,13 @@ impl Default for CommandsManager {
             (
                 "lock",
                 CommandMetadata::new(ValkeyCommandName::Lock)
-                    .read_only() // this is a meta command, it does not affect the actual data
+                    .write()
                     .no_transaction(),
             ),
             (
                 "unlock",
                 CommandMetadata::new(ValkeyCommandName::Unlock)
-                    .read_only() // this is a meta command, it does not affect the actual data
+                    .write()
                     .no_transaction(),
             ),
         ]);
