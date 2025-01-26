@@ -42,7 +42,7 @@ use tracing::{debug, error, info};
 use std::{println as info, println as debug, println as error};
 
 #[derive(Default)]
-pub struct ReplicationServer {}
+pub struct NodeTalkServer {}
 
 lazy_static::lazy_static! {
     static ref REPLICATION_THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -108,7 +108,68 @@ impl Drop for ReplicationThreadMarker {
     }
 }
 
-impl ReplicationServer {
+impl NodeTalkServer {
+    // Server main loop: wait for a new connection and launch a thread to handle it
+    pub async fn run(
+        &self,
+        options: Arc<StdRwLock<ServerOptions>>,
+        store: StorageAdapter,
+    ) -> Result<(), SableError> {
+        let private_address = options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .general_settings
+            .private_address
+            .clone();
+
+        let listener = TcpListener::bind(private_address)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "failed to bind address {}",
+                    &options
+                        .read()
+                        .expect(OPTIONS_LOCK_ERR)
+                        .general_settings
+                        .private_address
+                )
+            });
+        info!(
+            "Accepting node talk clients @{}",
+            &options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .general_settings
+                .private_address
+        );
+
+        let cm = ClusterManager::with_options(options.clone());
+        loop {
+            // Accept with timeout
+            let accept_fut = listener.accept();
+            let timeout_fut = tokio::time::sleep(tokio::time::Duration::from_secs(1));
+
+            futures::pin_mut!(accept_fut);
+            futures::pin_mut!(timeout_fut);
+
+            match future::select(accept_fut, timeout_fut).await {
+                future::Either::Left((value, _)) => {
+                    let (socket, addr) = value?;
+                    self.handle_new_connection(options.clone(), store.clone(), socket, addr)?;
+                }
+                future::Either::Right(_) => {
+                    // TimeOut, do a tick operation here
+                    tracing::trace!("Checking node's queue...");
+                    if let Err(e) = cm.check_node_queue(&store).await {
+                        tracing::warn!("Failed to process node command queue. {:?}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Private functions
+
     fn read_request(
         reader: &mut dyn BytesReader,
     ) -> Result<Option<ReplicationRequest>, SableError> {
@@ -414,66 +475,6 @@ impl ReplicationServer {
             }
         }
         HandleRequestResult::Success
-    }
-
-    // Primary node main loop: wait for a new replica connection
-    // and launch a thread to handle it
-    pub async fn run(
-        &self,
-        options: Arc<StdRwLock<ServerOptions>>,
-        store: StorageAdapter,
-    ) -> Result<(), SableError> {
-        let private_address = options
-            .read()
-            .expect(OPTIONS_LOCK_ERR)
-            .general_settings
-            .private_address
-            .clone();
-
-        let listener = TcpListener::bind(private_address)
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "failed to bind address {}",
-                    &options
-                        .read()
-                        .expect(OPTIONS_LOCK_ERR)
-                        .general_settings
-                        .private_address
-                )
-            });
-        info!(
-            "Accepting replicas @{}",
-            &options
-                .read()
-                .expect(OPTIONS_LOCK_ERR)
-                .general_settings
-                .private_address
-        );
-
-        let cm = ClusterManager::with_options(options.clone());
-        loop {
-            // Accept with timeout
-            let accept_fut = listener.accept();
-            let timeout_fut = tokio::time::sleep(tokio::time::Duration::from_secs(1));
-
-            futures::pin_mut!(accept_fut);
-            futures::pin_mut!(timeout_fut);
-
-            match future::select(accept_fut, timeout_fut).await {
-                future::Either::Left((value, _)) => {
-                    let (socket, addr) = value?;
-                    self.handle_new_connection(options.clone(), store.clone(), socket, addr)?;
-                }
-                future::Either::Right(_) => {
-                    // TimeOut, do a tick operation here
-                    tracing::trace!("Checking node's queue...");
-                    if let Err(e) = cm.check_node_queue(&store).await {
-                        tracing::warn!("Failed to process node command queue. {:?}", e);
-                    }
-                }
-            }
-        }
     }
 
     /// Create a new thread that will handle the newly connected replica

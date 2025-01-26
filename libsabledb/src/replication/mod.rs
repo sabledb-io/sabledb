@@ -1,10 +1,10 @@
 mod cluster_lock;
 mod cluster_manager;
+mod messages;
+mod node_talk_client;
+mod node_talk_server;
 mod persistence;
-mod replication_client;
 mod replication_config;
-mod replication_messages;
-mod replication_server;
 mod replication_traits;
 mod replicator;
 mod storage_updates;
@@ -15,12 +15,12 @@ pub use persistence::*;
 
 pub use cluster_lock::{BlockingLock, Lock};
 
-pub use replication_client::{ReplClientCommand, ReplicationClient};
-pub use replication_config::ServerRole;
-pub use replication_messages::{
+pub use messages::{
     ReplicationRequest, ReplicationResponse, RequestCommon, ResponseCommon, ResponseReason,
 };
-pub use replication_server::{replication_thread_stop_all, ReplicationServer};
+pub use node_talk_client::{ClientReplicationLoop, NodeTalkCommand};
+pub use node_talk_server::{replication_thread_stop_all, NodeTalkServer};
+pub use replication_config::ServerRole;
 pub use storage_updates::{DeleteRecord, PutRecord, StorageUpdates, StorageUpdatesIterItem};
 
 pub use replication_traits::{

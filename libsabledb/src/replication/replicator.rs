@@ -1,9 +1,11 @@
-use crate::replication::ReplicationServer;
+use crate::replication::NodeTalkServer;
 use futures_intrusive::sync::ManualResetEvent;
 
 #[allow(unused_imports)]
 use crate::{
-    replication::{replication_thread_stop_all, ReplClientCommand, ReplicationClient, ServerRole},
+    replication::{
+        replication_thread_stop_all, ClientReplicationLoop, NodeTalkCommand, ServerRole,
+    },
     server::{Client, SableError, ServerOptions, Telemetry, WorkerContext},
     storage::StorageAdapter,
     Server,
@@ -193,13 +195,8 @@ impl Replicator {
     ) -> Result<(), SableError> {
         tracing::info!("Entering replica loop");
 
-        let replication_client = ReplicationClient::default();
-        // Launch the replication client on a dedicated thread
-        // and return immediately
-        let Ok(tx) = replication_client
-            .run(server_options, store, event.clone())
-            .await
-        else {
+        // Create a client side replication loop and run it
+        let Ok(tx) = ClientReplicationLoop::run(server_options, store, event.clone()).await else {
             tracing::error!("Failed to start replication client. Replication client task exiting");
             return Ok(());
         };
@@ -210,7 +207,7 @@ impl Replicator {
         tracing::info!("Got event to terminate replication loop");
 
         // Notify the replication client thread to terminate
-        let _ = tx.send(ReplClientCommand::Shutdown).await;
+        let _ = tx.send(NodeTalkCommand::Shutdown).await;
 
         // Clear the event
         event.reset();
@@ -241,7 +238,7 @@ impl Replicator {
         let store_clone = self.store.clone();
         tokio::task::spawn_local(async {
             tracing::info!("Running replication server");
-            let server = ReplicationServer::default();
+            let server = NodeTalkServer::default();
             server.run(server_options_clone, store_clone).await
         });
 

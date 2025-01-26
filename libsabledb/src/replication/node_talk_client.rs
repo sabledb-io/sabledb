@@ -9,7 +9,6 @@ use tracing::{debug, error, info};
 #[cfg(test)]
 use std::{println as info, println as debug, println as error};
 
-#[allow(unused_imports)]
 use crate::{
     io::Archive,
     replication::{ClusterManager, NodeBuilder, StorageUpdates, StorageUpdatesIterItem},
@@ -23,8 +22,6 @@ use crate::{
     storage::SEQUENCES_FILE,
     ReplicationTelemetry,
 };
-#[allow(unused_imports)]
-use std::str::FromStr;
 
 use num_format::{Locale, ToFormattedString};
 use std::io::Read;
@@ -36,7 +33,7 @@ use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
 #[allow(dead_code)]
-pub enum ReplClientCommand {
+pub enum NodeTalkCommand {
     Shutdown,
 }
 
@@ -68,21 +65,27 @@ enum JoinShardResult {
     Err,
 }
 
+/// A client used for communicating with the NodeTalkServer
 #[derive(Default)]
-pub struct ReplicationClient {}
+pub struct NodeTalkClient {}
 
-impl ReplicationClient {
+impl NodeTalkClient {}
+
+/// A client side replication loop.
+#[derive(Default)]
+pub struct ClientReplicationLoop {}
+
+impl ClientReplicationLoop {
     /// Run replication client on a dedicated thread and return a channel for communicating with it
     pub async fn run(
-        &self,
         options: Arc<StdRwLock<ServerOptions>>,
         store: StorageAdapter,
         event: Arc<ManualResetEvent>,
-    ) -> Result<TokioSender<ReplClientCommand>, SableError> {
-        let (tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
+    ) -> Result<TokioSender<NodeTalkCommand>, SableError> {
+        let (tx, mut rx) = tokio_channel::<NodeTalkCommand>(100);
         // Spawn a thread to handle the replication
         let _ = std::thread::spawn(move || {
-            tracing::info!("Replication client started");
+            tracing::info!("Replication loop (client side) started");
             let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -95,7 +98,7 @@ impl ReplicationClient {
                 tracing::info!("Connecting to primary at: {}", primary_address);
                 let cm = ClusterManager::with_options(options.clone());
                 loop {
-                    let mut stream = match Self::connect_to_primary(primary_address.clone()) {
+                    let mut stream = match Self::connect(primary_address.clone()) {
                         Err(e) => {
                             tracing::info!("Connect failed. {e}");
                             // Check whether we should attempt to reconnect
@@ -204,18 +207,18 @@ impl ReplicationClient {
         Ok(tx)
     }
 
-    fn connect_to_primary(primary_address: String) -> Result<TcpStream, SableError> {
+    fn connect(primary_address: String) -> Result<TcpStream, SableError> {
         let addr = primary_address.parse::<SocketAddr>()?;
         let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1))?;
         Ok(stream)
     }
 
     fn check_command_channel(
-        rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
+        rx: &mut tokio::sync::mpsc::Receiver<NodeTalkCommand>,
     ) -> CheckShutdownResult {
         // Check the channel for commands
         match rx.try_recv() {
-            Ok(ReplClientCommand::Shutdown) => {
+            Ok(NodeTalkCommand::Shutdown) => {
                 info!("Received request to shutdown replication client");
                 CheckShutdownResult::Terminate
             }
@@ -397,7 +400,7 @@ impl ReplicationClient {
         options: Arc<StdRwLock<ServerOptions>>,
         reader: &mut impl BytesReader,
         writer: &mut impl BytesWriter,
-        rx: &mut tokio::sync::mpsc::Receiver<ReplClientCommand>,
+        rx: &mut tokio::sync::mpsc::Receiver<NodeTalkCommand>,
         request_id: &mut u64,
     ) -> RequestChangesResult {
         // Before we start, check for termination request
@@ -660,13 +663,13 @@ mod tests {
         ));
         reader.add_response(resp_no_ok);
 
-        let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
+        let (_tx, mut rx) = tokio_channel::<NodeTalkCommand>(100);
 
         let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
         let cm = ClusterManager::with_options(server_options.clone());
         let mut request_id = 0u64;
         server_options.write().unwrap().open_params = replica_db.open_params().clone();
-        let res = ReplicationClient::request_changes(
+        let res = ClientReplicationLoop::request_changes(
             &replica_db,
             &cm,
             server_options,
@@ -712,14 +715,14 @@ mod tests {
         let limits = Rc::new(GetChangesLimits::builder().build());
         reader.add_response(primary_db.storage_updates_since(0, limits)?.to_bytes());
 
-        let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
+        let (_tx, mut rx) = tokio_channel::<NodeTalkCommand>(100);
 
         let server_options = Arc::new(StdRwLock::new(ServerOptions::default()));
         server_options.write().unwrap().open_params = replica_db.open_params().clone();
 
         let cm = ClusterManager::with_options(server_options.clone());
         let mut request_id = 1u64;
-        ReplicationClient::request_changes(
+        ClientReplicationLoop::request_changes(
             &replica_db,
             &cm,
             server_options,
