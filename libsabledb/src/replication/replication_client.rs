@@ -1,5 +1,13 @@
 use crate::server::ServerOptions;
+use crate::{bincode_to_bytesmut, bincode_to_bytesmut_or};
+use bytes::BytesMut;
 use futures_intrusive::sync::ManualResetEvent;
+
+#[cfg(not(test))]
+use tracing::{debug, error, info};
+
+#[cfg(test)]
+use std::{println as info, println as debug, println as error};
 
 #[allow(unused_imports)]
 use crate::{
@@ -24,7 +32,6 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
-use tracing::{debug, error, info};
 
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
@@ -178,7 +185,7 @@ impl ReplicationClient {
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
-                                if let Err(e) 
+                                if let Err(e)
                                     = Self::fullsync(&store, &cm, options.clone(), &mut stream, &mut request_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -236,7 +243,7 @@ impl ReplicationClient {
             ReplicationRequest::FullSync(RequestCommon::new().with_request_id(request_id));
         info!("Sending {} message to primary", request);
 
-        let mut buffer = request.to_bytes();
+        let mut buffer = bincode_to_bytesmut!(request);
         let mut writer = TcpStreamBytesWriter::new(stream);
         let mut reader = TcpStreamBytesReader::new(stream);
         writer.write_message(&mut buffer)?;
@@ -317,10 +324,9 @@ impl ReplicationClient {
         loop {
             let result = match reader.read_message()? {
                 None => None,
-                Some(bytes) => ReplicationResponse::from_bytes(&bytes),
+                Some(bytes) => Some(bincode::deserialize::<ReplicationResponse>(&bytes)?),
             };
             match result {
-                // And this is why I ❤ Rust...
                 Some(req) => break Ok(req),
                 None => {
                     continue;
@@ -332,7 +338,8 @@ impl ReplicationClient {
     /// Request to join the shard, on success, return the node-id
     fn join_shard(reader: &mut impl BytesReader, writer: &mut impl BytesWriter) -> JoinShardResult {
         let join_request = ReplicationRequest::JoinShard(RequestCommon::new());
-        let mut buffer = join_request.to_bytes();
+        let mut buffer = bincode_to_bytesmut_or!(join_request, JoinShardResult::Err);
+
         if let Err(e) = writer.write_message(&mut buffer) {
             error!("Failed to send replication request. {:?}", e);
             return JoinShardResult::Err;
@@ -341,7 +348,7 @@ impl ReplicationClient {
         // We expect now an "Ok" or "NotOk" response
         match Self::read_replication_message(reader) {
             Err(e) => {
-                error!("Error reading replication message. {:?}", e);
+                error!("join_shard: error reading replication message. {:?}", e);
                 JoinShardResult::Err
             }
             Ok(msg) => {
@@ -411,16 +418,16 @@ impl ReplicationClient {
             .open_params
             .db_path
             .join(SEQUENCES_FILE);
-        let Some(sequence_number) = Self::read_next_sequence(sequence_file.clone()) else {
+        let Some(from_sequence) = Self::read_next_sequence(sequence_file.clone()) else {
             return RequestChangesResult::ExitThread;
         };
 
-        let request = ReplicationRequest::GetUpdatesSince((
-            RequestCommon::new().with_request_id(request_id),
-            sequence_number,
-        ));
+        let request = ReplicationRequest::GetUpdatesSince {
+            common: RequestCommon::new().with_request_id(request_id),
+            from_sequence,
+        };
 
-        let mut buffer = request.to_bytes();
+        let mut buffer = bincode_to_bytesmut_or!(request, RequestChangesResult::ExitThread);
         if let Err(e) = writer.write_message(&mut buffer) {
             error!("Failed to send replication request. {:?}", e);
             return RequestChangesResult::ExitThread;
@@ -431,7 +438,10 @@ impl ReplicationClient {
         // We expect now an "Ok" or "NotOk" response
         let common = match Self::read_replication_message(reader) {
             Err(e) => {
-                error!("Error reading replication message. {:?}", e);
+                error!(
+                    "request_changes: error reading replication message. {:?}",
+                    e
+                );
                 return RequestChangesResult::Reconnect;
             }
             Ok(msg) => {
@@ -445,7 +455,7 @@ impl ReplicationClient {
                         if common.reason().eq(&ResponseReason::NoChangesAvailable) =>
                     {
                         // The server stalled the request as long as it could, but no changes were available
-                        return RequestChangesResult::NoChanges(sequence_number);
+                        return RequestChangesResult::NoChanges(from_sequence);
                     }
                     ReplicationResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
@@ -645,12 +655,10 @@ mod tests {
         let req = RequestCommon::new();
 
         // At first we expect to get a "NotOk" response with "NoFullSyncDone" set as the reason
-        reader.add_response(
-            ReplicationResponse::NotOk(
-                ResponseCommon::new(&req).with_reason(ResponseReason::NoFullSyncDone),
-            )
-            .to_bytes(),
-        );
+        let resp_no_ok = bincode_to_bytesmut!(ReplicationResponse::NotOk(
+            ResponseCommon::new(&req).with_reason(ResponseReason::NoFullSyncDone),
+        ));
+        reader.add_response(resp_no_ok);
 
         let (_tx, mut rx) = tokio_channel::<ReplClientCommand>(100);
 
@@ -696,10 +704,9 @@ mod tests {
 
         // The replica is expected to send a "FullSync" message and the expected response should be
         // "Ok"
-        reader.add_response(
-            ReplicationResponse::Ok(ResponseCommon::new(&req).with_reason(ResponseReason::Invalid))
-                .to_bytes(),
-        );
+        reader.add_response(bincode_to_bytesmut!(ReplicationResponse::Ok(
+            ResponseCommon::new(&req).with_reason(ResponseReason::Invalid)
+        )));
 
         // Followed by the change set
         let limits = Rc::new(GetChangesLimits::builder().build());

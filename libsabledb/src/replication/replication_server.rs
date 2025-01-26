@@ -1,3 +1,4 @@
+use crate::bincode_to_bytesmut_or;
 use crate::replication::{prepare_std_socket, ClusterManager};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
@@ -115,7 +116,7 @@ impl ReplicationServer {
         let result = reader.read_message()?;
         match result {
             None => Ok(None),
-            Some(bytes) => Ok(ReplicationRequest::from_bytes(&bytes)),
+            Some(bytes) => Ok(Some(bincode::deserialize::<ReplicationRequest>(&bytes)?)),
         }
     }
 
@@ -175,7 +176,7 @@ impl ReplicationServer {
 
     /// Write `response` to `writer`. Return `true` on success, `false` otherwise
     fn write_response(writer: &mut impl BytesWriter, response: &ReplicationResponse) -> bool {
-        let mut response_mut = response.to_bytes();
+        let mut response_mut = bincode_to_bytesmut_or!(response, false);
         if let Err(e) = writer.write_message(&mut response_mut) {
             error!("Failed to send response: '{}'. {:?}", response, e);
             false
@@ -269,14 +270,17 @@ impl ReplicationServer {
                 Self::update_primary_info(store, cm);
             }
 
-            ReplicationRequest::GetUpdatesSince((common, seq)) => {
+            ReplicationRequest::GetUpdatesSince {
+                common,
+                from_sequence,
+            } => {
                 debug!(
                     "Received request GetUpdatesSince({}, ChangesSince:{})",
-                    common, seq
+                    common, from_sequence
                 );
                 debug!(
                     "Replica {} is requesting changes since: {}",
-                    replica_node_id, seq
+                    replica_node_id, from_sequence
                 );
 
                 if common.request_id() == 0 {
@@ -316,27 +320,28 @@ impl ReplicationServer {
                 );
 
                 let storage_updates = loop {
-                    let storage_updates = match store.storage_updates_since(seq, limits.clone()) {
-                        Err(e) => {
-                            let msg =
-                                format!("Failed to construct 'changes since' message. {:?}", e);
-                            tracing::warn!(msg);
+                    let storage_updates =
+                        match store.storage_updates_since(from_sequence, limits.clone()) {
+                            Err(e) => {
+                                let msg =
+                                    format!("Failed to construct 'changes since' message. {:?}", e);
+                                tracing::warn!(msg);
 
-                            // build the response + the error code and send it back
-                            let response_not_ok = ReplicationResponse::NotOk(
-                                ResponseCommon::new(&common)
-                                    .with_reason(ResponseReason::CreatingUpdatesSinceError),
-                            );
-                            if Self::write_response(&mut writer, &response_not_ok) {
-                                return HandleRequestResult::Success;
-                            } else {
-                                return HandleRequestResult::NetError(
-                                    "Failed to write response".into(),
+                                // build the response + the error code and send it back
+                                let response_not_ok = ReplicationResponse::NotOk(
+                                    ResponseCommon::new(&common)
+                                        .with_reason(ResponseReason::CreatingUpdatesSinceError),
                                 );
+                                if Self::write_response(&mut writer, &response_not_ok) {
+                                    return HandleRequestResult::Success;
+                                } else {
+                                    return HandleRequestResult::NetError(
+                                        "Failed to write response".into(),
+                                    );
+                                }
                             }
-                        }
-                        Ok(changes_since) => changes_since,
-                    };
+                            Ok(changes_since) => changes_since,
+                        };
 
                     if storage_updates.is_empty() {
                         // No changes, stall the request

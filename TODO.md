@@ -2,6 +2,7 @@
 
 ## General (ordered by priority)
 
+* Move inter instance communication to use `tonic` - `InternalService`
 * Add API to dump & load a complete slot
 * Add API to dump slot from a given txn ID
 

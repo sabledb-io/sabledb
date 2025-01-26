@@ -77,6 +77,8 @@ pub enum SableError {
     NotOwner(Vec<u16>),
     #[error("Try again later. Backoff triggered")]
     Backoff,
+    #[error("SerializationErr. {0}")]
+    BincodeSerializationErr(#[from] bincode::Error),
 }
 
 #[allow(dead_code)]

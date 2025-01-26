@@ -37,3 +37,21 @@ pub fn prepare_std_socket(socket: &std::net::TcpStream) -> Result<(), SableError
     let _ = socket.set_nodelay(true);
     Ok(())
 }
+
+#[macro_export]
+macro_rules! bincode_to_bytesmut_or {
+    ($value:expr, $err:expr) => {{
+        let Ok(buffer) = bincode::serialize(&$value) else {
+            error!("bincode::serialize error");
+            return $err;
+        };
+        bytes::BytesMut::from(buffer.as_slice())
+    }};
+}
+
+#[macro_export]
+macro_rules! bincode_to_bytesmut {
+    ($value:expr) => {{
+        BytesMut::from(bincode::serialize(&$value)?.as_slice())
+    }};
+}

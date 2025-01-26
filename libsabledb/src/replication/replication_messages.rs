@@ -1,22 +1,7 @@
-use crate::{FromU8Reader, Server, ToU8Writer, U8ArrayBuilder, U8ArrayReader};
-use bytes::BytesMut;
+use crate::Server;
+use serde::{Deserialize, Serialize};
 
-/// Message types (requests)
-const GET_UPDATES_SINCE: u8 = 0;
-const FULL_SYNC: u8 = 1;
-const JOIN_SHARD: u8 = 2; // Request to join an existing shard
-
-// Message types (response)
-const ACK: u8 = 100; // Acknowledged
-const NACK: u8 = 101; // Negative Acknowledged
-
-/// NotOk reason
-const NOTOK_REASON_UNKNOWN: u8 = 0;
-const NOTOK_REASON_FULL_SYNC_NOT_DONE: u8 = 1;
-const NOTOK_REASON_UPDATES_SINCE_CREATE_ERR: u8 = 2;
-const NOTOK_REASON_NO_CHANGES: u8 = 3;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestCommon {
     /// The request unique ID. The `req_id` is auto generated when constructing a new `RequestCommon` struct
     req_id: u64,
@@ -28,23 +13,6 @@ pub struct RequestCommon {
 impl std::fmt::Display for RequestCommon {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "RequestId: {}", self.req_id)
-    }
-}
-
-impl ToU8Writer for RequestCommon {
-    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        self.req_id.to_writer(builder);
-        self.node_id.to_writer(builder);
-    }
-}
-
-impl FromU8Reader for RequestCommon {
-    type Item = RequestCommon;
-    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
-        Some(RequestCommon {
-            req_id: u64::from_reader(reader)?,
-            node_id: String::from_reader(reader)?,
-        })
     }
 }
 
@@ -72,7 +40,7 @@ impl RequestCommon {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResponseCommon {
     /// The request ID that generated this response
     req_id: u64,
@@ -127,56 +95,34 @@ impl Default for RequestCommon {
     }
 }
 
-impl FromU8Reader for ResponseCommon {
-    type Item = ResponseCommon;
-    fn from_reader(reader: &mut U8ArrayReader) -> Option<Self::Item> {
-        let req_id = u64::from_reader(reader)?;
-        let reason = ResponseReason::from_u8(u8::from_reader(reader)?)?;
-        let node_id = String::from_reader(reader)?;
-        let context = String::from_reader(reader)?;
-        Some(ResponseCommon {
-            req_id,
-            reason,
-            node_id,
-            context,
-        })
-    }
-}
-
-impl ToU8Writer for ResponseCommon {
-    fn to_writer(&self, builder: &mut U8ArrayBuilder) {
-        self.req_id.to_writer(builder);
-        self.reason.to_u8().to_writer(builder);
-        self.node_id.to_writer(builder);
-        self.context.to_writer(builder);
-    }
-}
-
 impl std::fmt::Display for ResponseCommon {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "RequestId: {}, Reason: {}, NodeId: {}, Context: {}",
+            "RequestId: {}, Reason: {:?}, NodeId: {}, Context: {}",
             self.req_id, self.reason, self.node_id, self.context
         )
     }
 }
 
 /// represents a replication request sent from the secondary -> primary
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReplicationRequest {
-    GetUpdatesSince((RequestCommon, u64)),
+    GetUpdatesSince {
+        common: RequestCommon,
+        from_sequence: u64,
+    },
     FullSync(RequestCommon),
     JoinShard(RequestCommon),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ReplicationResponse {
     Ok(ResponseCommon),
     NotOk(ResponseCommon),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResponseReason {
     Invalid,
     /// Replication requested for "changes" without doing fullsync first
@@ -193,144 +139,18 @@ impl Default for ResponseReason {
     }
 }
 
-impl std::fmt::Display for ResponseReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Invalid => write!(f, "Invalid"),
-            Self::NoFullSyncDone => write!(f, "NoFullSyncDone"),
-            Self::CreatingUpdatesSinceError => write!(f, "CreatingUpdatesSinceError"),
-            Self::NoChangesAvailable => write!(f, "NoChangesAvailable"),
-        }
-    }
-}
-
-impl ResponseReason {
-    pub fn to_u8(&self) -> u8 {
-        match self {
-            Self::Invalid => NOTOK_REASON_UNKNOWN,
-            Self::NoFullSyncDone => NOTOK_REASON_FULL_SYNC_NOT_DONE,
-            Self::CreatingUpdatesSinceError => NOTOK_REASON_UPDATES_SINCE_CREATE_ERR,
-            Self::NoChangesAvailable => NOTOK_REASON_NO_CHANGES,
-        }
-    }
-
-    pub fn from_u8(val: u8) -> Option<Self> {
-        match val {
-            NOTOK_REASON_UNKNOWN => Some(ResponseReason::Invalid),
-            NOTOK_REASON_FULL_SYNC_NOT_DONE => Some(ResponseReason::NoFullSyncDone),
-            NOTOK_REASON_UPDATES_SINCE_CREATE_ERR => {
-                Some(ResponseReason::CreatingUpdatesSinceError)
-            }
-            NOTOK_REASON_NO_CHANGES => Some(ResponseReason::NoChangesAvailable),
-            _ => None,
-        }
-    }
-}
-
-impl ReplicationRequest {
-    /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::new();
-        let mut builder = U8ArrayBuilder::with_buffer(&mut as_bytes);
-        match self {
-            Self::GetUpdatesSince((common, seq)) => {
-                // the message type goes first
-                GET_UPDATES_SINCE.to_writer(&mut builder);
-                common.to_writer(&mut builder);
-                seq.to_writer(&mut builder);
-            }
-            Self::FullSync(common) => {
-                // message type
-                FULL_SYNC.to_writer(&mut builder);
-                common.to_writer(&mut builder);
-            }
-            Self::JoinShard(common) => {
-                JOIN_SHARD.to_writer(&mut builder);
-                common.to_writer(&mut builder);
-            }
-        }
-        as_bytes
-    }
-
-    /// Construct `ReplicationRequest` from raw bytes
-    pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
-        let mut reader = U8ArrayReader::with_buffer(buf);
-
-        let req_type = u8::from_reader(&mut reader)?;
-        match req_type {
-            GET_UPDATES_SINCE => {
-                let common = RequestCommon::from_reader(&mut reader)?;
-                let seq = u64::from_reader(&mut reader)?;
-                Some(ReplicationRequest::GetUpdatesSince((common, seq)))
-            }
-            FULL_SYNC => {
-                let common = RequestCommon::from_reader(&mut reader)?;
-                Some(ReplicationRequest::FullSync(common))
-            }
-            JOIN_SHARD => {
-                let common = RequestCommon::from_reader(&mut reader)?;
-                Some(ReplicationRequest::JoinShard(common))
-            }
-            _ => {
-                tracing::error!(
-                    "Replication protocol error: read unknown replication request of type '{}'",
-                    req_type
-                );
-                None
-            }
-        }
-    }
-}
-
 impl std::fmt::Display for ReplicationRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::FullSync(common) => write!(f, "FullSync({})", common),
-            Self::GetUpdatesSince((common, seq)) => {
-                write!(f, "GetUpdatesSince({}, {})", common, seq)
+            Self::GetUpdatesSince {
+                common,
+                from_sequence,
+            } => {
+                write!(f, "GetUpdatesSince({}, {})", common, from_sequence)
             }
             Self::JoinShard(common) => {
                 write!(f, "JoinShard({})", common)
-            }
-        }
-    }
-}
-
-impl ReplicationResponse {
-    /// Serialise this object into `BytesMut`
-    pub fn to_bytes(&self) -> BytesMut {
-        let mut as_bytes = BytesMut::new();
-        let mut builder = U8ArrayBuilder::with_buffer(&mut as_bytes);
-        match self {
-            Self::Ok(common) => {
-                // the message type goes first
-                ACK.to_writer(&mut builder);
-                common.to_writer(&mut builder);
-            }
-            Self::NotOk(common) => {
-                // message type
-                NACK.to_writer(&mut builder);
-                common.to_writer(&mut builder);
-            }
-        }
-        as_bytes
-    }
-
-    /// Construct `ReplicationResponse` from raw bytes
-    pub fn from_bytes(buf: &BytesMut) -> Option<Self> {
-        let mut reader = U8ArrayReader::with_buffer(buf);
-
-        let response_type = u8::from_reader(&mut reader)?;
-        let common = ResponseCommon::from_reader(&mut reader)?;
-        match response_type {
-            ACK => Some(ReplicationResponse::Ok(common)),
-            NACK => Some(ReplicationResponse::NotOk(common)),
-            _ => {
-                tracing::error!(
-                    "Replication protocol error: read unknown replication response of type '{}'",
-                    response_type
-                );
-                None
             }
         }
     }
@@ -342,5 +162,26 @@ impl std::fmt::Display for ReplicationResponse {
             Self::Ok(common) => write!(f, "Ok({})", common),
             Self::NotOk(common) => write!(f, "NotOk({})", common),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+
+    #[test]
+    fn test_bincode_serialization() -> Result<(), crate::SableError> {
+        let req = RequestCommon::new();
+
+        let resp = ReplicationResponse::NotOk(
+            ResponseCommon::new(&req).with_reason(ResponseReason::NoFullSyncDone),
+        );
+        let as_bytes = crate::bincode_to_bytesmut!(resp);
+        let de_resp = bincode::deserialize::<ReplicationResponse>(&as_bytes)?;
+        println!("orig: {:?}", resp);
+        println!("de_resp: {:?}", de_resp);
+        assert_eq!(de_resp, resp);
+        Ok(())
     }
 }
