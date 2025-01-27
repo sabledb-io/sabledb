@@ -117,8 +117,10 @@ pub enum ReplicationRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ReplicationResponse {
+pub enum NodeResponse {
+    /// General "OK" response from the node server
     Ok(ResponseCommon),
+    /// A general "Not OK" response from the node server
     NotOk(ResponseCommon),
 }
 
@@ -156,7 +158,7 @@ impl std::fmt::Display for ReplicationRequest {
     }
 }
 
-impl std::fmt::Display for ReplicationResponse {
+impl std::fmt::Display for NodeResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Ok(common) => write!(f, "Ok({})", common),
@@ -174,11 +176,11 @@ mod tests {
     fn test_bincode_serialization() -> Result<(), crate::SableError> {
         let req = RequestCommon::new();
 
-        let resp = ReplicationResponse::NotOk(
+        let resp = NodeResponse::NotOk(
             ResponseCommon::new(&req).with_reason(ResponseReason::NoFullSyncDone),
         );
         let as_bytes = crate::bincode_to_bytesmut!(resp);
-        let de_resp = bincode::deserialize::<ReplicationResponse>(&as_bytes)?;
+        let de_resp = bincode::deserialize::<NodeResponse>(&as_bytes)?;
         println!("orig: {:?}", resp);
         println!("de_resp: {:?}", de_resp);
         assert_eq!(de_resp, resp);

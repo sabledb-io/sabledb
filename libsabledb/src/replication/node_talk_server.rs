@@ -12,8 +12,8 @@ use crate::utils;
 use crate::{
     io::Archive,
     replication::{
-        BytesReader, BytesWriter, ReplicationRequest, ReplicationResponse, ResponseCommon,
-        ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
+        BytesReader, BytesWriter, NodeResponse, ReplicationRequest, ResponseCommon, ResponseReason,
+        TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     SableError, Server, StorageAdapter,
 };
@@ -236,7 +236,7 @@ impl NodeTalkServer {
     }
 
     /// Write `response` to `writer`. Return `true` on success, `false` otherwise
-    fn write_response(writer: &mut impl BytesWriter, response: &ReplicationResponse) -> bool {
+    fn write_response(writer: &mut impl BytesWriter, response: &NodeResponse) -> bool {
         let mut response_mut = bincode_to_bytesmut_or!(response, false);
         if let Err(e) = writer.write_message(&mut response_mut) {
             error!("Failed to send response: '{}'. {:?}", response, e);
@@ -289,9 +289,8 @@ impl NodeTalkServer {
             ReplicationRequest::JoinShard(common) => {
                 info!("Received request: JoinShard({})", common);
                 let shard_name = Server::state().persistent_state().shard_name();
-                let response_ok = ReplicationResponse::Ok(
-                    ResponseCommon::new(&common).with_context(shard_name.clone()),
-                );
+                let response_ok =
+                    NodeResponse::Ok(ResponseCommon::new(&common).with_context(shard_name.clone()));
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
@@ -304,7 +303,7 @@ impl NodeTalkServer {
             }
             ReplicationRequest::FullSync(common) => {
                 debug!("Received request {}", common);
-                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
+                let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
 
                 // Response with an ACK followed by the file
                 debug!("Sending replication response: {}", response_ok);
@@ -346,7 +345,7 @@ impl NodeTalkServer {
 
                 if common.request_id() == 0 {
                     // This is the first request - force a fullsync
-                    let response_not_ok = ReplicationResponse::NotOk(
+                    let response_not_ok = NodeResponse::NotOk(
                         ResponseCommon::new(&common).with_reason(ResponseReason::NoFullSyncDone),
                     );
 
@@ -389,7 +388,7 @@ impl NodeTalkServer {
                                 tracing::warn!(msg);
 
                                 // build the response + the error code and send it back
-                                let response_not_ok = ReplicationResponse::NotOk(
+                                let response_not_ok = NodeResponse::NotOk(
                                     ResponseCommon::new(&common)
                                         .with_reason(ResponseReason::CreatingUpdatesSinceError),
                                 );
@@ -428,7 +427,7 @@ impl NodeTalkServer {
 
                 let Some(storage_updates) = storage_updates else {
                     // No changes available to send
-                    let response_not_ok = ReplicationResponse::NotOk(
+                    let response_not_ok = NodeResponse::NotOk(
                         ResponseCommon::new(&common)
                             .with_reason(ResponseReason::NoChangesAvailable),
                     );
@@ -442,7 +441,7 @@ impl NodeTalkServer {
                 info!("Sending replication update: {}", storage_updates);
 
                 // Send a `ReplicationResponse::Ok` message, followed by the data
-                let response_ok = ReplicationResponse::Ok(ResponseCommon::new(&common));
+                let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }

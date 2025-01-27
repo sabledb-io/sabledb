@@ -1,3 +1,4 @@
+mod client_replication_loop;
 mod cluster_lock;
 mod cluster_manager;
 mod messages;
@@ -13,12 +14,13 @@ pub use crate::SableError;
 pub use cluster_manager::*;
 pub use persistence::*;
 
+pub use client_replication_loop::*;
 pub use cluster_lock::{BlockingLock, Lock};
 
+pub use client_replication_loop::NodeTalkCommand;
 pub use messages::{
-    ReplicationRequest, ReplicationResponse, RequestCommon, ResponseCommon, ResponseReason,
+    NodeResponse, ReplicationRequest, RequestCommon, ResponseCommon, ResponseReason,
 };
-pub use node_talk_client::{ClientReplicationLoop, NodeTalkCommand};
 pub use node_talk_server::{replication_thread_stop_all, NodeTalkServer};
 pub use replication_config::ServerRole;
 pub use storage_updates::{DeleteRecord, PutRecord, StorageUpdates, StorageUpdatesIterItem};
