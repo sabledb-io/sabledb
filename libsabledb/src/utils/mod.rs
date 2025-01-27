@@ -624,7 +624,7 @@ pub fn choose_multiple_values(
     options: &[usize],
     allow_dups: bool,
 ) -> Result<VecDeque<usize>, SableError> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut chosen = Vec::<usize>::new();
     if allow_dups {
         for _ in 0..count {
@@ -643,7 +643,7 @@ pub fn choose_multiple_values(
                 break;
             }
 
-            let pos = rng.gen_range(0..unique_values.len());
+            let pos = rng.random_range(0..unique_values.len());
             let Some(val) = unique_values.get(pos) else {
                 return Err(SableError::OtherError(format!(
                     "Internal error: failed to read from vector (len: {}, pos: {})",

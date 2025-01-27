@@ -161,12 +161,12 @@ impl Worker {
 
         // pick reporting interval for this worker to avoid all workers
         // contesting for the same lock
-        let mut rng = rand::thread_rng();
-        let secs = rng.gen_range(1..3);
-        let nanos = rng.gen_range(0..u32::MAX);
+        let mut rng = rand::rng();
+        let secs = rng.random_range(1..3);
+        let nanos = rng.random_range(0..u32::MAX);
 
         // Tick task should be triggered in a random time for every worker
-        let tick_interval_micros = rng.gen_range(100000..150000);
+        let tick_interval_micros = rng.random_range(100000..150000);
 
         // create the TLS acceptor for this thread
         let acceptor = if self

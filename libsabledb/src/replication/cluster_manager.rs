@@ -73,8 +73,8 @@ static START: Once = Once::new();
 impl ClusterManager {
     pub fn with_options(options: Arc<StdRwLock<ServerOptions>>) -> Self {
         START.call_once(|| {
-            let mut rng = rand::thread_rng();
-            let us = rng.gen_range(5000000..10_000000);
+            let mut rng = rand::rng();
+            let us = rng.random_range(5000000..10_000000);
             CHECK_PRIMARY_ALIVE_INTERVAL.store(us, Ordering::Relaxed);
             tracing::info!(
                 "Check primary interval is set to {} microseconds",
