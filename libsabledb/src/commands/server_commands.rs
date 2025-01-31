@@ -170,49 +170,6 @@ impl ServerCommands {
         Ok(())
     }
 
-    /// `SLOT`
-    /// Slot management command.
-    /// - `SLOT <NUMBER> COUNT` return the number of items are stored for this slot
-    /// - `SLOT <NUMBER> SENDTO <IP> <PORT>` - move slot ownership to node at a given address
-    async fn slot(
-        client_state: Rc<ClientState>,
-        command: Rc<ValkeyCommand>,
-        response_buffer: &mut BytesMut,
-    ) -> Result<(), SableError> {
-        // Min of 3 arguments
-        check_args_count!(command, 3, response_buffer);
-        let slot_number = command_arg_at!(command, 1);
-
-        let builder = RespBuilderV2::default();
-
-        // Make sure that slot passed is a u16
-        let Some(slot_number) = BytesMutUtils::parse::<u16>(slot_number) else {
-            builder_return_value_not_int!(builder, response_buffer);
-        };
-
-        // And it is in the valid range [0..SLOT_SIZE)
-        if slot_number >= SLOT_SIZE {
-            builder_return_value_not_int!(builder, response_buffer);
-        }
-
-        let sub_command = String::from_utf8_lossy(command_arg_at!(command, 2)).to_ascii_uppercase();
-
-        match sub_command.as_str() {
-            "COUNT" => {
-                let slot = Slot::with_slot(slot_number);
-                let items_count = slot.count(client_state).await?;
-                builder.number_u64(response_buffer, items_count);
-            }
-            "SENDTO" => {
-                builder.error_string(response_buffer, "Command `SLOT SENDTO` not implemented yet");
-            }
-            _ => {
-                builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
-            }
-        }
-        Ok(())
-    }
-
     async fn flushdb(
         client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
@@ -247,6 +204,66 @@ impl ServerCommands {
             .delete_range(Some(&start_key), Some(&end_key))?;
         let builder = RespBuilderV2::default();
         builder.ok(response_buffer);
+        Ok(())
+    }
+
+    /// `SLOT`
+    /// Slot management command.
+    /// - `SLOT COUNT <NUMBER>` return the number of items are stored for this slot
+    /// - `SLOT SENDTO <NUMBER> <IP> <PORT>` - move slot ownership to node at a given address
+    async fn slot(
+        client_state: Rc<ClientState>,
+        command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        // Min of 3 arguments
+        check_args_count!(command, 2, response_buffer);
+        let sub_command = String::from_utf8_lossy(command_arg_at!(command, 1)).to_ascii_uppercase();
+
+        match sub_command.as_str() {
+            "COUNT" => Self::slot_count(client_state, command, response_buffer).await,
+            "SENDTO" => Self::slot_sendto(client_state, command, response_buffer).await,
+            _ => {
+                let builder = RespBuilderV2::default();
+                builder_return_syntax_error!(builder, response_buffer);
+            }
+        }
+    }
+
+    // `SLOT COUNT <NUMBER>`
+    async fn slot_count(
+        client_state: Rc<ClientState>,
+        command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let slot_number = command_arg_at!(command, 2);
+
+        // Make sure that slot passed is a u16
+        let builder = RespBuilderV2::default();
+        let Some(slot_number) = BytesMutUtils::parse::<u16>(slot_number) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // And it is in the valid range [0..SLOT_SIZE)
+        if slot_number >= SLOT_SIZE {
+            builder_return_value_not_int!(builder, response_buffer);
+        }
+        let slot = Slot::with_slot(slot_number);
+        let items_count = slot.count(client_state).await?;
+        builder.number_u64(response_buffer, items_count);
+        Ok(())
+    }
+
+    // `SLOT SENDTO <NUMBER> <IP> <PORT>`
+    async fn slot_sendto(
+        _client_state: Rc<ClientState>,
+        command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 5, response_buffer);
+        let builder = RespBuilderV2::default();
+        builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
         Ok(())
     }
 }
@@ -367,15 +384,15 @@ mod test {
         ("set key3 v", "+OK\r\n"),
         ("set key4 v", "+OK\r\n"),
         ("slot", "-ERR wrong number of arguments for 'slot' command\r\n"),
-        ("slot abc abc", "-ERR value is not an integer or out of range\r\n"),
+        ("slot COUNT abc", "-ERR value is not an integer or out of range\r\n"),
         ("slot 100 abc", "-ERR syntax error\r\n"),
-        ("slot 9189 COUNT", ":1\r\n"),
-        ("slot 4998 COUNT", ":1\r\n"),
-        ("slot 935 COUNT", ":1\r\n"),
-        ("slot 13120 COUNT", ":1\r\n"),
-        ("slot 0 COUNT", ":0\r\n"),
-        ("slot 16383 COUNT", ":0\r\n"),
-        ("slot 16384 COUNT", "-ERR value is not an integer or out of range\r\n"),
+        ("slot COUNT 9189", ":1\r\n"),
+        ("slot COUNT 4998", ":1\r\n"),
+        ("slot COUNT 935", ":1\r\n"),
+        ("slot COUNT 13120", ":1\r\n"),
+        ("slot COUNT 0", ":0\r\n"),
+        ("slot COUNT 16383", ":0\r\n"),
+        ("slot COUNT 16384", "-ERR value is not an integer or out of range\r\n"),
     ]; "test_slot")]
     fn test_server_commands(args: Vec<(&'static str, &'static str)>) -> Result<(), SableError> {
         let rt = tokio::runtime::Runtime::new().unwrap();
