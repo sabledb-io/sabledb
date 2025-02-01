@@ -210,7 +210,7 @@ impl ServerCommands {
     /// `SLOT`
     /// Slot management command.
     /// - `SLOT COUNT <NUMBER>` return the number of items are stored for this slot
-    /// - `SLOT SENDTO <NUMBER> <IP> <PORT>` - move slot ownership to node at a given address
+    /// - `SLOT SENDTO <IP> <PORT> <NUMBER>` - move slot ownership to node at a given address
     async fn slot(
         client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
@@ -230,7 +230,7 @@ impl ServerCommands {
         }
     }
 
-    // `SLOT COUNT <NUMBER>`
+    /// `SLOT COUNT <NUMBER>`
     async fn slot_count(
         client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
@@ -255,14 +255,47 @@ impl ServerCommands {
         Ok(())
     }
 
-    // `SLOT SENDTO <NUMBER> <IP> <PORT>`
+    /// `SLOT SENDTO <IP> <PORT> <NUMBER>` Transfer slot ownership to `<IP>:<PORT>`.
+    ///
+    /// #### Phase 1: no locking are done
+    ///
+    /// - The sender takes the "current change sequence" and store it locally
+    /// - The sender creates an iterator over the prefix `<db>:<slot>`
+    /// - The sender sends over the data in chunks
+    /// - Once the last chunk is sent:
+    ///
+    /// #### Phase 2: "read-only" lock on the sender size, "write" on the receiver end
+    ///
+    /// - The sender locks the slot for "read-only"
+    /// - The sender sends over all the changes since the marker "current change sequence" kept earlier
+    /// - The sender notifies the receiver to accept ownership on the slot
+    /// - The receiver locks the slot for "write" `ShardLocker::lock_slots_exclusive_unconditionally(u16)`
+    /// - The receiver updates its `SlotBitmap` and updates the cluster database
+    /// - The receiver affirms that the slot ownership was accepted
+    /// - Once confirmed, the sender removes the slot from the `SlotBitmap`
+    /// - The sender deletes all records for the slot from the database
+    /// - The sender finally removes the lock
     async fn slot_sendto(
-        _client_state: Rc<ClientState>,
+        client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
         check_args_count!(command, 5, response_buffer);
+        let slot_number = command_arg_at!(command, 4);
         let builder = RespBuilderV2::default();
+        // Make sure that slot passed is a u16
+        let Some(slot_number) = BytesMutUtils::parse::<u16>(slot_number) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // And it is in the valid range [0..SLOT_SIZE)
+        if slot_number >= SLOT_SIZE {
+            builder_return_value_not_int!(builder, response_buffer);
+        }
+
+        // Take a marker so we know where to continue after we send the first batch
+        let _last_txn_id = client_state.database().latest_sequence_number()?;
+        let _slot = Slot::with_slot(slot_number);
         builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
         Ok(())
     }

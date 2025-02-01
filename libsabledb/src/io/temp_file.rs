@@ -13,7 +13,7 @@ pub struct TempFile {
 impl TempFile {
     pub fn with_name(name: &str) -> Self {
         let full_path = format!(
-            "{}/{}.{}.txt",
+            "{}/{}.{}",
             std::env::temp_dir().to_path_buf().display(),
             name,
             COUNTER.fetch_add(1, Ordering::Relaxed)

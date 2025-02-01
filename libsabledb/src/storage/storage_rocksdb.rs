@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use crate::{
     metadata::KeyType,
-    replication::{StorageUpdates, StorageUpdatesIterItem},
+    replication::{StorageUpdates, StorageUpdatesRecord},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
         GetChangesLimits, PutFlags, StorageTrait, SEQUENCES_FILE,
@@ -550,11 +550,11 @@ mod tests {
         let next_batch_seq = changes.end_seq_number;
         let mut counter = 0;
         let mut reader = crate::U8ArrayReader::with_buffer(&changes.serialised_data);
-        while let Some(item) = changes.next(&mut reader) {
-            let StorageUpdatesIterItem::Put(put_record) = item else {
+        while let Some(item) = StorageUpdates::next(&mut reader) {
+            let StorageUpdatesRecord::Put { key, value: _ } = item else {
                 return Err(SableError::OtherError("Expected put record".to_string()));
             };
-            let key_to_remove = String::from_utf8_lossy(&put_record.key).to_string();
+            let key_to_remove = String::from_utf8_lossy(&key).to_string();
             assert!(all_keys.remove(&key_to_remove));
             counter += 1;
         }
@@ -564,11 +564,11 @@ mod tests {
         assert_eq!(changes.changes_count, 10);
         let mut counter = 0;
         let mut reader = crate::U8ArrayReader::with_buffer(&changes.serialised_data);
-        while let Some(item) = changes.next(&mut reader) {
-            let StorageUpdatesIterItem::Put(put_record) = item else {
+        while let Some(item) = StorageUpdates::next(&mut reader) {
+            let StorageUpdatesRecord::Put { key, value: _ } = item else {
                 return Err(SableError::OtherError("Expected put record".to_string()));
             };
-            let key_to_remove = String::from_utf8_lossy(&put_record.key).to_string();
+            let key_to_remove = String::from_utf8_lossy(&key).to_string();
             assert!(all_keys.remove(&key_to_remove));
             counter += 1;
         }

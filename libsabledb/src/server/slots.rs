@@ -1,14 +1,25 @@
 use crate::utils::SLOT_SIZE;
 #[allow(unused_imports)]
-use crate::{storage::GenericDb, utils::U8ArrayBuilder, ClientState, KeyType, SableError};
-use bytes::BytesMut;
+use crate::{
+    replication::StorageUpdatesRecord,
+    storage::GenericDb,
+    utils::{U8ArrayBuilder, U8ArrayReader},
+    ClientState, KeyType, SableError, Server, StorageAdapter,
+};
+
+use bytes::{Buf, BytesMut};
 use enum_iterator::next;
+use std::fs::File as StdFile;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use tokio::fs::File as TokioFile;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Clone, Debug)]
 pub struct SlotBitmap {
@@ -263,6 +274,131 @@ impl std::fmt::Display for SlotBitmap {
     }
 }
 
+pub struct SlotFileIterator {
+    buffer: BytesMut,
+    fp: StdFile,
+}
+
+impl SlotFileIterator {
+    pub fn new(filepath: &Path) -> Result<Self, SableError> {
+        let fp = StdFile::options().read(true).open(filepath)?;
+        Ok(SlotFileIterator {
+            buffer: BytesMut::new(),
+            fp,
+        })
+    }
+
+    fn read_buffer(&mut self) -> Result<bool, SableError> {
+        if !self.buffer.is_empty() {
+            return Ok(false);
+        }
+
+        const BYTES_TO_READ: usize = std::mem::size_of::<usize>();
+        let mut chunk_len = [0u8; BYTES_TO_READ];
+        self.fp.read_exact(&mut chunk_len)?;
+        let chunk_len = usize::from_be_bytes(chunk_len);
+        self.buffer.resize(chunk_len, 0u8);
+        // read exactly chunk size from the file
+        Ok(self.fp.read(self.buffer.as_mut())? == chunk_len)
+    }
+}
+
+impl Iterator for SlotFileIterator {
+    type Item = StorageUpdatesRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.buffer.is_empty() {
+            // Read next chunk from the disk
+            if !self.read_buffer().ok()? {
+                return None;
+            }
+        }
+
+        let mut reader = U8ArrayReader::with_buffer(&self.buffer);
+        let Ok(record) = StorageUpdatesRecord::from(&mut reader) else {
+            return None;
+        };
+
+        self.buffer.advance(reader.consumed());
+        Some(record)
+    }
+}
+
+#[allow(dead_code)]
+pub struct SlotFile<'a> {
+    prefix_arr: Vec<BytesMut>,
+    db: &'a StorageAdapter,
+    /// Maximum chunk size
+    max_chunk_size: usize,
+    slot_number: u16,
+}
+
+#[allow(dead_code)]
+impl<'a> SlotFile<'a> {
+    pub fn new(db: &'a StorageAdapter, slot: u16, db_id: u16) -> Result<Self, SableError> {
+        let slot = Slot::with_slot(slot);
+        let prefix_arr = slot.create_prefix_array(db_id)?;
+        let max_chunk_size = Server::state()
+            .options()
+            .read()
+            .map_err(|e| {
+                SableError::InternalError(format!(
+                    "Could not lock server options object for read. {e:?}"
+                ))
+            })?
+            .replication_limits
+            .single_update_buffer_size;
+        Ok(SlotFile {
+            prefix_arr,
+            db,
+            max_chunk_size,
+            slot_number: slot.slot,
+        })
+    }
+
+    /// Dump the slot content into a file
+    /// Format is:
+    /// [ <chunk_len> | <chunk_content> |... ]
+    /// Chunk content:
+    //  [ PutRecord | PutRecord ... ]
+    async fn write(&mut self) -> Result<Option<PathBuf>, SableError> {
+        if self.prefix_arr.is_empty() {
+            return Ok(None);
+        };
+
+        let file_name =
+            crate::io::TempFile::with_name(format!("slot_{}", self.slot_number).as_str());
+
+        let mut fp = TokioFile::create(file_name.fullpath()).await?;
+        let mut chunk = BytesMut::with_capacity(self.max_chunk_size);
+        let mut buffer_builder = U8ArrayBuilder::with_buffer(&mut chunk);
+        for key_type_prefix in &self.prefix_arr {
+            let mut db_iter = self.db.create_iterator(key_type_prefix)?;
+            while db_iter.valid() {
+                let Some((key, value)) = db_iter.key_value() else {
+                    break;
+                };
+
+                if !key.starts_with(key_type_prefix) {
+                    break;
+                }
+
+                StorageUpdatesRecord::serialise_put(&mut buffer_builder, key, value);
+                if buffer_builder.len() >= self.max_chunk_size {
+                    // Write the chunk size
+                    fp.write_all(&chunk.len().to_be_bytes()).await?;
+                    // Write the chunk content
+                    fp.write_all_buf(&mut chunk).await?;
+                    chunk.clear();
+                    buffer_builder = U8ArrayBuilder::with_buffer(&mut chunk);
+                }
+                db_iter.next();
+            }
+        }
+        Ok(Some(PathBuf::from(file_name.fullpath())))
+    }
+}
+
 // Slot operations
 #[derive(Default)]
 pub struct Slot {
@@ -274,11 +410,50 @@ impl Slot {
         Slot { slot }
     }
 
+    /// Return a prefix bytes array that can be used a filter when iterating the database searching for items belonged to the
+    /// current slot. The array contains prefix per key type (PrimaryKey, ListItem etc)
+    pub fn prefix(&self, db_id: u16) -> Result<Vec<BytesMut>, SableError> {
+        self.create_prefix_array(db_id)
+    }
+
     /// Count the number of items belong to this slot exist in the database
     pub async fn count(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
         // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
-        let prefix =
-            self.create_prefix_for_key_type(KeyType::PrimaryKey, client_state.database_id());
+        let prefix = Self::create_prefix_for_key_type(
+            self.slot,
+            KeyType::PrimaryKey,
+            client_state.database_id(),
+        );
+        let mut db_iter = client_state.database().create_iterator(&prefix)?;
+        let mut items_count = 0u64;
+        while db_iter.valid() {
+            let Some(key) = db_iter.key() else {
+                break;
+            };
+
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            items_count = items_count.saturating_add(1);
+            db_iter.next();
+
+            if items_count.rem_euclid(10_000) == 0 {
+                // Let other tasks process as well
+                tokio::task::yield_now().await;
+            }
+        }
+        Ok(items_count)
+    }
+
+    /// Count the number of items belong to this slot exist in the database
+    pub async fn create_chunk(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
+        // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
+        let prefix = Self::create_prefix_for_key_type(
+            self.slot,
+            KeyType::PrimaryKey,
+            client_state.database_id(),
+        );
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         let mut items_count = 0u64;
         while db_iter.valid() {
@@ -305,7 +480,6 @@ impl Slot {
     /// [KeyType, u16(db_id), u16(slot)] (see `KeyPrefix` struct)
     /// this method creates an array of prefixes that allow us to iterate the database
     /// over all items belong to the slot
-    #[allow(dead_code)]
     fn create_prefix_array(&self, db_id: u16) -> Result<Vec<BytesMut>, SableError> {
         let mut prefix_arr = Vec::<BytesMut>::default();
         let mut key_type = KeyType::Bookkeeping;
@@ -317,17 +491,17 @@ impl Slot {
             if key_type.eq(&KeyType::Metadata) {
                 break;
             }
-            prefix_arr.push(self.create_prefix_for_key_type(key_type, db_id));
+            prefix_arr.push(Self::create_prefix_for_key_type(self.slot, key_type, db_id));
         }
         Ok(prefix_arr)
     }
 
-    fn create_prefix_for_key_type(&self, key_type: KeyType, db_id: u16) -> BytesMut {
+    fn create_prefix_for_key_type(slot: u16, key_type: KeyType, db_id: u16) -> BytesMut {
         let mut prefix = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
         builder.write_key_type(key_type);
         builder.write_u16(db_id);
-        builder.write_u16(self.slot);
+        builder.write_u16(slot);
         prefix
     }
 }
@@ -342,6 +516,23 @@ impl Slot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_slot_prefix() {
+        // Check that generate prefix covers all the known key types
+        let key_type_vec = vec![
+            Slot::create_prefix_for_key_type(10, KeyType::PrimaryKey, 0),
+            Slot::create_prefix_for_key_type(10, KeyType::ListItem, 0),
+            Slot::create_prefix_for_key_type(10, KeyType::HashItem, 0),
+            Slot::create_prefix_for_key_type(10, KeyType::ZsetMemberItem, 0),
+            Slot::create_prefix_for_key_type(10, KeyType::ZsetScoreItem, 0),
+            Slot::create_prefix_for_key_type(10, KeyType::SetItem, 0),
+        ];
+
+        let slot = Slot::with_slot(10);
+        let prefix_arr = slot.create_prefix_array(0).unwrap();
+        assert_eq!(prefix_arr, key_type_vec);
+    }
 
     #[test]
     fn test_slot_is_set() {

@@ -23,7 +23,7 @@ pub use messages::{
 };
 pub use node_talk_server::{replication_thread_stop_all, NodeTalkServer};
 pub use replication_config::ServerRole;
-pub use storage_updates::{DeleteRecord, PutRecord, StorageUpdates, StorageUpdatesIterItem};
+pub use storage_updates::{StorageUpdates, StorageUpdatesRecord};
 
 pub use replication_traits::{
     BytesReader, BytesWriter, TcpStreamBytesReader, TcpStreamBytesWriter,

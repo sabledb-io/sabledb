@@ -14,7 +14,7 @@ use crate::{
     replication::node_talk_client::JoinShardResult,
     replication::{
         node_talk_client::NodeTalkClient, ClusterManager, NodeBuilder, StorageUpdates,
-        StorageUpdatesIterItem,
+        StorageUpdatesRecord,
     },
     BatchUpdate, SableError, Server, StorageAdapter, U8ArrayReader,
 };
@@ -80,13 +80,14 @@ impl ClientReplicationLoop {
                 .build()
             else {
                 tracing::error!("Could not create local runtime!");
+                event.set();
                 return;
             };
             rt.block_on(async move {
                 let primary_address = Server::state().persistent_state().primary_address();
                 tracing::info!("Connecting to primary at: {}", primary_address);
                 let cm = ClusterManager::with_options(options.clone());
-                'outer: loop {
+                'client_loop: loop {
                     let mut client = NodeTalkClient::default();
                     // Loop until we manage to connect
                     while let Err(e) = client.connect(&primary_address) {
@@ -100,14 +101,12 @@ impl ClientReplicationLoop {
                                 info!(
                                     "Requested to terminate replication client thread. Closing connection with primary"
                                 );
-                                event.set();
-                                break 'outer; // leave the thread
+                                break 'client_loop; // leave the thread
                             }
                             CheckShutdownResult::Timeout => {}
                             CheckShutdownResult::Err(e) => {
                                 error!("{:?}",e);
-                                event.set();
-                                break 'outer; // leave the thread
+                                break 'client_loop; // leave the thread
                             }
                         }
                         // Sleep a bit before retrying
@@ -129,18 +128,17 @@ impl ClientReplicationLoop {
                                 .set_shard_name(shard_name);
                         },
                         Ok(JoinShardResult::Err) => {
-                            event.set();
-                            break;
+                            break 'client_loop;
                         }
                         Err(e) => { 
-                            error!("error occured during join shard. {:?}", e);
-                            break;}
+                            error!("error occurred during join shard. {:?}", e);
+                            break 'client_loop;
+                        }
                     };
                     
                     let Some(stream) = client.stream_mut() else {
                         error!("Failed to get stream socket");
-                        event.set();
-                        break;
+                        break 'client_loop;
                     };
                     
                     // This is the replication main loop:
@@ -177,7 +175,7 @@ impl ClientReplicationLoop {
                                 // Fatal error, try to trigger a failover
                                 info!("Failed to process 'request_changes'. Closing connection with primary: {:?}", stream);
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                                break;
+                                break 'client_loop;
                             }
                             RequestChangesResult::FullSync => {
                                 // Try to do a fullsync
@@ -185,13 +183,14 @@ impl ClientReplicationLoop {
                                     = Self::fullsync(&store, &cm, options.clone(), stream, &mut request_id).await {
                                     error!("Fullsync error. {:?}", e);
                                     let _ = stream.shutdown(std::net::Shutdown::Both);
-                                    break;
+                                    break 'client_loop;
                                 }
                             }
                         }
                     }
-                }
+                } // 'client_loop
                 tracing::info!("Replication thread with primary {} is now exiting", primary_address);
+                event.set(); // Notify the main thread that the replication thread terminated
             });
         });
 
@@ -449,13 +448,13 @@ impl ClientReplicationLoop {
         const MAX_BATCH_SIZE: usize = 10_000;
         let mut batch_update = BatchUpdate::with_capacity(MAX_BATCH_SIZE);
         let mut reader = U8ArrayReader::with_buffer(&storage_updates.serialised_data);
-        while let Some(change) = storage_updates.next(&mut reader) {
+        while let Some(change) = StorageUpdates::next(&mut reader) {
             match change {
-                StorageUpdatesIterItem::Put(put_record) => {
-                    batch_update.put(put_record.key, put_record.value);
+                StorageUpdatesRecord::Put { key, value } => {
+                    batch_update.put(key, value);
                 }
-                StorageUpdatesIterItem::Del(delete_record) => {
-                    batch_update.delete(delete_record.key);
+                StorageUpdatesRecord::Del { key } => {
+                    batch_update.delete(key);
                 }
             }
             if batch_update.len() % MAX_BATCH_SIZE == 0 {

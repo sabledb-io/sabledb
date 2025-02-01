@@ -1,4 +1,4 @@
-use crate::{U8ArrayBuilder, U8ArrayReader};
+use crate::{SableError, U8ArrayBuilder, U8ArrayReader};
 use bytes::BytesMut;
 use num_format::{Locale, ToFormattedString};
 
@@ -6,13 +6,6 @@ const OPCODE_PUT: u8 = 0;
 const OPCODE_DEL: u8 = 1;
 const USIZE_SIZE: usize = std::mem::size_of::<usize>();
 const U64_SIZE: usize = std::mem::size_of::<u64>();
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct PutRecord {
-    pub key: BytesMut,
-    pub value: BytesMut,
-}
 
 const LEN_TYPE_8: u8 = 0u8;
 const LEN_TYPE_16: u8 = 1u8;
@@ -70,54 +63,47 @@ fn read_buffer(reader: &mut U8ArrayReader) -> Option<BytesMut> {
     reader.read_bytes(key_len)
 }
 
-impl PutRecord {
-    pub fn to_bytes(builder: &mut U8ArrayBuilder, key: &[u8], value: &[u8]) {
+#[derive(Debug, Clone, PartialEq)]
+pub enum StorageUpdatesRecord {
+    Put { key: BytesMut, value: BytesMut },
+    Del { key: BytesMut },
+}
+
+impl StorageUpdatesRecord {
+    /// Construct StorageUpdatesRecord from reader
+    pub fn from(reader: &mut U8ArrayReader) -> Result<Self, SableError> {
+        let op_code = reader.read_u8().ok_or(SableError::SerialisationError)?;
+        match op_code {
+            OPCODE_PUT => {
+                let key = read_buffer(reader).ok_or(SableError::SerialisationError)?;
+                let value = read_buffer(reader).ok_or(SableError::SerialisationError)?;
+                Ok(StorageUpdatesRecord::Put { key, value })
+            }
+            OPCODE_DEL => {
+                let key = read_buffer(reader).ok_or(SableError::SerialisationError)?;
+                Ok(StorageUpdatesRecord::Del { key })
+            }
+            _ => Err(SableError::SerialisationError),
+        }
+    }
+
+    pub fn to_bytes(&self, builder: &mut U8ArrayBuilder) {
+        match self {
+            StorageUpdatesRecord::Put { key, value } => Self::serialise_put(builder, key, value),
+            StorageUpdatesRecord::Del { key } => Self::serialise_del(builder, key),
+        }
+    }
+
+    pub fn serialise_put(builder: &mut U8ArrayBuilder, key: &[u8], value: &[u8]) {
+        builder.write_u8(OPCODE_PUT);
         write_buffer(builder, key);
         write_buffer(builder, value);
     }
 
-    /// Deserialise `PutRecord` from bytes.
-    /// On failure return `None`. On success, return the deserialised object +
-    /// remove the bytes used to construct the object from the buffer
-    pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<PutRecord> {
-        let key = read_buffer(reader)?;
-        let value = read_buffer(reader)?;
-        Some(PutRecord::new(key, value))
-    }
-
-    pub fn new(key: BytesMut, value: BytesMut) -> Self {
-        PutRecord { key, value }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct DeleteRecord {
-    pub key: BytesMut,
-}
-
-impl DeleteRecord {
-    pub fn to_bytes(builder: &mut U8ArrayBuilder, key: &[u8]) {
+    pub fn serialise_del(builder: &mut U8ArrayBuilder, key: &[u8]) {
+        builder.write_u8(OPCODE_DEL);
         write_buffer(builder, key);
     }
-
-    /// Deserialise `DeleteRecord` from bytes.
-    /// On failure return `None`. On success, return the deserialised object +
-    /// remove the bytes used to construct the object from the buffer
-    pub fn from_bytes(reader: &mut U8ArrayReader) -> Option<DeleteRecord> {
-        let key = read_buffer(reader)?;
-        Some(DeleteRecord::new(key))
-    }
-
-    pub fn new(key: BytesMut) -> Self {
-        DeleteRecord { key }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum StorageUpdatesIterItem {
-    Put(PutRecord),
-    Del(DeleteRecord),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -160,15 +146,13 @@ impl StorageUpdates {
     /// Serialise a `put` command
     pub fn add_put(&mut self, key: &[u8], value: &[u8]) {
         let mut writer = U8ArrayBuilder::with_buffer(&mut self.serialised_data);
-        writer.write_u8(OPCODE_PUT);
-        PutRecord::to_bytes(&mut writer, key, value);
+        StorageUpdatesRecord::serialise_put(&mut writer, key, value);
     }
 
     /// Serialise a `delete` command
     pub fn add_delete(&mut self, key: &[u8]) {
         let mut writer = U8ArrayBuilder::with_buffer(&mut self.serialised_data);
-        writer.write_u8(OPCODE_DEL);
-        DeleteRecord::to_bytes(&mut writer, key);
+        StorageUpdatesRecord::serialise_del(&mut writer, key);
     }
 
     /// Return the size of the changes, in bytes
@@ -210,20 +194,8 @@ impl StorageUpdates {
         })
     }
 
-    pub fn next(&self, reader: &mut U8ArrayReader) -> Option<StorageUpdatesIterItem> {
-        // The record kind is placed after the total record len
-        let kind = reader.read_u8()?;
-        match kind {
-            OPCODE_PUT => {
-                let record = PutRecord::from_bytes(reader)?;
-                Some(StorageUpdatesIterItem::Put(record))
-            }
-            OPCODE_DEL => {
-                let record = DeleteRecord::from_bytes(reader)?;
-                Some(StorageUpdatesIterItem::Del(record))
-            }
-            _ => None,
-        }
+    pub fn next(reader: &mut U8ArrayReader) -> Option<StorageUpdatesRecord> {
+        StorageUpdatesRecord::from(reader).ok()
     }
 }
 
@@ -255,28 +227,32 @@ mod tests {
     fn test_serialise_put_record() {
         let mut put_record_bytes = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut put_record_bytes);
-        PutRecord::to_bytes(&mut builder, b"hello", b"world");
+        StorageUpdatesRecord::serialise_put(&mut builder, b"hello", b"world");
 
         let mut reader = U8ArrayReader::with_buffer(&put_record_bytes);
-        let rec = PutRecord::from_bytes(&mut reader);
+        let rec = StorageUpdatesRecord::from(&mut reader).unwrap();
 
-        assert!(rec.is_some());
-        let rec = rec.unwrap();
-        assert_eq!(rec.key, "hello");
-        assert_eq!(rec.value, "world");
+        let StorageUpdatesRecord::Put { key, value } = rec else {
+            panic!("Expected Put record");
+        };
+
+        assert_eq!(key, "hello");
+        assert_eq!(value, "world");
     }
 
     #[test]
     fn test_serialise_delete_record() {
         let mut del_record_bytes = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut del_record_bytes);
-        DeleteRecord::to_bytes(&mut builder, b"hello");
+        StorageUpdatesRecord::serialise_del(&mut builder, b"hello");
 
         let mut reader = U8ArrayReader::with_buffer(&del_record_bytes);
-        let rec = DeleteRecord::from_bytes(&mut reader);
-        assert!(rec.is_some());
-        let rec = rec.unwrap();
-        assert_eq!(rec.key, "hello");
+        let rec = StorageUpdatesRecord::from(&mut reader).unwrap();
+
+        let StorageUpdatesRecord::Del { key } = rec else {
+            panic!("Expected Del record");
+        };
+        assert_eq!(key, "hello");
     }
 
     #[test]
@@ -289,38 +265,41 @@ mod tests {
 
         let mut reader = U8ArrayReader::with_buffer(&message.serialised_data);
         {
-            let Some(StorageUpdatesIterItem::Put(put_rec)) = message.next(&mut reader) else {
+            let Some(StorageUpdatesRecord::Put { key, value }) = StorageUpdates::next(&mut reader)
+            else {
                 assert!(false);
                 return;
             };
-            assert_eq!(put_rec.key, "put_key1");
-            assert_eq!(put_rec.value, "put_value1");
+            assert_eq!(key, "put_key1");
+            assert_eq!(value, "put_value1");
         }
 
         {
-            let Some(StorageUpdatesIterItem::Put(put_rec)) = message.next(&mut reader) else {
+            let Some(StorageUpdatesRecord::Put { key, value }) = StorageUpdates::next(&mut reader)
+            else {
                 assert!(false);
                 return;
             };
-            assert_eq!(put_rec.key, "put_key2");
-            assert_eq!(put_rec.value, "put_value2");
+            assert_eq!(key, "put_key2");
+            assert_eq!(value, "put_value2");
         }
 
         {
-            let Some(StorageUpdatesIterItem::Del(del_rec)) = message.next(&mut reader) else {
+            let Some(StorageUpdatesRecord::Del { key }) = StorageUpdates::next(&mut reader) else {
                 assert!(false);
                 return;
             };
-            assert_eq!(del_rec.key, "delete_key1");
+            assert_eq!(key, "delete_key1");
         }
 
         {
-            let Some(StorageUpdatesIterItem::Put(put_rec)) = message.next(&mut reader) else {
+            let Some(StorageUpdatesRecord::Put { key, value }) = StorageUpdates::next(&mut reader)
+            else {
                 assert!(false);
                 return;
             };
-            assert_eq!(put_rec.key, "put_key3");
-            assert_eq!(put_rec.value, "put_value3");
+            assert_eq!(key, "put_key3");
+            assert_eq!(value, "put_value3");
         }
     }
 }

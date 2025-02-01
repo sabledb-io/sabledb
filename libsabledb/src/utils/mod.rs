@@ -570,6 +570,14 @@ impl<'a> U8ArrayBuilder<'a> {
         self.write_usize(bytes.len());
         self.write_bytes(bytes);
     }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Number of slots

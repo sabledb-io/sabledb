@@ -12,7 +12,7 @@ mod string_db;
 mod write_cache;
 mod zset_db;
 
-pub use crate::replication::{StorageUpdates, StorageUpdatesIterItem};
+pub use crate::replication::{StorageUpdates, StorageUpdatesRecord};
 pub use crate::storage::storage_adapter::*;
 pub use generic_db::GenericDb;
 pub use hash_db::{
