@@ -12,6 +12,16 @@ pub struct TempFile {
 
 impl TempFile {
     pub fn with_name(name: &str) -> Self {
+        TempFile {
+            full_path: Self::create_path(name),
+        }
+    }
+
+    pub fn fullpath(&self) -> &String {
+        &self.full_path
+    }
+
+    pub fn create_path(name: &str) -> String {
         let full_path = format!(
             "{}/{}.{}",
             std::env::temp_dir().to_path_buf().display(),
@@ -21,12 +31,7 @@ impl TempFile {
 
         let full_path = full_path.replace('\\', "/");
         let full_path = full_path.replace("//", "/");
-
-        TempFile { full_path }
-    }
-
-    pub fn fullpath(&self) -> &String {
-        &self.full_path
+        full_path
     }
 }
 

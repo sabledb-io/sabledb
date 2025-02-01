@@ -1,6 +1,7 @@
 use crate::utils::SLOT_SIZE;
 #[allow(unused_imports)]
 use crate::{
+    io::TempFile,
     replication::StorageUpdatesRecord,
     storage::GenericDb,
     utils::{U8ArrayBuilder, U8ArrayReader},
@@ -366,10 +367,9 @@ impl<'a> SlotFile<'a> {
             return Ok(None);
         };
 
-        let file_name =
-            crate::io::TempFile::with_name(format!("slot_{}", self.slot_number).as_str());
+        let fullpath = TempFile::create_path(format!("slot_{}", self.slot_number).as_str());
 
-        let mut fp = TokioFile::create(file_name.fullpath()).await?;
+        let mut fp = TokioFile::create(&fullpath).await?;
         let mut chunk = BytesMut::with_capacity(self.max_chunk_size);
         let mut buffer_builder = U8ArrayBuilder::with_buffer(&mut chunk);
         for key_type_prefix in &self.prefix_arr {
@@ -395,7 +395,7 @@ impl<'a> SlotFile<'a> {
                 db_iter.next();
             }
         }
-        Ok(Some(PathBuf::from(file_name.fullpath())))
+        Ok(Some(PathBuf::from(fullpath)))
     }
 }
 
