@@ -30,8 +30,7 @@ impl TempFile {
         );
 
         let full_path = full_path.replace('\\', "/");
-        let full_path = full_path.replace("//", "/");
-        full_path
+        full_path.replace("//", "/")
     }
 }
 

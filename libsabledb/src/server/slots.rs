@@ -5,7 +5,7 @@ use crate::{
     replication::StorageUpdatesRecord,
     storage::GenericDb,
     utils::{U8ArrayBuilder, U8ArrayReader},
-    ClientState, KeyType, SableError, Server, StorageAdapter,
+    ClientState, KeyType, SableError, Server, StorageAdapter, ToU8Writer,
 };
 
 use bytes::{Buf, BytesMut};
@@ -293,7 +293,6 @@ impl SlotFileIterator {
         if !self.buffer.is_empty() {
             return Ok(false);
         }
-
         const BYTES_TO_READ: usize = std::mem::size_of::<usize>();
         let mut chunk_len = [0u8; BYTES_TO_READ];
         self.fp.read_exact(&mut chunk_len)?;
@@ -336,19 +335,14 @@ pub struct SlotFile<'a> {
 
 #[allow(dead_code)]
 impl<'a> SlotFile<'a> {
-    pub fn new(db: &'a StorageAdapter, slot: u16, db_id: u16) -> Result<Self, SableError> {
+    pub fn new(
+        db: &'a StorageAdapter,
+        db_id: u16,
+        slot: u16,
+        max_chunk_size: usize,
+    ) -> Result<Self, SableError> {
         let slot = Slot::with_slot(slot);
         let prefix_arr = slot.create_prefix_array(db_id)?;
-        let max_chunk_size = Server::state()
-            .options()
-            .read()
-            .map_err(|e| {
-                SableError::InternalError(format!(
-                    "Could not lock server options object for read. {e:?}"
-                ))
-            })?
-            .replication_limits
-            .single_update_buffer_size;
         Ok(SlotFile {
             prefix_arr,
             db,
@@ -385,17 +379,27 @@ impl<'a> SlotFile<'a> {
 
                 StorageUpdatesRecord::serialise_put(&mut buffer_builder, key, value);
                 if buffer_builder.len() >= self.max_chunk_size {
-                    // Write the chunk size
-                    fp.write_all(&chunk.len().to_be_bytes()).await?;
-                    // Write the chunk content
-                    fp.write_all_buf(&mut chunk).await?;
-                    chunk.clear();
+                    Self::flush_chunk(&mut fp, &mut chunk).await?;
                     buffer_builder = U8ArrayBuilder::with_buffer(&mut chunk);
                 }
                 db_iter.next();
             }
         }
+
+        if !chunk.is_empty() {
+            Self::flush_chunk(&mut fp, &mut chunk).await?;
+        }
+
         Ok(Some(PathBuf::from(fullpath)))
+    }
+
+    async fn flush_chunk(fp: &mut TokioFile, chunk: &mut BytesMut) -> Result<(), SableError> {
+        fp.write_all(&chunk.len().to_be_bytes()).await?;
+        // Write the chunk content
+        fp.write_all_buf(chunk).await?;
+        fp.flush().await?;
+        chunk.clear();
+        Ok(())
     }
 }
 
@@ -420,9 +424,9 @@ impl Slot {
     pub async fn count(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
         // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
         let prefix = Self::create_prefix_for_key_type(
-            self.slot,
             KeyType::PrimaryKey,
             client_state.database_id(),
+            self.slot,
         );
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         let mut items_count = 0u64;
@@ -437,7 +441,6 @@ impl Slot {
 
             items_count = items_count.saturating_add(1);
             db_iter.next();
-
             if items_count.rem_euclid(10_000) == 0 {
                 // Let other tasks process as well
                 tokio::task::yield_now().await;
@@ -450,9 +453,9 @@ impl Slot {
     pub async fn create_chunk(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
         // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
         let prefix = Self::create_prefix_for_key_type(
-            self.slot,
             KeyType::PrimaryKey,
             client_state.database_id(),
+            self.slot,
         );
         let mut db_iter = client_state.database().create_iterator(&prefix)?;
         let mut items_count = 0u64;
@@ -491,17 +494,15 @@ impl Slot {
             if key_type.eq(&KeyType::Metadata) {
                 break;
             }
-            prefix_arr.push(Self::create_prefix_for_key_type(self.slot, key_type, db_id));
+            prefix_arr.push(Self::create_prefix_for_key_type(key_type, db_id, self.slot));
         }
         Ok(prefix_arr)
     }
 
-    fn create_prefix_for_key_type(slot: u16, key_type: KeyType, db_id: u16) -> BytesMut {
+    fn create_prefix_for_key_type(key_type: KeyType, db_id: u16, slot: u16) -> BytesMut {
         let mut prefix = BytesMut::new();
         let mut builder = U8ArrayBuilder::with_buffer(&mut prefix);
-        builder.write_key_type(key_type);
-        builder.write_u16(db_id);
-        builder.write_u16(slot);
+        crate::metadata::KeyPrefix::new(key_type, db_id, slot).to_writer(&mut builder);
         prefix
     }
 }
@@ -521,12 +522,12 @@ mod tests {
     fn test_slot_prefix() {
         // Check that generate prefix covers all the known key types
         let key_type_vec = vec![
-            Slot::create_prefix_for_key_type(10, KeyType::PrimaryKey, 0),
-            Slot::create_prefix_for_key_type(10, KeyType::ListItem, 0),
-            Slot::create_prefix_for_key_type(10, KeyType::HashItem, 0),
-            Slot::create_prefix_for_key_type(10, KeyType::ZsetMemberItem, 0),
-            Slot::create_prefix_for_key_type(10, KeyType::ZsetScoreItem, 0),
-            Slot::create_prefix_for_key_type(10, KeyType::SetItem, 0),
+            Slot::create_prefix_for_key_type(KeyType::PrimaryKey, 0, 10),
+            Slot::create_prefix_for_key_type(KeyType::ListItem, 0, 10),
+            Slot::create_prefix_for_key_type(KeyType::HashItem, 0, 10),
+            Slot::create_prefix_for_key_type(KeyType::ZsetMemberItem, 0, 10),
+            Slot::create_prefix_for_key_type(KeyType::ZsetScoreItem, 0, 10),
+            Slot::create_prefix_for_key_type(KeyType::SetItem, 0, 10),
         ];
 
         let slot = Slot::with_slot(10);
@@ -623,5 +624,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Test dumping slot content into file
+    #[test]
+    fn test_slot_dump_to_file() {
+        use crate::{
+            metadata::StringValueMetadata,
+            storage::PutFlags,
+            storage::{StringGetResult, StringsDb},
+            utils,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (_guard, store) = crate::tests::open_store();
+            let mut string_db = StringsDb::with_storage(&store, 0);
+            let base_key = BytesMut::from(String::from("{1}key_0").as_bytes());
+
+            let slot_number = utils::calculate_slot(&base_key);
+            let md = StringValueMetadata::default();
+            const RECORD_COUNT: usize = 10_000;
+            for i in 0..RECORD_COUNT {
+                let key = format!("{{1}}key_{i}");
+                let value = format!("value_{i}");
+
+                let key = BytesMut::from(key.as_bytes());
+                let value = BytesMut::from(value.as_bytes());
+                string_db
+                    .put(&key, &value, &md, PutFlags::Override)
+                    .unwrap();
+
+                let StringGetResult::Some(_) = string_db.get(&key).unwrap() else {
+                    eprintln!("error getting value");
+                    std::process::exit(1);
+                };
+            }
+
+            let mut slot_file = SlotFile::new(&store, 0, slot_number, 1 << 20).unwrap();
+            let filepath = slot_file.write().await.unwrap().unwrap();
+            println!("Successfully written file: {filepath:?}");
+
+            let file_iter = SlotFileIterator::new(&filepath).unwrap();
+            let mut put_records = 0usize;
+            let mut del_records = 0usize;
+            for record in file_iter {
+                match record {
+                    StorageUpdatesRecord::Put { key: _, value: _ } => {
+                        put_records = put_records.saturating_add(1);
+                    }
+                    StorageUpdatesRecord::Del { key: _ } => {
+                        del_records = del_records.saturating_add(1);
+                    }
+                }
+            }
+
+            assert_eq!(put_records, RECORD_COUNT);
+            assert_eq!(del_records, 0);
+            let _ = std::fs::remove_file(&filepath);
+        });
     }
 }
