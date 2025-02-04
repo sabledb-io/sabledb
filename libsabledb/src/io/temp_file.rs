@@ -23,9 +23,10 @@ impl TempFile {
 
     pub fn create_path(name: &str) -> String {
         let full_path = format!(
-            "{}/{}.{}",
+            "{}/{}.{}.{}",
             std::env::temp_dir().to_path_buf().display(),
             name,
+            std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         );
 

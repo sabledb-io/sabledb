@@ -20,15 +20,14 @@ use crate::{
 };
 use crate::{
     replication::{
-        prepare_std_socket, BytesReader, BytesWriter, NodeResponse, ReplicationRequest,
-        RequestCommon, ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
+        socket_set_timeout, BytesReader, BytesWriter, NodeResponse, NodeTalkRequest, RequestCommon,
+        ResponseReason, TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     storage::SEQUENCES_FILE,
     ReplicationTelemetry,
 };
 
 use num_format::{Locale, ToFormattedString};
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::mpsc::{channel as tokio_channel, error::TryRecvError, Sender as TokioSender};
@@ -90,7 +89,7 @@ impl ClientReplicationLoop {
                 'client_loop: loop {
                     let mut client = NodeTalkClient::default();
                     // Loop until we manage to connect
-                    while let Err(e) = client.connect(&primary_address) {
+                    while let Err(e) = client.connect_timeout(&primary_address) {
                         tracing::info!("Connect failed. {e}");
                         // Check whether we should attempt to reconnect
                         if let Err(e) = cm.fail_over_if_needed(&store).await {
@@ -224,12 +223,10 @@ impl ClientReplicationLoop {
         stream: &mut std::net::TcpStream,
         request_id: &mut u64,
     ) -> Result<(), SableError> {
-        let _ = stream.set_nonblocking(false);
-        let _ = stream.set_read_timeout(None);
+        let _ = crate::replication::socket_set_timeout(stream);
 
         // Send a "FULL_SYNC" message
-        let request =
-            ReplicationRequest::FullSync(RequestCommon::new().with_request_id(request_id));
+        let request = NodeTalkRequest::FullSync(RequestCommon::new().with_request_id(request_id));
         info!("Sending {} message to primary", request);
 
         let mut buffer = bincode_to_bytesmut!(request);
@@ -244,18 +241,6 @@ impl ClientReplicationLoop {
             ));
         };
 
-        // Read the response
-        let mut file_len = vec![0u8; std::mem::size_of::<usize>()];
-        stream.read_exact(&mut file_len)?;
-
-        // split the buffer into chunks and read
-        let count = crate::BytesMutUtils::to_usize(&bytes::BytesMut::from(file_len.as_slice()));
-
-        info!(
-            "Reading file of size: {} bytes",
-            count.to_formatted_string(&Locale::en)
-        );
-
         let (output_file_name, target_folder_path, sequence_file) = {
             let opts = options.read().expect("lock error");
             let output_file_name = format!("{}.checkpoint.tar", opts.open_params.db_path.display());
@@ -263,13 +248,7 @@ impl ClientReplicationLoop {
             let sequence_file = opts.open_params.db_path.join(SEQUENCES_FILE);
             (output_file_name, target_folder_path, sequence_file)
         };
-
-        let mut file = std::fs::File::create(&output_file_name)?;
-        crate::io::read_exact(stream, &mut file, count)?;
-        info!(
-            "File {} successfully received from primary",
-            output_file_name
-        );
+        NodeTalkClient::recv_file(&PathBuf::from(&output_file_name), stream)?;
 
         // Now that we have the file, extract the tar
         let output_file_name = PathBuf::from(&output_file_name);
@@ -302,7 +281,7 @@ impl ClientReplicationLoop {
         let _ = std::fs::remove_dir_all(&target_folder_path);
 
         // restore the socket state
-        prepare_std_socket(stream)?;
+        socket_set_timeout(stream)?;
         Ok(())
     }
 
@@ -363,7 +342,7 @@ impl ClientReplicationLoop {
             return RequestChangesResult::ExitThread;
         };
 
-        let request = ReplicationRequest::GetUpdatesSince {
+        let request = NodeTalkRequest::GetUpdatesSince {
             common: RequestCommon::new().with_request_id(request_id),
             from_sequence,
         };

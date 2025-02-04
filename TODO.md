@@ -2,8 +2,6 @@
 
 ## General (ordered by priority)
 
-* Add API to dump & load a complete slot
-* Add API to dump slot from a given txn ID
 
 ## Statistics
 
@@ -42,3 +40,4 @@ Implementation note:
 - Once confirmed, the sender removes the slot from the `SlotBitmap`
 - The sender deletes all records for the slot from the database
 - The sender finally removes the lock
+

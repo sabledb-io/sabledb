@@ -1,12 +1,16 @@
 use std::rc::Rc;
 use thiserror::Error;
 
+type LockWriteGuard<'a> = std::sync::RwLockWriteGuard<'a, std::string::String>;
+
 #[derive(Error, Debug)]
 pub enum SableError {
     /// From system IO error
     #[error("I/O error. {0}")]
     StdIoError(#[from] std::io::Error),
     #[error("Mutex poison error. {0}")]
+    MutexError(#[from] std::sync::PoisonError<LockWriteGuard<'static>>),
+    #[error("Sled error. {0}")]
     StorageError(#[from] sled::Error),
     /// From tokio channel error
     #[error("Tokio channel error. {0}")]

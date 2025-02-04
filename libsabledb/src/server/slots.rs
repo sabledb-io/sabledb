@@ -3,6 +3,7 @@ use crate::utils::SLOT_SIZE;
 use crate::{
     io::TempFile,
     replication::StorageUpdatesRecord,
+    storage::BatchUpdate,
     storage::GenericDb,
     utils::{U8ArrayBuilder, U8ArrayReader},
     ClientState, KeyType, SableError, Server, StorageAdapter, ToU8Writer,
@@ -294,9 +295,10 @@ impl SlotFileIterator {
             return Ok(false);
         }
         const BYTES_TO_READ: usize = std::mem::size_of::<usize>();
-        let mut chunk_len = [0u8; BYTES_TO_READ];
-        self.fp.read_exact(&mut chunk_len)?;
-        let chunk_len = usize::from_be_bytes(chunk_len);
+        let mut chunk_len_bytes = [0u8; BYTES_TO_READ];
+        self.fp.read_exact(&mut chunk_len_bytes)?;
+        let chunk_len = usize::from_be_bytes(chunk_len_bytes);
+        tracing::debug!("Chunk size is: {:?} => {} ", chunk_len_bytes, chunk_len);
         self.buffer.resize(chunk_len, 0u8);
         // read exactly chunk size from the file
         Ok(self.fp.read(self.buffer.as_mut())? == chunk_len)
@@ -324,8 +326,7 @@ impl Iterator for SlotFileIterator {
     }
 }
 
-#[allow(dead_code)]
-pub struct SlotFile<'a> {
+pub struct SlotFileExporter<'a> {
     prefix_arr: Vec<BytesMut>,
     db: &'a StorageAdapter,
     /// Maximum chunk size
@@ -333,8 +334,7 @@ pub struct SlotFile<'a> {
     slot_number: u16,
 }
 
-#[allow(dead_code)]
-impl<'a> SlotFile<'a> {
+impl<'a> SlotFileExporter<'a> {
     pub fn new(
         db: &'a StorageAdapter,
         db_id: u16,
@@ -343,7 +343,7 @@ impl<'a> SlotFile<'a> {
     ) -> Result<Self, SableError> {
         let slot = Slot::with_slot(slot);
         let prefix_arr = slot.create_prefix_array(db_id)?;
-        Ok(SlotFile {
+        Ok(SlotFileExporter {
             prefix_arr,
             db,
             max_chunk_size,
@@ -351,12 +351,12 @@ impl<'a> SlotFile<'a> {
         })
     }
 
-    /// Dump the slot content into a file
-    /// Format is:
+    /// Export slot content to a file. The format used:
     /// [ <chunk_len> | <chunk_content> |... ]
+    ///
     /// Chunk content:
-    //  [ PutRecord | PutRecord ... ]
-    async fn write(&mut self) -> Result<Option<PathBuf>, SableError> {
+    /// [ PutRecord | PutRecord ... ]
+    pub async fn export(&mut self) -> Result<Option<PathBuf>, SableError> {
         if self.prefix_arr.is_empty() {
             return Ok(None);
         };
@@ -389,16 +389,68 @@ impl<'a> SlotFile<'a> {
         if !chunk.is_empty() {
             Self::flush_chunk(&mut fp, &mut chunk).await?;
         }
-
+        fp.sync_data().await?;
         Ok(Some(PathBuf::from(fullpath)))
     }
 
     async fn flush_chunk(fp: &mut TokioFile, chunk: &mut BytesMut) -> Result<(), SableError> {
-        fp.write_all(&chunk.len().to_be_bytes()).await?;
+        let chunk_size_bytes = chunk.len().to_be_bytes();
+        tracing::info!("Writing chunk size: {:?}", chunk_size_bytes);
+        fp.write_all(&chunk_size_bytes).await?;
         // Write the chunk content
         fp.write_all_buf(chunk).await?;
         fp.flush().await?;
         chunk.clear();
+        Ok(())
+    }
+}
+
+pub struct SlotFileImporter<'a> {
+    db: &'a StorageAdapter,
+    filepath: PathBuf,
+}
+
+impl<'a> SlotFileImporter<'a> {
+    pub fn new(db: &'a StorageAdapter, filepath: PathBuf) -> Self {
+        SlotFileImporter { db, filepath }
+    }
+
+    /// Construct an iterator over the file and apply all records into the database
+    pub fn import(&self) -> Result<(), SableError> {
+        const MAX_BATCH_SIZE: usize = 10_000;
+        tracing::info!("Importing slot to the database...");
+        let mut batch_update = BatchUpdate::with_capacity(MAX_BATCH_SIZE);
+        let file_iter = SlotFileIterator::new(&self.filepath)?;
+        let mut del_ops = 0usize;
+        let mut put_ops = 0usize;
+        for record in file_iter {
+            match record {
+                StorageUpdatesRecord::Put { key, value } => {
+                    batch_update.put(key, value);
+                    put_ops = put_ops.saturating_add(1);
+                }
+                StorageUpdatesRecord::Del { key } => {
+                    batch_update.delete(key);
+                    del_ops = del_ops.saturating_add(1);
+                }
+            }
+            if batch_update.len() % MAX_BATCH_SIZE == 0 {
+                self.db.apply_batch(&batch_update)?;
+                batch_update.clear();
+            }
+        }
+
+        // make sure all items are applied
+        if !batch_update.is_empty() {
+            self.db.apply_batch(&batch_update)?;
+            batch_update.clear();
+        }
+
+        tracing::info!(
+            "Importing slot to the database completed successfully. {} put calls, {} delete calls",
+            put_ops,
+            del_ops
+        );
         Ok(())
     }
 }
@@ -660,8 +712,8 @@ mod tests {
                 };
             }
 
-            let mut slot_file = SlotFile::new(&store, 0, slot_number, 1 << 20).unwrap();
-            let filepath = slot_file.write().await.unwrap().unwrap();
+            let mut slot_file = SlotFileExporter::new(&store, 0, slot_number, 1 << 20).unwrap();
+            let filepath = slot_file.export().await.unwrap().unwrap();
             println!("Successfully written file: {filepath:?}");
 
             let file_iter = SlotFileIterator::new(&filepath).unwrap();

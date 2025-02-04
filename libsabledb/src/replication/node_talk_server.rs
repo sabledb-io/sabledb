@@ -1,24 +1,29 @@
 use crate::bincode_to_bytesmut_or;
-use crate::replication::{prepare_std_socket, ClusterManager};
 use crate::server::ServerOptions;
 use crate::server::{ReplicaTelemetry, ReplicationTelemetry};
 use crate::storage::GetChangesLimits;
-use std::rc::Rc;
-
+use crate::{
+    io::TempFile,
+    replication::{
+        node_talk_client::NodeTalkClient, socket_make_blocking, socket_set_timeout, ClusterManager,
+    },
+    server::SlotFileImporter,
+};
 use futures::future;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::utils;
 #[allow(unused_imports)]
 use crate::{
     io::Archive,
     replication::{
-        BytesReader, BytesWriter, NodeResponse, ReplicationRequest, ResponseCommon, ResponseReason,
+        BytesReader, BytesWriter, NodeResponse, NodeTalkRequest, ResponseCommon, ResponseReason,
         TcpStreamBytesReader, TcpStreamBytesWriter,
     },
     SableError, Server, StorageAdapter,
 };
 
-use num_format::{Locale, ToFormattedString};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, RwLock as StdRwLock,
@@ -31,8 +36,10 @@ const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 enum HandleRequestResult {
     NodeJoined(String),
     Success,
+    SuccessAndExit,
     NetError(String),
     Shutdown(String),
+    IoError(String),
 }
 
 #[cfg(not(test))]
@@ -170,14 +177,12 @@ impl NodeTalkServer {
 
     // Private functions
 
-    fn read_request(
-        reader: &mut dyn BytesReader,
-    ) -> Result<Option<ReplicationRequest>, SableError> {
+    fn read_request(reader: &mut dyn BytesReader) -> Result<Option<NodeTalkRequest>, SableError> {
         // Read the request (this is a fixed size request)
         let result = reader.read_message()?;
         match result {
             None => Ok(None),
-            Some(bytes) => Ok(Some(bincode::deserialize::<ReplicationRequest>(&bytes)?)),
+            Some(bytes) => Ok(Some(bincode::deserialize::<NodeTalkRequest>(&bytes)?)),
         }
     }
 
@@ -191,13 +196,11 @@ impl NodeTalkServer {
         stream: &mut std::net::TcpStream,
     ) -> Result<u64, SableError> {
         // async sockets are non-blocking. Make it blocking for sending the file
-        stream.set_nonblocking(false)?;
-        stream.set_write_timeout(None)?;
-        stream.set_read_timeout(None)?;
+        socket_make_blocking(stream)?;
 
         let ts = utils::current_time(utils::CurrentTimeResolution::Microseconds).to_string();
         info!("Preparing checkpoint for replica {}", replica_addr);
-        let backup_db_path = std::path::PathBuf::from(format!(
+        let backup_db_path = PathBuf::from(format!(
             "{}.checkpoint.{}",
             store.open_params().db_path.display(),
             ts
@@ -212,22 +215,10 @@ impl NodeTalkServer {
         let archiver = Archive::default();
         let tar_file = archiver.create(&backup_db_path)?;
 
-        // Send the file size first
-        let mut file = std::fs::File::open(&tar_file)?;
-        let file_len = file.metadata()?.len() as usize;
-        info!(
-            "Sending tar file: {}, Len: {} bytes",
-            tar_file.display(),
-            file_len.to_formatted_string(&Locale::en)
-        );
+        NodeTalkClient::send_file(&tar_file, stream)?;
 
-        let mut file_len = crate::BytesMutUtils::from_usize(&file_len);
-        crate::io::write_bytes(stream, &mut file_len)?;
-
-        // Now send the content
-        std::io::copy(&mut file, stream)?;
-        info!("Sending tar file {} completed", tar_file.display());
-        prepare_std_socket(stream)?;
+        // Restore the stream state
+        socket_set_timeout(stream)?;
 
         // Delete the tar + folder
         let _ = std::fs::remove_file(&tar_file);
@@ -256,11 +247,9 @@ impl NodeTalkServer {
         stream: &mut std::net::TcpStream,
         replica_node_id: &String,
     ) -> HandleRequestResult {
-        let mut reader = TcpStreamBytesReader::new(stream);
-        let mut writer = TcpStreamBytesWriter::new(stream);
-
-        debug!("Waiting for replication request..");
+        debug!("Waiting for remote request..");
         let req = loop {
+            let mut reader = TcpStreamBytesReader::new(stream);
             let result = Self::read_request(&mut reader);
             match result {
                 Err(e) => {
@@ -283,14 +272,15 @@ impl NodeTalkServer {
                 }
             };
         };
-        debug!("Received replication request {:?}", req);
+        debug!("Received remote request {:?}", req);
 
         match req {
-            ReplicationRequest::JoinShard(common) => {
+            NodeTalkRequest::JoinShard(common) => {
                 info!("Received request: JoinShard({})", common);
                 let shard_name = Server::state().persistent_state().shard_name();
                 let response_ok =
                     NodeResponse::Ok(ResponseCommon::new(&common).with_context(shard_name.clone()));
+                let mut writer = TcpStreamBytesWriter::new(stream);
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
@@ -301,12 +291,40 @@ impl NodeTalkServer {
                 );
                 return HandleRequestResult::NodeJoined(common.node_id().to_string());
             }
-            ReplicationRequest::FullSync(common) => {
+            NodeTalkRequest::SendingSlotFile { common, slot } => {
+                info!("Received SendingSlotFile: ({}, slot: {})", common, slot);
+                // We are now expecting the file's content
+                // prepare a local file name
+                let tempfile = TempFile::with_name(format!("slot_{}_content", slot).as_str());
+                let output_file = PathBuf::from(tempfile.fullpath());
+                if let Err(e) = NodeTalkClient::recv_file(&output_file, stream) {
+                    return HandleRequestResult::NetError(e.to_string());
+                }
+
+                let slot_importer = SlotFileImporter::new(store, output_file);
+                if let Err(e) = slot_importer.import() {
+                    return HandleRequestResult::IoError(e.to_string());
+                }
+
+                let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
+
+                // Response with an ACK followed by the file
+                info!("Sending response: {}", response_ok);
+                let mut writer = TcpStreamBytesWriter::new(stream);
+                if !Self::write_response(&mut writer, &response_ok) {
+                    return HandleRequestResult::NetError("Failed to write response".into());
+                }
+                info!("Successfully sent ACK to remote");
+                // Leave the current connection
+                return HandleRequestResult::SuccessAndExit;
+            }
+            NodeTalkRequest::FullSync(common) => {
                 debug!("Received request {}", common);
                 let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
 
                 // Response with an ACK followed by the file
                 debug!("Sending replication response: {}", response_ok);
+                let mut writer = TcpStreamBytesWriter::new(stream);
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
@@ -330,7 +348,7 @@ impl NodeTalkServer {
                 Self::update_primary_info(store, cm);
             }
 
-            ReplicationRequest::GetUpdatesSince {
+            NodeTalkRequest::GetUpdatesSince {
                 common,
                 from_sequence,
             } => {
@@ -350,6 +368,7 @@ impl NodeTalkServer {
                     );
 
                     debug!("Sending replication response: {}", response_not_ok);
+                    let mut writer = TcpStreamBytesWriter::new(stream);
                     if Self::write_response(&mut writer, &response_not_ok) {
                         return HandleRequestResult::Success;
                     } else {
@@ -392,6 +411,7 @@ impl NodeTalkServer {
                                     ResponseCommon::new(&common)
                                         .with_reason(ResponseReason::CreatingUpdatesSinceError),
                                 );
+                                let mut writer = TcpStreamBytesWriter::new(stream);
                                 if Self::write_response(&mut writer, &response_not_ok) {
                                     return HandleRequestResult::Success;
                                 } else {
@@ -431,6 +451,7 @@ impl NodeTalkServer {
                         ResponseCommon::new(&common)
                             .with_reason(ResponseReason::NoChangesAvailable),
                     );
+                    let mut writer = TcpStreamBytesWriter::new(stream);
                     if Self::write_response(&mut writer, &response_not_ok) {
                         return HandleRequestResult::Success;
                     } else {
@@ -438,10 +459,11 @@ impl NodeTalkServer {
                     }
                 };
 
-                info!("Sending replication update: {}", storage_updates);
+                info!("Sending remote update: {}", storage_updates);
 
                 // Send a `ReplicationResponse::Ok` message, followed by the data
                 let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
+                let mut writer = TcpStreamBytesWriter::new(stream);
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
@@ -500,6 +522,7 @@ impl NodeTalkServer {
         // this will allow us to write directly from the storage -> network
         // without building buffers in the memory
         let _handle = std::thread::spawn(move || {
+            let _ = stream.set_nodelay(true);
             info!("Replication thread started for connection {:?}", addr);
             let mut guard = ReplicationThreadMarker::new();
             let mut replica_name = String::default();
@@ -509,7 +532,7 @@ impl NodeTalkServer {
             // the Nth update and this primary sends back the changes
 
             // First, prepare the socket
-            if let Err(e) = prepare_std_socket(&stream) {
+            if let Err(e) = socket_set_timeout(&stream) {
                 error!("Failed to prepare socket. {:?}", e);
                 let _ = stream.shutdown(std::net::Shutdown::Both);
                 return;
@@ -530,15 +553,26 @@ impl NodeTalkServer {
                         replica_name = replica_id;
                     }
                     HandleRequestResult::Success => {}
+                    HandleRequestResult::SuccessAndExit => {
+                        tracing::info!("Leaving thread");
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
                     HandleRequestResult::NetError(msg) => {
-                        tracing::warn!("Network error with replica {replica_name}. {msg}");
-                        info!("Closing connection with replica: {:?}", stream);
+                        tracing::warn!("NetError occurred with remote. {msg}");
+                        info!("Closing connection with remote: {:?}", stream);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
+                    HandleRequestResult::IoError(msg) => {
+                        tracing::warn!("IoError occurred with remote. {msg}");
+                        info!("Closing connection with remote: {:?}", stream);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;
                     }
                     HandleRequestResult::Shutdown(msg) => {
                         info!("{msg}");
-                        info!("Closing connection with replica: {:?}", stream);
+                        info!("Closing connection with remote: {:?}", stream);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;
                     }

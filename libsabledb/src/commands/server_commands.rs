@@ -5,17 +5,22 @@ use crate::{
     commands::{HandleCommandResult, StringCommands},
     metadata::{CommonValueMetadata, KeyType},
     parse_string_to_number,
+    replication::NodeTalkClient,
     server::ClientState,
+    server::SlotFileExporter,
     storage::StringsDb,
     utils::SLOT_SIZE,
     BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError, Slot,
     StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder, ValkeyCommand,
     ValkeyCommandName,
 };
-
 use bytes::BytesMut;
+use futures_intrusive::sync::ManualResetEvent;
 use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 use tokio::io::AsyncWriteExt;
+
+const POISONED_MUTEX: &str = "Poisoned Mutex";
 
 pub struct ServerCommands {}
 
@@ -282,9 +287,17 @@ impl ServerCommands {
     ) -> Result<(), SableError> {
         check_args_count!(command, 5, response_buffer);
         let slot_number = command_arg_at!(command, 4);
+        let ip = command_arg_at!(command, 2);
+        let port = command_arg_at!(command, 3);
         let builder = RespBuilderV2::default();
+
         // Make sure that slot passed is a u16
         let Some(slot_number) = BytesMutUtils::parse::<u16>(slot_number) else {
+            builder_return_value_not_int!(builder, response_buffer);
+        };
+
+        // Make sure we got a valid port
+        let Some(port) = BytesMutUtils::parse::<u16>(port) else {
             builder_return_value_not_int!(builder, response_buffer);
         };
 
@@ -293,10 +306,94 @@ impl ServerCommands {
             builder_return_value_not_int!(builder, response_buffer);
         }
 
-        // Take a marker so we know where to continue after we send the first batch
+        // During slot migration we lock the slot for read-only mode
+        let _lock =
+            LockManager::lock_multi_slots_shared(vec![slot_number], client_state.clone()).await?;
         let _last_txn_id = client_state.database().latest_sequence_number()?;
-        let _slot = Slot::with_slot(slot_number);
-        builder.error_string(response_buffer, Strings::SYNTAX_ERROR);
+        let mut exporter = SlotFileExporter::new(
+            client_state.database(),
+            client_state.database_id(),
+            slot_number,
+            client_state
+                .server_inner_state()
+                .options()
+                .read()
+                .expect(POISONED_MUTEX)
+                .replication_limits
+                .single_update_buffer_size,
+        )?;
+        tracing::info!("Exporting slot {} to file...", slot_number);
+        let Some(filepath) = exporter.export().await? else {
+            builder.ok(response_buffer);
+            return Ok(());
+        };
+
+        tracing::info!(
+            "Exporting slot {} to file {}...success",
+            slot_number,
+            filepath.display()
+        );
+
+        // Error message is sent through this error_message variable
+        let error_message = Arc::new(RwLock::<String>::default());
+        // Used to wait on the thread
+        let event = Arc::new(ManualResetEvent::new(false));
+
+        // Process the slot transfer in a separate thread
+        let error_message_clone = error_message.clone();
+        let event_clone = event.clone();
+        let ip_clone = ip.clone();
+        let h = std::thread::spawn(move || {
+            let mut node_talk_client = NodeTalkClient::default();
+            let remote_address = format!("{}:{}", String::from_utf8_lossy(&ip_clone), port);
+            tracing::info!(
+                "Connecting to remote {} for sending slot {} content",
+                &remote_address,
+                slot_number
+            );
+            if let Err(e) = node_talk_client.connect_timeout(&remote_address) {
+                let errmsg = format!("ERR failed to connect to remote: {}. {}", remote_address, e);
+                error_message_clone
+                    .write()
+                    .expect(POISONED_MUTEX)
+                    .push_str(&errmsg);
+                event_clone.set();
+                return;
+            }
+
+            tracing::info!("Successfully connected to remote {}", remote_address);
+
+            if let Err(e) = node_talk_client.send_slot_file(slot_number, &filepath) {
+                tracing::error!(
+                    "failed to send slot {} content to remote: {}. {}",
+                    slot_number,
+                    remote_address,
+                    e
+                );
+
+                let errmsg = format!("ERR {e}");
+                error_message_clone
+                    .write()
+                    .expect(POISONED_MUTEX)
+                    .push_str(&errmsg);
+            }
+            event_clone.set();
+        });
+
+        // wait for the thread to terminate
+        event.wait().await;
+
+        // Join the thread
+        let _ = h.join();
+
+        // Check if it terminated with an error
+        let message = error_message.read().expect(POISONED_MUTEX).clone();
+
+        if message.is_empty() {
+            builder.ok(response_buffer);
+        } else {
+            builder.error_string(response_buffer, &message);
+        }
         Ok(())
     }
 }

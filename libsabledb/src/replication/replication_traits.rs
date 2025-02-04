@@ -1,5 +1,5 @@
 use crate::io;
-use crate::{BytesMutUtils, SableError, U8ArrayReader};
+use crate::{BytesMutUtils, SableError};
 use bytes::BytesMut;
 use std::net::TcpStream;
 
@@ -44,86 +44,51 @@ impl BytesWriter for TcpStreamBytesWriter<'_> {
 /// TCP based reader
 pub struct TcpStreamBytesReader<'a> {
     tcp_stream: &'a TcpStream,
-    bytes_read: BytesMut,
+    bytes_left: usize,
+    message_data: BytesMut,
 }
 
 impl TcpStreamBytesReader<'_> {
+    const LEN_SIZE: usize = std::mem::size_of::<usize>();
     pub fn new(tcp_stream: &TcpStream) -> TcpStreamBytesReader {
         TcpStreamBytesReader {
             tcp_stream,
-            bytes_read: BytesMut::new(),
+            bytes_left: 0,
+            message_data: BytesMut::default(),
         }
     }
-}
-
-impl TcpStreamBytesReader<'_> {
-    // TODO: MAX_BUFFER_SIZE should be configurable
-    const MAX_BUFFER_SIZE: usize = 10 << 20; // 10MB
-    const LEN_SIZE: usize = std::mem::size_of::<usize>();
-
-    /// Pull some bytes from the socket
-    fn read_some(&mut self) -> Result<Option<usize>, SableError> {
-        match io::read_bytes(&mut self.tcp_stream, Self::MAX_BUFFER_SIZE)? {
-            Some(data) => {
-                self.bytes_read.extend_from_slice(&data);
-                Ok(Some(data.len()))
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-macro_rules! try_socket_read {
-    ($reader:expr) => {
-        // try read some bytes
-        match $reader.read_some()? {
-            None => return Ok(None),
-            Some(count) => count,
-        }
-    };
 }
 
 impl BytesReader for TcpStreamBytesReader<'_> {
     fn read_message(&mut self) -> Result<Option<BytesMut>, SableError> {
-        // read the length
-        if self.bytes_read.len() < Self::LEN_SIZE {
-            // try read some bytes
-            try_socket_read!(self);
+        if self.bytes_left == 0 {
+            // new message, read the length
+            if io::can_read_at_least(self.tcp_stream, Self::LEN_SIZE)? {
+                // pull them out of the socket buffer
+                let mut message_len_buf = Vec::<u8>::with_capacity(Self::LEN_SIZE);
+                io::read_exact(&mut self.tcp_stream, &mut message_len_buf, Self::LEN_SIZE)?;
+
+                let message_len = BytesMut::from(&message_len_buf[..]);
+                self.bytes_left = BytesMutUtils::to_usize(&message_len);
+            } else {
+                return Ok(None);
+            }
         }
 
-        let mut bytes_reader = U8ArrayReader::with_buffer(&self.bytes_read);
-        let Some(count) = bytes_reader.read_usize() else {
-            // This can happen if the buffer does not have enough bytes to parse usize
-            tracing::trace!("Don't enough bytes to determine the message length");
+        let Some(data) = io::read_bytes(&mut self.tcp_stream, self.bytes_left)? else {
             return Ok(None);
         };
 
-        tracing::trace!("Expecting message of size: {} bytes", count);
+        self.message_data.extend_from_slice(&data);
+        self.bytes_left = self.bytes_left.saturating_sub(data.len());
 
-        // Do we have the complete message in the buffer already?
-        if self.bytes_read.len() >= (count + Self::LEN_SIZE) {
-            tracing::trace!(
-                "Internal buffer contains the complete message - no need to read from the socket"
-            );
-            // remove the length
-            let _ = self.bytes_read.split_to(Self::LEN_SIZE);
-            // and return the message bytes
-            let message = self.bytes_read.split_to(count);
-            return Ok(Some(message));
+        if self.bytes_left == 0 {
+            // a complete message
+            let mut msg = BytesMut::default();
+            std::mem::swap(&mut self.message_data, &mut msg);
+            Ok(Some(msg))
+        } else {
+            Ok(None)
         }
-
-        try_socket_read!(self);
-
-        if self.bytes_read.len() >= (count + Self::LEN_SIZE) {
-            tracing::trace!(
-                "After reading some more bytes from the socket, internal buffer contains the complete message"
-            );
-            // remove the length
-            let _ = self.bytes_read.split_to(Self::LEN_SIZE);
-            // and return the message bytes
-            let message = self.bytes_read.split_to(count);
-            return Ok(Some(message));
-        }
-        Ok(None)
     }
 }

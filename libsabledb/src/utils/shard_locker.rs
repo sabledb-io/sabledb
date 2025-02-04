@@ -24,6 +24,33 @@ macro_rules! check_state {
     };
 }
 
+macro_rules! double_check_slot_ownership_inner {
+    ($client_state:expr, $slots:expr) => {
+        if !$client_state
+            .server_inner_state()
+            .slots()
+            .is_set_multi(&$slots)?
+        {
+            return Err(SableError::NotOwner($slots));
+        }
+    };
+}
+
+/// Try to lock slots using `$statement`. In case of a success, double check that the locked
+/// slot is still owned by this process. This is used to make sure that after a successful call
+/// for the command: `slot sendto ...` a slot might not be owned by this instance any longer
+macro_rules! double_check_slot_ownership {
+    ($statement:expr, $client_state:expr, $slots:expr) => {
+        match $statement {
+            Ok(lk) => {
+                double_check_slot_ownership_inner!($client_state, $slots);
+                Ok(lk)
+            }
+            Err(e) => Err(e),
+        }
+    };
+}
+
 #[allow(dead_code)]
 pub struct ShardLockGuard<'a> {
     read_locks: Option<Vec<RwLockReadGuard<'a, u16>>>,
@@ -149,6 +176,92 @@ impl LockManager {
         })
     }
 
+    /// Lock `slots`, exclusively
+    pub async fn lock_multi_slots_exclusive<'a>(
+        slots: Vec<u16>,
+        client_state: Rc<ClientState>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        check_state!(client_state, slots);
+        double_check_slot_ownership!(
+            Self::lock_multi_slots_exclusive_unconditionally(slots.clone()).await,
+            client_state,
+            slots
+        )
+    }
+
+    /// Lock `slots`, exclusively
+    pub async fn lock_multi_slots_exclusive_unconditionally<'a>(
+        mut slots: Vec<u16>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(slots.len());
+
+        // the sorting is required to avoid deadlocks
+        slots.sort();
+        slots.dedup();
+
+        for idx in &slots {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
+                return Err(SableError::InternalError(format!(
+                    "No lock in index {}",
+                    idx
+                )));
+            };
+
+            let lk = lk.write().await;
+            write_locks.push(lk);
+        }
+
+        Ok(ShardLockGuard {
+            read_locks: None,
+            read_count: 0,
+            write_locks: Some(write_locks),
+            write_count: slots.len(),
+        })
+    }
+
+    /// Lock `slots`, shared
+    pub async fn lock_multi_slots_shared<'a>(
+        slots: Vec<u16>,
+        client_state: Rc<ClientState>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        check_state!(client_state, slots);
+        double_check_slot_ownership!(
+            Self::lock_multi_slots_exclusive_unconditionally(slots.clone()).await,
+            client_state,
+            slots
+        )
+    }
+
+    /// Lock `slots`, shared
+    pub async fn lock_multi_slots_shared_unconditionally<'a>(
+        mut slots: Vec<u16>,
+    ) -> Result<ShardLockGuard<'a>, SableError> {
+        let mut read_locks = Vec::<RwLockReadGuard<'a, u16>>::with_capacity(slots.len());
+
+        // the sorting is required to avoid deadlocks
+        slots.sort();
+        slots.dedup();
+
+        for idx in &slots {
+            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
+                return Err(SableError::InternalError(format!(
+                    "No lock in index {}",
+                    idx
+                )));
+            };
+
+            let lk = lk.read().await;
+            read_locks.push(lk);
+        }
+
+        Ok(ShardLockGuard {
+            read_locks: Some(read_locks),
+            read_count: slots.len(),
+            write_locks: None,
+            write_count: 0,
+        })
+    }
+
     // ===-------------------------------------------
     // Internal API
     // ===-------------------------------------------
@@ -207,84 +320,6 @@ impl LockManager {
         for idx in &slots {
             let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
                 unreachable!("No lock in index {}", idx);
-            };
-
-            let lk = lk.read().await;
-            read_locks.push(lk);
-        }
-
-        Ok(ShardLockGuard {
-            read_locks: Some(read_locks),
-            read_count: slots.len(),
-            write_locks: None,
-            write_count: 0,
-        })
-    }
-
-    /// Lock `slots`, exclusively
-    pub async fn lock_multi_slots_exclusive<'a>(
-        slots: Vec<u16>,
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        check_state!(client_state, slots);
-        Self::lock_multi_slots_exclusive_unconditionally(slots).await
-    }
-
-    /// Lock `slots`, exclusively
-    pub async fn lock_multi_slots_exclusive_unconditionally<'a>(
-        mut slots: Vec<u16>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(slots.len());
-
-        // the sorting is required to avoid deadlocks
-        slots.sort();
-        slots.dedup();
-
-        for idx in &slots {
-            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
-                return Err(SableError::InternalError(format!(
-                    "No lock in index {}",
-                    idx
-                )));
-            };
-
-            let lk = lk.write().await;
-            write_locks.push(lk);
-        }
-
-        Ok(ShardLockGuard {
-            read_locks: None,
-            read_count: 0,
-            write_locks: Some(write_locks),
-            write_count: slots.len(),
-        })
-    }
-
-    /// Lock `slots`, exclusively
-    pub async fn lock_multi_slots_shared<'a>(
-        slots: Vec<u16>,
-        client_state: Rc<ClientState>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        check_state!(client_state, slots);
-        Self::lock_multi_slots_exclusive_unconditionally(slots).await
-    }
-
-    /// Lock `slots`, exclusively
-    pub async fn lock_multi_slots_shared_unconditionally<'a>(
-        mut slots: Vec<u16>,
-    ) -> Result<ShardLockGuard<'a>, SableError> {
-        let mut read_locks = Vec::<RwLockReadGuard<'a, u16>>::with_capacity(slots.len());
-
-        // the sorting is required to avoid deadlocks
-        slots.sort();
-        slots.dedup();
-
-        for idx in &slots {
-            let Some(lk) = MULTI_LOCK.locks.get(*idx as usize) else {
-                return Err(SableError::InternalError(format!(
-                    "No lock in index {}",
-                    idx
-                )));
             };
 
             let lk = lk.read().await;

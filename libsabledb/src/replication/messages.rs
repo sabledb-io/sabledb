@@ -105,15 +105,21 @@ impl std::fmt::Display for ResponseCommon {
     }
 }
 
-/// represents a replication request sent from the secondary -> primary
+/// represents a message sent from NodeTalkClient -> NodeTalkServer
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ReplicationRequest {
+pub enum NodeTalkRequest {
     GetUpdatesSince {
         common: RequestCommon,
         from_sequence: u64,
     },
     FullSync(RequestCommon),
     JoinShard(RequestCommon),
+    /// Client sends this message to notify the receiver that `slot` content is being
+    /// transferred
+    SendingSlotFile {
+        common: RequestCommon,
+        slot: u16,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,7 +147,7 @@ impl Default for ResponseReason {
     }
 }
 
-impl std::fmt::Display for ReplicationRequest {
+impl std::fmt::Display for NodeTalkRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::FullSync(common) => write!(f, "FullSync({})", common),
@@ -150,6 +156,9 @@ impl std::fmt::Display for ReplicationRequest {
                 from_sequence,
             } => {
                 write!(f, "GetUpdatesSince({}, {})", common, from_sequence)
+            }
+            Self::SendingSlotFile { common, slot } => {
+                write!(f, "SendingSlotContent({}, {})", common, slot)
             }
             Self::JoinShard(common) => {
                 write!(f, "JoinShard({})", common)

@@ -4,6 +4,8 @@ use crate::{
     replication::{BytesReader, BytesWriter, TcpStreamBytesReader, TcpStreamBytesWriter},
     SableError,
 };
+use num_format::{Locale, ToFormattedString};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 
 #[cfg(not(test))]
@@ -25,17 +27,73 @@ pub enum JoinShardResult {
 #[allow(dead_code)]
 pub struct NodeTalkClient {
     stream: Option<TcpStream>,
+    request_id: u64,
+    remote_addr: String,
 }
 
 #[allow(dead_code)]
 impl NodeTalkClient {
-    /// Connect to NodeServer at a given address
-    pub fn connect(&mut self, primary_address: &str) -> Result<(), SableError> {
-        let addr = primary_address.parse::<SocketAddr>()?;
-        let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1))?;
-        crate::replication::prepare_std_socket(&stream)?;
+    /// Connect to NodeServer at a given address - on success, make the socket non blocking
+    pub fn connect_timeout(&mut self, remote_addr: &str) -> Result<(), SableError> {
+        let addr = remote_addr.parse::<SocketAddr>()?;
+        let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5))?;
+        crate::replication::socket_set_timeout(&stream)?;
+        stream.set_nodelay(true)?;
         self.stream = Some(stream);
+        self.remote_addr = remote_addr.to_string();
         Ok(())
+    }
+
+    /// Send `slot` to connected remote server. After this call, the client is NOT usable
+    pub fn send_slot_file(
+        &mut self,
+        slot: u16,
+        filepath: &std::path::Path,
+    ) -> Result<(), SableError> {
+        let request = NodeTalkRequest::SendingSlotFile {
+            common: RequestCommon::new().with_request_id(&mut self.request_id),
+            slot,
+        };
+
+        // Send the message followed by the content
+        let mut buffer = bincode_to_bytesmut_or!(request, Err(SableError::SerialisationError));
+        {
+            let (mut writer, _) = self.split_stream()?;
+            writer.write_message(&mut buffer)?;
+        }
+
+        // Send over the file
+        let file_len = filepath.metadata()?.len();
+        tracing::info!(
+            "Sending slot {slot} content to remote: {}. Content size: {} bytes",
+            self.remote_addr,
+            file_len.to_formatted_string(&Locale::en)
+        );
+        {
+            let Some(stream) = &mut self.stream else {
+                return Err(SableError::ConnectionNotOpened);
+            };
+
+            if Self::send_file(filepath, stream)? != file_len {
+                return Err(SableError::OtherError(
+                    "failed to send file to remote".into(),
+                ));
+            }
+        }
+
+        tracing::info!("Waiting for ACK from remote");
+        // Wait for confirmation
+        let (_, mut reader) = self.split_stream()?;
+        match self.read_response(&mut reader)? {
+            NodeResponse::Ok(_) => {
+                tracing::info!("Received ACK");
+                Ok(())
+            }
+            NodeResponse::NotOk(resp) => Err(SableError::OtherError(format!(
+                "Remote {} did not acknowledged slot content acceptance. {resp}",
+                self.remote_addr
+            ))),
+        }
     }
 
     pub fn stream(&self) -> Option<&TcpStream> {
@@ -48,12 +106,7 @@ impl NodeTalkClient {
 
     /// Request to join the shard
     pub fn join_shard(&self) -> Result<JoinShardResult, SableError> {
-        let Some(stream) = &self.stream else {
-            return Err(SableError::ConnectionNotOpened);
-        };
-
-        let mut reader = TcpStreamBytesReader::new(stream);
-        let mut writer = TcpStreamBytesWriter::new(stream);
+        let (mut writer, mut reader) = self.split_stream()?;
         Ok(self.join_shard_internal(&mut reader, &mut writer))
     }
 
@@ -63,16 +116,8 @@ impl NodeTalkClient {
         reader: &mut impl BytesReader,
         writer: &mut impl BytesWriter,
     ) -> JoinShardResult {
-        let join_request = ReplicationRequest::JoinShard(RequestCommon::new());
-        let mut buffer = bincode_to_bytesmut_or!(join_request, JoinShardResult::Err);
-
-        if let Err(e) = writer.write_message(&mut buffer) {
-            error!("Failed to send replication request. {:?}", e);
-            return JoinShardResult::Err;
-        };
-
-        // We expect now an "Ok" or "NotOk" response
-        match self.read_response(reader) {
+        let join_request = NodeTalkRequest::JoinShard(RequestCommon::new());
+        match self.send_receive(reader, writer, join_request) {
             Err(e) => {
                 error!("join_shard: error reading replication message. {:?}", e);
                 JoinShardResult::Err
@@ -117,6 +162,44 @@ impl NodeTalkClient {
                 }
             };
         }
+    }
+
+    /// Efficiently send a file over the network
+    pub fn send_file<W>(filepath: &std::path::Path, stream: &mut W) -> Result<u64, SableError>
+    where
+        W: ?Sized + Write,
+    {
+        crate::io::send_file(stream, filepath)
+    }
+
+    /// Read file content from `stream` and write it into `filepath`
+    pub fn recv_file<R>(filepath: &std::path::Path, stream: &mut R) -> Result<u64, SableError>
+    where
+        R: ?Sized + Read,
+    {
+        crate::io::recv_file(filepath, stream)
+    }
+
+    /// Send `request` and read `response` from the server
+    fn send_receive(
+        &self,
+        reader: &mut impl BytesReader,
+        writer: &mut impl BytesWriter,
+        requst: NodeTalkRequest,
+    ) -> Result<NodeResponse, SableError> {
+        let mut buffer = bincode_to_bytesmut_or!(requst, Err(SableError::SerialisationError));
+        writer.write_message(&mut buffer)?;
+        self.read_response(reader)
+    }
+
+    fn split_stream(&self) -> Result<(TcpStreamBytesWriter, TcpStreamBytesReader), SableError> {
+        let Some(stream) = &self.stream else {
+            return Err(SableError::ConnectionNotOpened);
+        };
+        Ok((
+            TcpStreamBytesWriter::new(stream),
+            TcpStreamBytesReader::new(stream),
+        ))
     }
 }
 
