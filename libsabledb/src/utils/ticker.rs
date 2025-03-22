@@ -33,4 +33,24 @@ impl Ticker {
             Ok(false)
         }
     }
+
+    /// Check whether a "tick" occurred. If a tick occurred,
+    /// execute the
+    pub async fn tick_if_needed<R>(
+        &mut self,
+        f: impl futures::Future<Output = Result<R, SableError>>,
+    ) -> Result<Option<R>, SableError> {
+        let (curts, interval) = match self.tick_interval {
+            TickInterval::Seconds(secs) => (crate::TimeUtils::epoch_seconds()?, secs),
+            TickInterval::Milliseconds(millis) => (crate::TimeUtils::epoch_ms()?, millis),
+        };
+
+        if curts.saturating_sub(self.last_tick) > interval {
+            self.last_tick = curts;
+            let res = f.await?;
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
 }

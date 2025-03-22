@@ -186,6 +186,11 @@ impl ServerPersistentState {
         self.cluster_name.read().expect(POISONED_MUTEX).clone()
     }
 
+    #[inline]
+    pub fn in_cluster(&self) -> bool {
+        !self.cluster_name.read().expect(POISONED_MUTEX).is_empty()
+    }
+
     /// Initialise the node ID by loading or creating it
     pub fn initialise(&self, options: Arc<RwLock<ServerOptions>>) {
         let file_path = Self::file_path_from_dir(options);

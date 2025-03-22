@@ -371,9 +371,9 @@ impl Shard {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Cluster {
     /// List of shards belong to this cluster
-    shards: HashSet<String>,
+    pub shards: HashSet<String>,
     /// The cluster name
-    name: String,
+    pub name: String,
 }
 
 #[allow(dead_code)]
@@ -383,34 +383,29 @@ pub struct Persistence {
 
 #[macro_export]
 macro_rules! impl_persistence_get_for {
-    ($func_name:ident, $type_name:ident) => {
-        // The macro will expand into the contents of this block.
-        paste::item! {
-            /// Read record from the database by `key`
-            pub fn $func_name(&self, key: &String) -> Result<Option<$type_name>, SableError>
-            {
-                let mut cg = ConnectionGuard::default();
-                DB_CONN.with_borrow_mut(|db_client| {
-                    let Some(conn) = db_client.connection() else {
-                        return Err(SableError::ConnectionNotOpened);
-                    };
+    ($key:expr, $type_name:ty) => {{
+        let mut cg = ConnectionGuard::default();
+        DB_CONN
+            .with_borrow_mut(|db_client| {
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
 
-                    let redis::Value::BulkString(json) = conn.get(key)? else {
-                        return Ok(None);
-                    };
+                let redis::Value::BulkString(json) = conn.get($key)? else {
+                    return Ok(None);
+                };
 
-                    let s = String::from_utf8_lossy(&json).to_string();
-                    let v: $type_name = serde_json::from_str(&s).map_err(|e| {
-                        SableError::OtherError(format!("Failed to convert JSON to Object. {e}"))
-                    })?;
+                let s = String::from_utf8_lossy(&json).to_string();
+                let v: $type_name = serde_json::from_str(&s).map_err(|e| {
+                    SableError::OtherError(format!("Failed to convert JSON to Object. {e}"))
+                })?;
 
-                    Ok(Some(v))
-                }).inspect(|_| {
-                    cg.mark_success();
-                })
-            }
-        }
-    };
+                Ok(Some(v))
+            })
+            .inspect(|_| {
+                cg.mark_success();
+            })
+    }};
 }
 
 #[derive(Debug, Clone)]
@@ -491,7 +486,7 @@ impl Persistence {
     /// Insert or replace Node record into the database
     pub fn put_node(&self, node: &Node) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
-        let key = format!("{}.{}", node.shard_name, node.node_id);
+        let key = Self::node_key(&node.shard_name, node.node_id());
         self.put(&key, node).inspect(|_| {
             cg.mark_success();
         })
@@ -500,7 +495,7 @@ impl Persistence {
     /// Insert or replace Shard record into the database
     pub fn put_shard(&self, shard: &Shard) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
-        self.put(&shard.name, shard).inspect(|_| {
+        self.put(&Self::shard_key(&shard.name), shard).inspect(|_| {
             cg.mark_success();
         })
     }
@@ -529,9 +524,18 @@ impl Persistence {
             })
     }
 
-    impl_persistence_get_for!(get_node, Node);
-    impl_persistence_get_for!(get_shard, Shard);
-    impl_persistence_get_for!(get_cluster, Cluster);
+    pub fn get_shard(&self, shard_name: &String) -> Result<Option<Shard>, SableError> {
+        let shard_name = Self::shard_key(shard_name);
+        impl_persistence_get_for!(&shard_name, Shard)
+    }
+
+    pub fn get_cluster(&self) -> Result<Option<Cluster>, SableError> {
+        let cluster_name = Server::state().persistent_state().cluster_name();
+        if cluster_name.is_empty() {
+            return Ok(None);
+        }
+        impl_persistence_get_for!(&cluster_name, Cluster)
+    }
 
     pub fn lock(&self, lock_name: &String, timeout_ms: u64) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
@@ -606,7 +610,7 @@ impl Persistence {
                 let node_keys: Vec<String> = shard
                     .nodes
                     .iter()
-                    .map(|node_id| format!("{}.{}", &shard.name, node_id))
+                    .map(|node_id| Self::node_key(&shard.name, node_id))
                     .collect();
 
                 let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
@@ -820,6 +824,28 @@ impl Persistence {
             return Err(SableError::InternalError("Unexpected None!".into()));
         };
         Ok(ShardPrimaryResult::Ok(primary_node.clone()))
+    }
+
+    /// Nodes are stored in the database in format of: <cluster>.<shard>.<node-id>, if the node is not part of a cluster,
+    /// then it is kept as <shard>.<node-id>
+    fn node_key(shard_name: &String, node_id: &String) -> String {
+        let cluster_name = Server::state().persistent_state().cluster_name();
+        if cluster_name.is_empty() {
+            format!("{}.{}", shard_name, node_id)
+        } else {
+            format!("{}.{}.{}", &cluster_name, shard_name, node_id)
+        }
+    }
+
+    /// Shards are stored in the database in format of: <cluster>.<shard>, if the node is not shard is not part of a cluster
+    /// then it is kept as <shard>
+    fn shard_key(shard_name: &String) -> String {
+        let cluster_name = Server::state().persistent_state().cluster_name();
+        if cluster_name.is_empty() {
+            shard_name.clone()
+        } else {
+            format!("{}.{}", &cluster_name, shard_name)
+        }
     }
 }
 

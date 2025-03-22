@@ -160,6 +160,7 @@ impl Cron {
 
         let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Seconds(5));
         let cm = ClusterManager::with_options(self.server_options.clone());
+
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
@@ -178,14 +179,8 @@ impl Cron {
                     }
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
-                    if evict_ticker.try_tick()? {
-
-                        Self::evict(&self.store).await?;
-                    }
-                    if scan_ticker.try_tick()? {
-                        // Scan the database for statistics purposes
-                        Self::scan(&self.store).await?;
-                    }
+                    evict_ticker.tick_if_needed(Self::evict(&self.store)).await?;
+                    scan_ticker.tick_if_needed(Self::scan(&self.store)).await?;
                     if cluster_db_updater_ticker.try_tick()? {
                         // update the cluster database
                         if let Some(updated_node) = cm.put_node(
@@ -203,6 +198,9 @@ impl Cron {
                             }
                         }
                     }
+
+                    // TODO: if we are part of a cluster, we load the cluster setup (primary nodes + their slots)
+                    Self::poll_cluster_info(&self.store, &cm).await?;
                 }
             }
         }
@@ -388,6 +386,19 @@ impl Cron {
             ),
             None => Ok(RecordExistsResult::NotFound),
         }
+    }
+
+    /// In case, this instance is part of a cluster, fetch the cluster information from the cluster database
+    /// TODO: implement this
+    async fn poll_cluster_info(
+        _store: &StorageAdapter,
+        _cm: &ClusterManager,
+    ) -> Result<(), SableError> {
+        if !Server::state().persistent_state().in_cluster() {
+            return Ok(());
+        }
+
+        Ok(())
     }
 
     /// Scan the database count keys / databases

@@ -108,6 +108,21 @@ impl ClusterManager {
             })
     }
 
+    /// Return list of nodes (primaries only) for the current node's cluster.
+    /// If this node is not part of a cluster, return `None`.
+    pub fn get_cluster_primaries(&self) -> Result<Option<Vec<Node>>, SableError> {
+        if self.backoff.can_try().gt(&0) {
+            return Ok(None);
+        }
+        self.get_cluster_primaries_internal()
+            .inspect_err(|_| {
+                self.backoff.incr_error();
+            })
+            .inspect(|_| {
+                self.backoff.reset();
+            })
+    }
+
     /// Check and perform failover is needed
     pub async fn fail_over_if_needed(&self, store: &StorageAdapter) -> Result<(), SableError> {
         if self.backoff.can_try().gt(&0) {
@@ -248,6 +263,23 @@ impl ClusterManager {
         }
         Ok(())
     }
+
+    fn get_cluster_primaries_internal(&self) -> Result<Option<Vec<Node>>, SableError> {
+        // TODO: implement this method
+        check_cluster_db_or!(self.options, Ok(None));
+        let cluster_name = Server::state().persistent_state().cluster_name();
+        if cluster_name.is_empty() {
+            return Ok(None);
+        }
+        let db = Persistence::with_options(self.options.clone());
+
+        // Lock the cluster and get list of shards
+        let mut lk = BlockingLock::with_db(&db, cluster_name.clone());
+        lk.lock()?;
+
+        Ok(None)
+    }
+
     fn put_node_internal(&self, mut node: Node) -> Result<Option<Node>, SableError> {
         check_cluster_db_or!(self.options, Ok(None));
         if node.shard_name().is_empty() {
