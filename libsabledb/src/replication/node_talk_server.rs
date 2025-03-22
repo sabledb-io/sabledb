@@ -40,6 +40,7 @@ enum HandleRequestResult {
     NetError(String),
     Shutdown(String),
     IoError(String),
+    OtherError(String),
 }
 
 #[cfg(not(test))]
@@ -306,15 +307,26 @@ impl NodeTalkServer {
                     return HandleRequestResult::IoError(e.to_string());
                 }
 
-                let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
+                // Mark the slot as "owned" by this node
+                if let Err(e) = Server::state().persistent_state().slots().set(slot, true) {
+                    return HandleRequestResult::OtherError(format!(
+                        "Failed to own slot {slot}. {e}"
+                    ));
+                }
 
-                // Response with an ACK followed by the file
+                // And finally, update the configuration file
+                Server::state().persistent_state().save();
+
+                // We can not confirm with ACK to the client
+                let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
                 info!("Sending response: {}", response_ok);
+
                 let mut writer = TcpStreamBytesWriter::new(stream);
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
                 info!("Successfully sent ACK to remote");
+
                 // Leave the current connection
                 return HandleRequestResult::SuccessAndExit;
             }
@@ -566,6 +578,12 @@ impl NodeTalkServer {
                     }
                     HandleRequestResult::IoError(msg) => {
                         tracing::warn!("IoError occurred with remote. {msg}");
+                        info!("Closing connection with remote: {:?}", stream);
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        break;
+                    }
+                    HandleRequestResult::OtherError(msg) => {
+                        tracing::warn!("An unexpected error occurred. {msg}");
                         info!("Closing connection with remote: {:?}", stream);
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         break;

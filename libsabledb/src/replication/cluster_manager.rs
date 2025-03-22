@@ -264,9 +264,25 @@ impl ClusterManager {
         let mut lk = BlockingLock::with_db(&db, node.shard_name().to_string());
         lk.lock()?;
         // Make sure that this node appears in the Shard information
-        let (shard, primary_node) = if let Some(mut shard) = db.get_shard(node.shard_name())? {
+        let (mut shard, primary_node) = if let Some(mut shard) = db.get_shard(node.shard_name())? {
             shard.add_node(&node);
-            let primary_node = db.shard_primary(&shard)?.ok();
+            let primary_node = match db.shard_primary(&shard)? {
+                ShardPrimaryResult::MultiplePrimaries => {
+                    tracing::warn!(
+                        "Could not locate primary node for shard '{}'. Multiple primaries found",
+                        node.shard_name()
+                    );
+                    None
+                }
+                ShardPrimaryResult::NoPrimary => {
+                    tracing::warn!(
+                        "Could not locate primary node for shard '{}'",
+                        node.shard_name()
+                    );
+                    None
+                }
+                ShardPrimaryResult::Ok(primary) => Some(primary),
+            };
             (shard, primary_node)
         } else {
             let server_state = Server::state();
@@ -285,7 +301,10 @@ impl ClusterManager {
         };
 
         if let Some(primary_node) = primary_node {
-            if node.is_replica() {
+            if node.node_id().eq(primary_node.node_id()) {
+                // we are updating the shard's primary node - copy the slots from the node -> shard
+                shard.set_slots(node.slots());
+            } else {
                 // We only copy over the slots when the node that we want to update in the database
                 // is the replica, otherwise, we use the provided slots (i.e. we do not change them)
                 node.set_slots(primary_node.slots().to_string());
@@ -298,7 +317,7 @@ impl ClusterManager {
         Ok(Some(node))
     }
 
-    /// Broadcast all members of this shard that a failover is taking place
+    /// Broadcast all members of this shard that a fail-over is taking place
     async fn broadcast_failover(
         &self,
         db: &Persistence,

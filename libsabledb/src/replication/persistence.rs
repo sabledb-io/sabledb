@@ -359,6 +359,10 @@ impl Shard {
         self.name = name.to_string();
     }
 
+    pub fn set_slots(&mut self, slots: &str) {
+        self.slots = slots.to_string();
+    }
+
     pub fn name(&self) -> &String {
         &self.name
     }

@@ -24,6 +24,37 @@ const POISONED_MUTEX: &str = "Poisoned Mutex";
 
 pub struct ServerCommands {}
 
+#[derive(Default)]
+struct SlotSendResultInner {
+    success: bool,
+    errmsg: String,
+}
+
+#[derive(Default)]
+struct SlotSendResult {
+    inner: RwLock<SlotSendResultInner>,
+}
+
+impl SlotSendResult {
+    pub fn set_success(&self, success: bool) {
+        self.inner.write().expect(POISONED_MUTEX).success = success;
+    }
+
+    pub fn set_error_message(&self, msg: String) {
+        self.inner.write().expect(POISONED_MUTEX).errmsg = msg;
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.inner.read().expect(POISONED_MUTEX).success
+    }
+
+    pub fn error_message(&self) -> String {
+        self.inner.read().expect(POISONED_MUTEX).errmsg.clone()
+    }
+}
+
+unsafe impl Send for SlotSendResult {}
+
 impl ServerCommands {
     pub async fn handle_command(
         client_state: Rc<ClientState>,
@@ -335,14 +366,15 @@ impl ServerCommands {
         );
 
         // Error message is sent through this error_message variable
-        let error_message = Arc::new(RwLock::<String>::default());
+        let send_result = Arc::new(SlotSendResult::default());
         // Used to wait on the thread
         let event = Arc::new(ManualResetEvent::new(false));
 
-        // Process the slot transfer in a separate thread
-        let error_message_clone = error_message.clone();
+        // We process the slot transfer on a separate thread
+        let send_result_clone = send_result.clone();
         let event_clone = event.clone();
         let ip_clone = ip.clone();
+        let filepath_clone = filepath.clone();
         let h = std::thread::spawn(move || {
             let mut node_talk_client = NodeTalkClient::default();
             let remote_address = format!("{}:{}", String::from_utf8_lossy(&ip_clone), port);
@@ -351,33 +383,30 @@ impl ServerCommands {
                 &remote_address,
                 slot_number
             );
-            if let Err(e) = node_talk_client.connect_timeout(&remote_address) {
-                let errmsg = format!("ERR failed to connect to remote: {}. {}", remote_address, e);
-                error_message_clone
-                    .write()
-                    .expect(POISONED_MUTEX)
-                    .push_str(&errmsg);
+            if let Err(e) = node_talk_client.connect_with_timeout(&remote_address) {
+                send_result_clone.set_error_message(format!(
+                    "ERR failed to connect to remote: {}. {}",
+                    remote_address, e
+                ));
                 event_clone.set();
                 return;
             }
 
             tracing::info!("Successfully connected to remote {}", remote_address);
 
-            if let Err(e) = node_talk_client.send_slot_file(slot_number, &filepath) {
+            if let Err(e) = node_talk_client.send_slot_file(slot_number, &filepath_clone) {
                 tracing::error!(
                     "failed to send slot {} content to remote: {}. {}",
                     slot_number,
                     remote_address,
                     e
                 );
-
-                let errmsg = format!("ERR {e}");
-                error_message_clone
-                    .write()
-                    .expect(POISONED_MUTEX)
-                    .push_str(&errmsg);
+                send_result_clone.set_error_message(format!("ERR {e}"));
+                return;
             }
+
             event_clone.set();
+            send_result_clone.set_success(true);
         });
 
         // wait for the thread to terminate
@@ -386,13 +415,22 @@ impl ServerCommands {
         // Join the thread
         let _ = h.join();
 
-        // Check if it terminated with an error
-        let message = error_message.read().expect(POISONED_MUTEX).clone();
+        // Delete the slot file once used
+        let _ = std::fs::remove_file(&filepath);
+        tracing::info!("Removed slot file {}", filepath.display());
 
-        if message.is_empty() {
+        if send_result.is_success() {
+            // Remove the slot from this node
+            client_state
+                .server_inner_state()
+                .slots()
+                .set(slot_number, false)?;
+
+            // Persist the change
+            client_state.server_inner_state().persistent_state().save();
             builder.ok(response_buffer);
         } else {
-            builder.error_string(response_buffer, &message);
+            builder.error_string(response_buffer, &send_result.error_message());
         }
         Ok(())
     }

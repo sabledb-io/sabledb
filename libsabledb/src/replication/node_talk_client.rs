@@ -34,8 +34,9 @@ pub struct NodeTalkClient {
 #[allow(dead_code)]
 impl NodeTalkClient {
     /// Connect to NodeServer at a given address - on success, make the socket non blocking
-    pub fn connect_timeout(&mut self, remote_addr: &str) -> Result<(), SableError> {
+    pub fn connect_with_timeout(&mut self, remote_addr: &str) -> Result<(), SableError> {
         let addr = remote_addr.parse::<SocketAddr>()?;
+        // TODO: make the timeout configurable
         let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5))?;
         crate::replication::socket_set_timeout(&stream)?;
         stream.set_nodelay(true)?;

@@ -502,7 +502,7 @@ impl Slot {
     }
 
     /// Count the number of items belong to this slot exist in the database
-    pub async fn create_chunk(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
+    pub async fn count_keys(&self, client_state: Rc<ClientState>) -> Result<u64, SableError> {
         // When counting items, we only count the primary data types (String, List, Hash, etc) but not their children
         let prefix = Self::create_prefix_for_key_type(
             KeyType::PrimaryKey,

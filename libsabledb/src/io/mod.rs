@@ -255,7 +255,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
 
             let mut client = NodeTalkClient::default();
-            client.connect_timeout(&server_address).unwrap();
+            client.connect_with_timeout(&server_address).unwrap();
 
             let tempfile = crate::io::TempFile::with_name("test_send_recv_file_out");
             let file_size = NodeTalkClient::recv_file(

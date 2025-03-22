@@ -89,7 +89,7 @@ impl ClientReplicationLoop {
                 'client_loop: loop {
                     let mut client = NodeTalkClient::default();
                     // Loop until we manage to connect
-                    while let Err(e) = client.connect_timeout(&primary_address) {
+                    while let Err(e) = client.connect_with_timeout(&primary_address) {
                         tracing::info!("Connect failed. {e}");
                         // Check whether we should attempt to reconnect
                         if let Err(e) = cm.fail_over_if_needed(&store).await {
