@@ -1,11 +1,9 @@
 use crate::{file_utils, replication::ServerRole, server::SlotBitmap, ServerOptions};
 use ini::Ini;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc, RwLock,
-};
+use std::sync::{Arc, RwLock};
 
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
@@ -24,17 +22,43 @@ macro_rules! ini_read {
     }};
 }
 
-#[derive(Default)]
 #[allow(dead_code)]
+#[derive(Default)]
+struct NodeInfo {
+    /// The node's private address
+    private_address: String,
+    /// The node's public address (this is the address on which clients are connected to)
+    public_address: String,
+    /// The slots owned by this node
+    slots: Option<SlotBitmap>,
+}
+
+impl From<&crate::replication::Node> for NodeInfo {
+    fn from(n: &crate::replication::Node) -> Self {
+        NodeInfo {
+            private_address: n.private_address().clone(),
+            public_address: n.public_address().clone(),
+            slots: SlotBitmap::from_str(n.slots().as_str()).ok(),
+        }
+    }
+}
+/// This struct represents the content of the `NODE` configuration file
+#[derive(Default)]
+struct ServerPersistentStateInner {
+    node_id: String,
+    primary_node_id: String,
+    role: u8,
+    private_primary_address: String,
+    config_file: String,
+    shard_name: String,
+    cluster_name: String,
+    cluster_nodes: Vec<NodeInfo>,
+}
+
+#[derive(Clone, Default)]
 pub struct ServerPersistentState {
-    node_id: RwLock<String>,
-    primary_node_id: RwLock<String>,
-    role: AtomicU8,
-    private_primary_address: RwLock<String>,
-    config_file: RwLock<String>,
+    inner: Arc<RwLock<ServerPersistentStateInner>>,
     slots: SlotBitmap,
-    shard_name: RwLock<String>,
-    cluster_name: RwLock<String>,
 }
 
 const ROLE_PRIMARY: u8 = 0;
@@ -46,14 +70,17 @@ impl ServerPersistentState {
         let slots = SlotBitmap::default();
         slots.set_all(); // by default, this node owns all the slots
         ServerPersistentState {
-            node_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
-            primary_node_id: RwLock::<String>::default(),
-            role: AtomicU8::new(ROLE_PRIMARY),
-            private_primary_address: RwLock::<String>::default(),
-            config_file: RwLock::<String>::default(),
+            inner: Arc::new(RwLock::new(ServerPersistentStateInner {
+                node_id: uuid::Uuid::new_v4().to_string(),
+                primary_node_id: String::default(),
+                role: ROLE_PRIMARY,
+                private_primary_address: String::default(),
+                config_file: String::default(),
+                shard_name: String::default(),
+                cluster_name: String::default(),
+                cluster_nodes: Vec::<NodeInfo>::default(),
+            })),
             slots,
-            shard_name: RwLock::<String>::default(),
-            cluster_name: RwLock::<String>::default(),
         }
     }
 
@@ -62,40 +89,35 @@ impl ServerPersistentState {
     /// Return the current node ID
     #[inline]
     pub fn id(&self) -> String {
-        self.node_id.read().expect(POISONED_MUTEX).clone()
+        self.inner.read().expect(POISONED_MUTEX).node_id.clone()
     }
 
     /// Return the current node ID
     #[inline]
     pub fn set_id(&self, node_id: String) {
-        *self.node_id.write().expect(POISONED_MUTEX) = node_id;
+        self.inner.write().expect(POISONED_MUTEX).node_id = node_id;
     }
 
     /// Set the node's role to either replica or primary
     #[inline]
     pub fn set_role(&self, role: ServerRole) {
-        self.role.store(
-            if role == ServerRole::Primary {
-                ROLE_PRIMARY
-            } else {
-                ROLE_REPLICA
-            },
-            Ordering::Relaxed,
-        );
+        let mut inner = self.inner.write().expect(POISONED_MUTEX);
+        inner.role = if role == ServerRole::Primary {
+            ROLE_PRIMARY
+        } else {
+            ROLE_REPLICA
+        };
 
         if role == ServerRole::Primary {
             // Clear replica related values
-            self.private_primary_address
-                .write()
-                .expect(POISONED_MUTEX)
-                .clear();
-            self.primary_node_id.write().expect(POISONED_MUTEX).clear();
+            inner.private_primary_address.clear();
+            inner.primary_node_id.clear();
         }
     }
 
     #[inline]
     pub fn is_replica(&self) -> bool {
-        self.role.load(Ordering::Relaxed) == ROLE_REPLICA
+        self.inner.read().expect(POISONED_MUTEX).role == ROLE_REPLICA
     }
 
     #[inline]
@@ -106,7 +128,7 @@ impl ServerPersistentState {
     /// Return the current's node role
     #[inline]
     pub fn role(&self) -> ServerRole {
-        if self.role.load(Ordering::Relaxed) == ROLE_REPLICA {
+        if self.is_replica() {
             ServerRole::Replica
         } else {
             ServerRole::Primary
@@ -128,16 +150,20 @@ impl ServerPersistentState {
     /// of this node to "Replica"
     #[inline]
     pub fn set_primary_address(&self, address: String) {
-        *self.private_primary_address.write().expect(POISONED_MUTEX) = address;
+        self.inner
+            .write()
+            .expect(POISONED_MUTEX)
+            .private_primary_address = address;
         self.set_role(ServerRole::Replica);
     }
 
     /// Return the address of the primary
     #[inline]
     pub fn primary_address(&self) -> String {
-        self.private_primary_address
+        self.inner
             .read()
             .expect(POISONED_MUTEX)
+            .private_primary_address
             .clone()
     }
 
@@ -146,16 +172,20 @@ impl ServerPersistentState {
     /// it clears the current node's primary node ID and sets the role to `Primary`
     #[inline]
     pub fn set_primary_node_id(&self, primary_node_id: Option<String>) {
-        if primary_node_id.is_some() {
+        if let Some(primary_node_id) = primary_node_id {
             self.set_role(ServerRole::Replica);
-            *self.primary_node_id.write().expect(POISONED_MUTEX) =
-                primary_node_id.unwrap_or_default();
+            self.inner.write().expect(POISONED_MUTEX).primary_node_id = primary_node_id;
         } else {
             self.set_role(ServerRole::Primary);
-            self.primary_node_id.write().expect(POISONED_MUTEX).clear();
-            self.private_primary_address
+            self.inner
                 .write()
                 .expect(POISONED_MUTEX)
+                .primary_node_id
+                .clear();
+            self.inner
+                .write()
+                .expect(POISONED_MUTEX)
+                .private_primary_address
                 .clear();
         }
     }
@@ -163,38 +193,73 @@ impl ServerPersistentState {
     /// Return the current's node role
     #[inline]
     pub fn primary_node_id(&self) -> String {
-        self.primary_node_id.read().expect(POISONED_MUTEX).clone()
+        self.inner
+            .read()
+            .expect(POISONED_MUTEX)
+            .primary_node_id
+            .clone()
     }
 
     #[inline]
     pub fn set_shard_name(&self, shard_name: String) {
-        *self.shard_name.write().expect(POISONED_MUTEX) = shard_name;
+        self.inner.write().expect(POISONED_MUTEX).shard_name = shard_name;
     }
 
     #[inline]
     pub fn shard_name(&self) -> String {
-        self.shard_name.read().expect(POISONED_MUTEX).clone()
+        self.inner.read().expect(POISONED_MUTEX).shard_name.clone()
     }
 
     #[inline]
-    pub fn set_cluster_name(&self, shard_name: String) {
-        *self.cluster_name.write().expect(POISONED_MUTEX) = shard_name;
+    pub fn set_cluster_name(&self, cluster_name: String) {
+        self.inner.write().expect(POISONED_MUTEX).cluster_name = cluster_name;
     }
 
     #[inline]
     pub fn cluster_name(&self) -> String {
-        self.cluster_name.read().expect(POISONED_MUTEX).clone()
+        self.inner
+            .read()
+            .expect(POISONED_MUTEX)
+            .cluster_name
+            .clone()
     }
 
     #[inline]
     pub fn in_cluster(&self) -> bool {
-        !self.cluster_name.read().expect(POISONED_MUTEX).is_empty()
+        self.inner
+            .read()
+            .expect(POISONED_MUTEX)
+            .cluster_name
+            .is_empty()
+    }
+
+    /// Find and return the owner of `slot`
+    pub fn node_owner_for_slot(
+        &self,
+        slot: u16,
+    ) -> Result<Option<(String, u16)>, crate::SableError> {
+        let state = self.inner.read().expect(POISONED_MUTEX);
+        for node_info in &state.cluster_nodes {
+            if let Some(slots) = &node_info.slots {
+                if slots.is_set(slot)? {
+                    let Ok(socket) = node_info.public_address.parse::<SocketAddr>() else {
+                        return Err(super::SableError::InvalidArgument(
+                            "Invalid public address".into(),
+                        ));
+                    };
+                    return Ok(Some((socket.ip().to_string(), socket.port())));
+                }
+            }
+        }
+        // Could not find the slot owner
+        Ok(None)
     }
 
     /// Initialise the node ID by loading or creating it
     pub fn initialise(&self, options: Arc<RwLock<ServerOptions>>) {
         let file_path = Self::file_path_from_dir(options);
-        *self.config_file.write().expect(POISONED_MUTEX) = file_path.to_string_lossy().to_string();
+        self.inner.write().expect(POISONED_MUTEX).config_file =
+            file_path.to_string_lossy().to_string();
 
         let Some(content) = file_utils::read_file_content(&file_path) else {
             self.save();
@@ -269,7 +334,7 @@ impl ServerPersistentState {
             self.set_id(uuid::Uuid::new_v4().to_string());
         }
 
-        let filepath = self.config_file.read().expect(POISONED_MUTEX).clone();
+        let filepath = self.inner.read().expect(POISONED_MUTEX).config_file.clone();
         let mut ini = ini::Ini::default();
 
         ini.with_section(Some("general"))

@@ -265,7 +265,6 @@ impl ClusterManager {
     }
 
     fn get_cluster_primaries_internal(&self) -> Result<Option<Vec<Node>>, SableError> {
-        // TODO: implement this method
         check_cluster_db_or!(self.options, Ok(None));
         let cluster_name = Server::state().persistent_state().cluster_name();
         if cluster_name.is_empty() {
@@ -273,11 +272,11 @@ impl ClusterManager {
         }
         let db = Persistence::with_options(self.options.clone());
 
-        // Lock the cluster and get list of shards
+        // Lock the cluster and get list of primaries
         let mut lk = BlockingLock::with_db(&db, cluster_name.clone());
         lk.lock()?;
 
-        Ok(None)
+        Ok(Some(db.cluster_primaries()?))
     }
 
     fn put_node_internal(&self, mut node: Node) -> Result<Option<Node>, SableError> {

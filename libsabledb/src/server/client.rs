@@ -333,7 +333,7 @@ impl Client {
                             return Err(SableError::ConnectionClosed);
                         }
                     },
-                    Err(SableError::NotOwner(_slots)) => {
+                    Err(SableError::NotOwner(slots)) => {
                         // Some or all the slots in the command are not owned by this node
                         let builder = RespBuilderV2::default();
                         let mut response_buffer = BytesMut::new();
@@ -342,9 +342,19 @@ impl Client {
                                 &mut response_buffer,
                                 "CROSSSLOT Some or all the slots in the command are not owned by this node",
                             );
+                        } else if let Some(slot) = slots.first() {
+                            if let Ok(Some((addr, port))) = client_state
+                                .server_inner_state()
+                                .persistent_state()
+                                .node_owner_for_slot(*slot)
+                            {
+                                builder.error_string(
+                                    &mut response_buffer,
+                                    format!("MOVED {} {}", addr, port).as_str(),
+                                )
+                            }
                         } else {
-                            // TODO: add the real owner of the command
-                            builder.error_string(&mut response_buffer, "MOVED");
+                            builder.error_string(&mut response_buffer, "MOVED <unknown> <unknown>");
                         }
                         Self::send_response(&mut tx, &response_buffer, client_state.id()).await?;
                         break;

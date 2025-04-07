@@ -392,12 +392,14 @@ impl Cron {
     /// TODO: implement this
     async fn poll_cluster_info(
         _store: &StorageAdapter,
-        _cm: &ClusterManager,
+        cm: &ClusterManager,
     ) -> Result<(), SableError> {
         if !Server::state().persistent_state().in_cluster() {
             return Ok(());
         }
-
+        let Some(_cluster_primaries) = cm.get_cluster_primaries()? else {
+            return Ok(());
+        };
         Ok(())
     }
 

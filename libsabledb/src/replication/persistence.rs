@@ -599,13 +599,8 @@ impl Persistence {
     /// Retrieve the nodes of a given shard from the database
     pub fn shard_nodes(&self, shard: &Shard) -> Result<Vec<Node>, SableError> {
         let mut cg = ConnectionGuard::default();
-        let mut result = Vec::<Node>::default();
-        DB_CONN
+        let result = DB_CONN
             .with_borrow_mut(|db_client| {
-                let Some(conn) = db_client.connection() else {
-                    return Err(SableError::ConnectionNotOpened);
-                };
-
                 // the nodes are kept in the form of "<shard>.<node-id>"
                 let node_keys: Vec<String> = shard
                     .nodes
@@ -613,41 +608,59 @@ impl Persistence {
                     .map(|node_id| Self::node_key(&shard.name, node_id))
                     .collect();
 
-                let res = redis::cmd("MGET").arg(&node_keys).query(conn)?;
-                match res {
-                    redis::Value::Array(arr) => {
-                        let it = arr.iter();
-                        for json in it {
-                            match json {
-                                redis::Value::Nil => { /* not found */ }
-                                redis::Value::BulkString(json) => {
-                                    let s = String::from_utf8_lossy(json).to_string();
-                                    let v: Node = serde_json::from_str(&s).map_err(|e| {
-                                        SableError::OtherError(format!(
-                                            "Failed to convert JSON to Node. {e}"
-                                        ))
-                                    })?;
-                                    result.push(v);
-                                }
-                                other => {
-                                    return Err(SableError::Corrupted(format!(
-                                        "Expected BulkString value. Found: {:?}",
-                                        other
-                                    )));
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                    other => Err(SableError::OtherError(format!(
-                        "Failed to get shard: '{}' nodes. {:?}",
-                        shard.name, other
-                    ))),
-                }
+                let result = self.load_nodes_multi(db_client, &node_keys)?;
+                Ok::<Vec<Node>, SableError>(result)
             })
             .inspect(|_| {
                 cg.mark_success();
             })?;
+        Ok(result)
+    }
+
+    /// Load all shards owned by this cluster
+    pub fn cluster_shards(&self) -> Result<Vec<Shard>, SableError> {
+        let cluster = self.get_cluster()?.ok_or(SableError::NotFound)?;
+        let mut cg = ConnectionGuard::default();
+
+        let all_shards = DB_CONN
+            .with_borrow_mut(|db_client| {
+                // Load the cluster shards
+                let shard_keys: Vec<String> = cluster.shards.iter().map(Self::shard_key).collect();
+                let all_shards = self.load_shards_multi(db_client, &shard_keys)?;
+                Ok::<Vec<Shard>, SableError>(all_shards)
+            })
+            .inspect(|_| cg.mark_success())?;
+        Ok(all_shards)
+    }
+
+    /// Retrieve the nodes of the current cluster from the database
+    pub fn cluster_primaries(&self) -> Result<Vec<Node>, SableError> {
+        let mut cg = ConnectionGuard::default();
+        let shards = self.cluster_shards()?;
+
+        // Load the nodes
+        let mut all_keys = Vec::<String>::default();
+        for shard in &shards {
+            let mut node_keys: Vec<String> = shard
+                .nodes
+                .iter()
+                .map(|node_id| Self::node_key(&shard.name, node_id))
+                .collect();
+            all_keys.append(&mut node_keys);
+        }
+
+        let result = DB_CONN
+            .with_borrow_mut(|db_client| self.load_nodes_multi(db_client, &all_keys))
+            .inspect(|_| {
+                cg.mark_success();
+            })?;
+
+        // filter the non primary nodes from the list
+        let result: Vec<Node> = result
+            .iter()
+            .filter(|&node| node.is_primary())
+            .cloned()
+            .collect();
         Ok(result)
     }
 
@@ -824,6 +837,96 @@ impl Persistence {
             return Err(SableError::InternalError("Unexpected None!".into()));
         };
         Ok(ShardPrimaryResult::Ok(primary_node.clone()))
+    }
+
+    /// Load multiple nodes from the database. The `node_keys` are in the format of
+    /// `<cluster>.<shard>.<node-id>`
+    fn load_nodes_multi(
+        &self,
+        db_client: &mut DbClient,
+        node_keys: &Vec<String>,
+    ) -> Result<Vec<Node>, SableError> {
+        let mut result = Vec::<Node>::default();
+        let Some(conn) = db_client.connection() else {
+            return Err(SableError::ConnectionNotOpened);
+        };
+
+        let res = redis::cmd("MGET").arg(node_keys).query(conn)?;
+        match res {
+            redis::Value::Array(arr) => {
+                let it = arr.iter();
+                for json in it {
+                    match json {
+                        redis::Value::Nil => { /* not found */ }
+                        redis::Value::BulkString(json) => {
+                            let s = String::from_utf8_lossy(json).to_string();
+                            let v: Node = serde_json::from_str(&s).map_err(|e| {
+                                SableError::OtherError(format!(
+                                    "Failed to convert JSON to Node. {e}"
+                                ))
+                            })?;
+                            result.push(v);
+                        }
+                        other => {
+                            return Err(SableError::Corrupted(format!(
+                                "Expected BulkString value. Found: {:?}",
+                                other
+                            )));
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            other => Err(SableError::OtherError(format!(
+                "Failed load nodes. {:?}",
+                other
+            ))),
+        }
+    }
+
+    /// Load multiple shards from the database. The `node_keys` are in the format of
+    /// `<cluster>.<shard>.<node-id>`
+    fn load_shards_multi(
+        &self,
+        db_client: &mut DbClient,
+        shard_keys: &Vec<String>,
+    ) -> Result<Vec<Shard>, SableError> {
+        let mut result = Vec::<Shard>::default();
+        let Some(conn) = db_client.connection() else {
+            return Err(SableError::ConnectionNotOpened);
+        };
+
+        let res = redis::cmd("MGET").arg(shard_keys).query(conn)?;
+        match res {
+            redis::Value::Array(arr) => {
+                let it = arr.iter();
+                for json in it {
+                    match json {
+                        redis::Value::Nil => { /* not found */ }
+                        redis::Value::BulkString(json) => {
+                            let s = String::from_utf8_lossy(json).to_string();
+                            let v: Shard = serde_json::from_str(&s).map_err(|e| {
+                                SableError::OtherError(format!(
+                                    "Failed to convert JSON to Node. {e}"
+                                ))
+                            })?;
+                            result.push(v);
+                        }
+                        other => {
+                            return Err(SableError::Corrupted(format!(
+                                "Expected BulkString value. Found: {:?}",
+                                other
+                            )));
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            other => Err(SableError::OtherError(format!(
+                "Failed load shards. {:?}",
+                other
+            ))),
+        }
     }
 
     /// Nodes are stored in the database in format of: <cluster>.<shard>.<node-id>, if the node is not part of a cluster,
