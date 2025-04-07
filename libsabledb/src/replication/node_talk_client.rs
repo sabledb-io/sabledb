@@ -2,7 +2,7 @@ use crate::{
     bincode_to_bytesmut_or,
     replication::messages::*,
     replication::{BytesReader, BytesWriter, TcpStreamBytesReader, TcpStreamBytesWriter},
-    SableError,
+    SableError, Server,
 };
 use num_format::{Locale, ToFormattedString};
 use std::io::{Read, Write};
@@ -88,6 +88,11 @@ impl NodeTalkClient {
         match self.read_response(&mut reader)? {
             NodeResponse::Ok(_) => {
                 tracing::info!("Received ACK");
+                Server::state()
+                    .persistent_state()
+                    .slots()
+                    .set(slot, false)?;
+                Server::state().persistent_state().save();
                 Ok(())
             }
             NodeResponse::NotOk(resp) => Err(SableError::OtherError(format!(

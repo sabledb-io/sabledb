@@ -257,6 +257,7 @@ impl ServerCommands {
         let sub_command = String::from_utf8_lossy(command_arg_at!(command, 1)).to_ascii_uppercase();
 
         match sub_command.as_str() {
+            "CALC" => Self::slot_calc(client_state, command, response_buffer).await,
             "COUNT" => Self::slot_count(client_state, command, response_buffer).await,
             "SENDTO" => Self::slot_sendto(client_state, command, response_buffer).await,
             _ => {
@@ -288,6 +289,21 @@ impl ServerCommands {
         let slot = Slot::with_slot(slot_number);
         let items_count = slot.count(client_state).await?;
         builder.number_u64(response_buffer, items_count);
+        Ok(())
+    }
+
+    /// Calculate slot for a key `SLOT CALC <KEY>`
+    async fn slot_calc(
+        _client_state: Rc<ClientState>,
+        command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        check_args_count!(command, 3, response_buffer);
+        let key = command_arg_at!(command, 2);
+
+        // Make sure that slot passed is a u16
+        let builder = RespBuilderV2::default();
+        builder.number::<u16>(response_buffer, crate::utils::calculate_slot(key), false);
         Ok(())
     }
 
@@ -338,6 +354,13 @@ impl ServerCommands {
         }
 
         // During slot migration we lock the slot for read-only mode
+        tracing::info!(
+            "Preparing to send slot {} to server: {:?}:{} ",
+            slot_number,
+            ip,
+            port,
+        );
+
         let _lock =
             LockManager::lock_multi_slots_shared(vec![slot_number], client_state.clone()).await?;
         let _last_txn_id = client_state.database().latest_sequence_number()?;

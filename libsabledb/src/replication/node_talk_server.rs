@@ -317,7 +317,7 @@ impl NodeTalkServer {
                 // And finally, update the configuration file
                 Server::state().persistent_state().save();
 
-                // We can not confirm with ACK to the client
+                // We can now confirm with ACK to the client
                 let response_ok = NodeResponse::Ok(ResponseCommon::new(&common));
                 info!("Sending response: {}", response_ok);
 

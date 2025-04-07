@@ -29,7 +29,7 @@ impl Lock for BlockingLock<'_> {
 
     fn lock(&mut self) -> Result<(), SableError> {
         if let Err(e) = self.db.lock(&self.name, 5_000) {
-            tracing::warn!("{e}");
+            tracing::warn!("Lock error: {e}");
         } else {
             self.locked = true;
         }
@@ -39,7 +39,7 @@ impl Lock for BlockingLock<'_> {
     fn unlock(&mut self) -> Result<(), SableError> {
         if self.is_locked() {
             if let Err(e) = self.db.unlock(&self.name) {
-                tracing::warn!("{e}");
+                tracing::debug!("Failed to unlock. {e}");
             } else {
                 self.locked = false;
             }

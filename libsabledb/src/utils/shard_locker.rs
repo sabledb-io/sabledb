@@ -226,7 +226,7 @@ impl LockManager {
     ) -> Result<ShardLockGuard<'a>, SableError> {
         check_state!(client_state, slots);
         double_check_slot_ownership!(
-            Self::lock_multi_slots_exclusive_unconditionally(slots.clone()).await,
+            Self::lock_multi_slots_shared_unconditionally(slots.clone()).await,
             client_state,
             slots
         )

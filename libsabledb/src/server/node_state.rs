@@ -226,7 +226,8 @@ impl ServerPersistentState {
 
     #[inline]
     pub fn in_cluster(&self) -> bool {
-        self.inner
+        !self
+            .inner
             .read()
             .expect(POISONED_MUTEX)
             .cluster_name

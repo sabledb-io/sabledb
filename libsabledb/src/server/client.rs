@@ -352,6 +352,11 @@ impl Client {
                                     &mut response_buffer,
                                     format!("MOVED {} {}", addr, port).as_str(),
                                 )
+                            } else {
+                                builder.error_string(
+                                    &mut response_buffer,
+                                    "MOVED <unknown> <unknown>",
+                                );
                             }
                         } else {
                             builder.error_string(&mut response_buffer, "MOVED <unknown> <unknown>");

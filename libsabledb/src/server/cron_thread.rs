@@ -159,7 +159,6 @@ impl Cron {
         ));
 
         let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Seconds(5));
-        let cm = ClusterManager::with_options(self.server_options.clone());
 
         loop {
             tokio::select! {
@@ -179,6 +178,7 @@ impl Cron {
                     }
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                    let cm = ClusterManager::with_options(self.server_options.clone());
                     evict_ticker.tick_if_needed(Self::evict(&self.store)).await?;
                     scan_ticker.tick_if_needed(Self::scan(&self.store)).await?;
                     if cluster_db_updater_ticker.try_tick()? {
@@ -397,9 +397,19 @@ impl Cron {
         if !Server::state().persistent_state().in_cluster() {
             return Ok(());
         }
-        let Some(_cluster_primaries) = cm.get_cluster_primaries()? else {
-            return Ok(());
+
+        let cluster_primaries = match cm.get_cluster_primaries() {
+            Ok(Some(cluster_primaries)) => cluster_primaries,
+            Ok(None) => {
+                tracing::info!("Could not locate primaries for cluster");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read primaries for cluster. {e}");
+                return Ok(());
+            }
         };
+        tracing::info!("Read primaries info: {:?}", cluster_primaries);
         Ok(())
     }
 
