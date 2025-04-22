@@ -1,8 +1,8 @@
 #[allow(unused_imports)]
 use crate::{
     replication::{
-        BlockingLock, Lock, Node, NodeBuilder, Persistence, ServerRole, ShardBuilder,
-        ShardPrimaryResult,
+        BlockingLock, ClusterBuilder, Lock, Node, NodeBuilder, Persistence, ServerRole,
+        ShardBuilder, ShardPrimaryResult,
     },
     utils::{RespResponseParserV2, ResponseParseResult, TimeUtils, ValkeyObject},
     SableError, Server, ServerOptions, SimpleBackoff, StorageAdapter, ValkeyCommand,
@@ -276,7 +276,7 @@ impl ClusterManager {
         let mut lk = BlockingLock::with_db(&db, cluster_name.clone());
         lk.lock()?;
 
-        Ok(Some(db.cluster_primaries()?))
+        Ok(Some(db.cluster_primaries(&cluster_name)?))
     }
 
     fn put_node_internal(&self, mut node: Node) -> Result<Option<Node>, SableError> {
@@ -345,6 +345,28 @@ impl ClusterManager {
 
         db.put_shard(&shard)?;
         db.put_node(&node)?;
+        drop(lk);
+
+        // If we are part of a cluster, update it
+        let cluster_name = Server::state().persistent_state().cluster_name();
+        if !cluster_name.is_empty() {
+            let mut lk = BlockingLock::with_db(&db, cluster_name.clone());
+            lk.lock()?;
+
+            // Update the cluster
+            let cluster = if let Some(mut cluster) = db.get_cluster(&cluster_name)? {
+                cluster.shards.insert(shard.name().clone());
+                cluster
+            } else {
+                // first time
+                ClusterBuilder::default()
+                    .with_name(cluster_name.clone())
+                    .with_shards(&vec![&shard])
+                    .build()
+            };
+            db.put_cluster(&cluster)?;
+            tracing::debug!("Updated cluster: {:?}", cluster);
+        }
         Ok(Some(node))
     }
 

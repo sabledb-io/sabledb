@@ -199,7 +199,7 @@ impl Cron {
                         }
                     }
 
-                    // TODO: if we are part of a cluster, we load the cluster setup (primary nodes + their slots)
+                    // If we are part of a cluster, load the cluster setup (primary nodes + their slots)
                     Self::poll_cluster_info(&self.store, &cm).await?;
                 }
             }
@@ -409,7 +409,7 @@ impl Cron {
                 return Ok(());
             }
         };
-        tracing::info!("Read primaries info: {:?}", cluster_primaries);
+        tracing::debug!("Read primaries info: {:?}", cluster_primaries);
         Ok(())
     }
 

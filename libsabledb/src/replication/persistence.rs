@@ -376,6 +376,30 @@ pub struct Cluster {
     pub name: String,
 }
 
+#[derive(Default)]
+pub struct ClusterBuilder {
+    name: String,
+    shards: HashSet<String>,
+}
+
+impl ClusterBuilder {
+    impl_builder_with_fn!(name, String);
+
+    pub fn with_shards(mut self, shards: &[&Shard]) -> Self {
+        for shard in shards {
+            self.shards.insert(shard.name.clone());
+        }
+        self
+    }
+
+    pub fn build(self) -> Cluster {
+        Cluster {
+            name: self.name,
+            shards: self.shards,
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub struct Persistence {
     options: Arc<StdRwLock<ServerOptions>>,
@@ -529,12 +553,11 @@ impl Persistence {
         impl_persistence_get_for!(&shard_name, Shard)
     }
 
-    pub fn get_cluster(&self) -> Result<Option<Cluster>, SableError> {
-        let cluster_name = Server::state().persistent_state().cluster_name();
+    pub fn get_cluster(&self, cluster_name: &String) -> Result<Option<Cluster>, SableError> {
         if cluster_name.is_empty() {
             return Ok(None);
         }
-        impl_persistence_get_for!(&cluster_name, Cluster)
+        impl_persistence_get_for!(cluster_name, Cluster)
     }
 
     pub fn lock(&self, lock_name: &String, timeout_ms: u64) -> Result<(), SableError> {
@@ -618,8 +641,10 @@ impl Persistence {
     }
 
     /// Load all shards owned by this cluster
-    pub fn cluster_shards(&self) -> Result<Vec<Shard>, SableError> {
-        let cluster = self.get_cluster()?.ok_or(SableError::NotFound)?;
+    pub fn cluster_shards(&self, cluster_name: &String) -> Result<Vec<Shard>, SableError> {
+        let cluster = self
+            .get_cluster(cluster_name)?
+            .ok_or(SableError::NotFound)?;
         let mut cg = ConnectionGuard::default();
 
         let all_shards = DB_CONN
@@ -634,9 +659,9 @@ impl Persistence {
     }
 
     /// Retrieve the nodes of the current cluster from the database
-    pub fn cluster_primaries(&self) -> Result<Vec<Node>, SableError> {
+    pub fn cluster_primaries(&self, cluster_name: &String) -> Result<Vec<Node>, SableError> {
         let mut cg = ConnectionGuard::default();
-        let shards = self.cluster_shards()?;
+        let shards = self.cluster_shards(cluster_name)?;
 
         // Load the nodes
         let mut all_keys = Vec::<String>::default();

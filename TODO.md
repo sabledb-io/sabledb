@@ -20,7 +20,5 @@ SLOT <NUMBER> SENDTO <IP:PORT>
 
 ### Slot transfer flow open tasks:
 
-- Update cluster entry in the cluster database with list of shards
-- Add API to `ClusterManager` for pulling cluster's primaries + their slots
 - The "MOVED" error should now contain the new owner of the slot (taken from the cluster database)
 - Add integration tests for the slot transfer use case
