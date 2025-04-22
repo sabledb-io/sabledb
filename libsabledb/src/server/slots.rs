@@ -102,6 +102,7 @@ impl SlotBitmap {
 
     /// Return true if all `slots` are set
     pub fn is_set_multi(&self, slots: &[u16]) -> Result<bool, SableError> {
+        tracing::trace!("Checking slots: {:?} against: {}", slots, self.to_string());
         for slot in slots {
             if !self.is_set(*slot)? {
                 return Ok(false);

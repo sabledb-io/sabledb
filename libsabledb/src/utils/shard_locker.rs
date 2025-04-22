@@ -1,4 +1,4 @@
-use crate::{utils::calculate_slot, ClientState, PrimaryKeyMetadata, SableError, ValkeyCommand};
+use crate::{utils::calculate_slot, ClientState, SableError, ValkeyCommand};
 use bytes::BytesMut;
 use std::rc::Rc;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -105,12 +105,10 @@ impl LockManager {
         client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
         if command.metadata().is_write_command() {
-            Self::lock_internal_key_exclusive(&internal_key, client_state).await
+            Self::lock_internal_key_exclusive(&user_key, client_state).await
         } else {
-            Self::lock_internal_key_shared(&internal_key, client_state).await
+            Self::lock_internal_key_shared(&user_key, client_state).await
         }
     }
 
@@ -121,15 +119,10 @@ impl LockManager {
         client_state: Rc<ClientState>,
         command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
-        let db_id = client_state.database_id();
-        let keys: Vec<Rc<BytesMut>> = user_keys
-            .iter()
-            .map(|user_key| Rc::new(PrimaryKeyMetadata::new_primary_key(user_key, db_id)))
-            .collect();
         if command.metadata().is_write_command() {
-            Self::lock_multi_internal_keys_exclusive(&keys, client_state).await
+            Self::lock_multi_internal_keys_exclusive(&user_keys, client_state).await
         } else {
-            Self::lock_multi_internal_keys_shared(&keys, client_state).await
+            Self::lock_multi_internal_keys_shared(&user_keys, client_state).await
         }
     }
 
@@ -139,10 +132,9 @@ impl LockManager {
     /// This function skip these checks
     pub async fn lock_user_key_shared_unconditionally<'a>(
         user_key: &BytesMut,
-        db_id: u16,
+        _db_id: u16,
     ) -> Result<ShardLockGuard<'a>, SableError> {
-        let internal_key = PrimaryKeyMetadata::new_primary_key(user_key, db_id);
-        Self::lock_internal_key_shared_unconditionally(&internal_key).await
+        Self::lock_internal_key_shared_unconditionally(&user_key).await
     }
 
     /// Lock the entire storage
@@ -267,7 +259,7 @@ impl LockManager {
     // ===-------------------------------------------
 
     async fn lock_multi_internal_keys_exclusive<'a>(
-        keys: &[Rc<BytesMut>],
+        keys: &[&BytesMut],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let mut write_locks = Vec::<RwLockWriteGuard<'a, u16>>::with_capacity(keys.len());
@@ -301,7 +293,7 @@ impl LockManager {
     }
 
     async fn lock_multi_internal_keys_shared<'a>(
-        keys: &[Rc<BytesMut>],
+        keys: &[&BytesMut],
         client_state: Rc<ClientState>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         let mut read_locks = Vec::<RwLockReadGuard<'a, u16>>::with_capacity(keys.len());
@@ -438,15 +430,11 @@ mod tests {
     fn test_write_locks() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
-            let k3 = Rc::new(BytesMut::from("key1"));
+            let k1 = BytesMut::from("key1");
+            let k2 = BytesMut::from("key2");
+            let k3 = BytesMut::from("key1");
 
-            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(3);
-            keys.push(k1);
-            keys.push(k2);
-            keys.push(k3);
-
+            let keys = [&k1, &k2, &k3];
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
@@ -466,15 +454,12 @@ mod tests {
     fn test_read_locks() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
+            let k1 = BytesMut::from("key1");
+            let k2 = BytesMut::from("key2");
+            let keys = [&k1, &k2];
 
             let (_guard, store) = crate::tests::open_store();
             let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
-
-            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-            keys.push(k1);
-            keys.push(k2);
 
             for _ in 0..100 {
                 let locker = LockManager::lock_multi_internal_keys_shared(&keys, client.inner())
@@ -491,8 +476,9 @@ mod tests {
     fn test_lock_in_txn_prep_state() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
+            let k1 = BytesMut::from("key1");
+            let k2 = BytesMut::from("key2");
+            let keys = [&k1, &k2];
 
             let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
             expected_slots.dedup();
@@ -502,10 +488,6 @@ mod tests {
             let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
             client.inner().set_txn_state_calc_slots(true);
-
-            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-            keys.push(k1);
-            keys.push(k2);
 
             let result = LockManager::lock_multi_internal_keys_shared(&keys, client.inner()).await;
             match result {
@@ -523,8 +505,9 @@ mod tests {
     fn test_lock_in_active_txn_state() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let k1 = Rc::new(BytesMut::from("key1"));
-            let k2 = Rc::new(BytesMut::from("key2"));
+            let k1 = BytesMut::from("key1");
+            let k2 = BytesMut::from("key2");
+            let keys = [&k1, &k2];
 
             let mut expected_slots = vec![calculate_slot(&k1), calculate_slot(&k2)];
             expected_slots.dedup();
@@ -534,10 +517,6 @@ mod tests {
             let client = Client::new(Arc::<ServerState>::default(), store.clone(), None);
 
             client.inner().set_txn_state_exec(true);
-
-            let mut keys = Vec::<Rc<BytesMut>>::with_capacity(2);
-            keys.push(k1);
-            keys.push(k2);
 
             let guard = LockManager::lock_multi_internal_keys_shared(&keys, client.inner())
                 .await
