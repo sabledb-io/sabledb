@@ -361,7 +361,7 @@ impl ClusterManager {
                 // first time
                 ClusterBuilder::default()
                     .with_name(cluster_name.clone())
-                    .with_shards(&vec![&shard])
+                    .with_shards(&[&shard])
                     .build()
             };
             db.put_cluster(&cluster)?;
