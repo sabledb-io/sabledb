@@ -106,9 +106,9 @@ impl LockManager {
         command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         if command.metadata().is_write_command() {
-            Self::lock_internal_key_exclusive(&user_key, client_state).await
+            Self::lock_internal_key_exclusive(user_key, client_state).await
         } else {
-            Self::lock_internal_key_shared(&user_key, client_state).await
+            Self::lock_internal_key_shared(user_key, client_state).await
         }
     }
 
@@ -120,9 +120,9 @@ impl LockManager {
         command: Rc<ValkeyCommand>,
     ) -> Result<ShardLockGuard<'a>, SableError> {
         if command.metadata().is_write_command() {
-            Self::lock_multi_internal_keys_exclusive(&user_keys, client_state).await
+            Self::lock_multi_internal_keys_exclusive(user_keys, client_state).await
         } else {
-            Self::lock_multi_internal_keys_shared(&user_keys, client_state).await
+            Self::lock_multi_internal_keys_shared(user_keys, client_state).await
         }
     }
 
@@ -134,7 +134,7 @@ impl LockManager {
         user_key: &BytesMut,
         _db_id: u16,
     ) -> Result<ShardLockGuard<'a>, SableError> {
-        Self::lock_internal_key_shared_unconditionally(&user_key).await
+        Self::lock_internal_key_shared_unconditionally(user_key).await
     }
 
     /// Lock the entire storage

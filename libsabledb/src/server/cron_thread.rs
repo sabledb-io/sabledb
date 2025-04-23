@@ -2,6 +2,7 @@ use crate::{
     metadata::{Bookkeeping, KeyPrefix, KeyType, ValueType},
     replication::{ClusterManager, NodeBuilder},
     server::telemetry::Telemetry,
+    server::NodeInfo,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
     LockManager, SableError, Server, ServerOptions, StorageAdapter, ToU8Writer, U8ArrayBuilder,
@@ -389,7 +390,6 @@ impl Cron {
     }
 
     /// In case, this instance is part of a cluster, fetch the cluster information from the cluster database
-    /// TODO: implement this
     async fn poll_cluster_info(
         _store: &StorageAdapter,
         cm: &ClusterManager,
@@ -409,7 +409,10 @@ impl Cron {
                 return Ok(());
             }
         };
-        tracing::debug!("Read primaries info: {:?}", cluster_primaries);
+        // Update the node's persistent state with the slots read from the database
+        // we need to construct NodeInfo from the primaries and update the state
+        let nodes: Vec<NodeInfo> = cluster_primaries.iter().map(NodeInfo::from).collect();
+        Server::state().persistent_state().set_cluster_nodes(&nodes);
         Ok(())
     }
 

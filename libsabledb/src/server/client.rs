@@ -350,16 +350,20 @@ impl Client {
                             {
                                 builder.error_string(
                                     &mut response_buffer,
-                                    format!("MOVED {} {}", addr, port).as_str(),
+                                    format!("MOVED {} {}:{}", slot, addr, port).as_str(),
                                 )
                             } else {
                                 builder.error_string(
                                     &mut response_buffer,
-                                    "MOVED <unknown> <unknown>",
+                                    format!("MOVED {} <unknown>:<unknown>", slot).as_str(),
                                 );
                             }
                         } else {
-                            builder.error_string(&mut response_buffer, "MOVED <unknown> <unknown>");
+                            // this should not be happening... but we need to cover all cases
+                            builder.error_string(
+                                &mut response_buffer,
+                                "MOVED <unknown> <unknown>:<unknown>",
+                            );
                         }
                         Self::send_response(&mut tx, &response_buffer, client_state.id()).await?;
                         break;

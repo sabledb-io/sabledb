@@ -23,8 +23,9 @@ macro_rules! ini_read {
 }
 
 #[allow(dead_code)]
-#[derive(Default)]
-struct NodeInfo {
+#[derive(Default, Clone)]
+pub struct NodeInfo {
+    node_id: String,
     /// The node's private address
     private_address: String,
     /// The node's public address (this is the address on which clients are connected to)
@@ -33,9 +34,30 @@ struct NodeInfo {
     slots: Option<SlotBitmap>,
 }
 
+impl std::fmt::Display for NodeInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let slots_str = if let Some(slots) = &self.slots {
+            slots.to_string()
+        } else {
+            "".to_string()
+        };
+        write!(
+            f,
+            "{}, {}, {}, {}",
+            self.node_id, self.public_address, self.private_address, slots_str
+        )
+    }
+}
+
+fn node_info_vec_to_string(nodes: &[NodeInfo]) -> String {
+    let v: Vec<String> = nodes.iter().map(|n| format!("{{ {} }}", n)).collect();
+    v.join(",")
+}
+
 impl From<&crate::replication::Node> for NodeInfo {
     fn from(n: &crate::replication::Node) -> Self {
         NodeInfo {
+            node_id: n.node_id().clone(),
             private_address: n.private_address().clone(),
             public_address: n.public_address().clone(),
             slots: SlotBitmap::from_str(n.slots().as_str()).ok(),
@@ -354,6 +376,13 @@ impl ServerPersistentState {
         }
 
         tracing::info!("Successfully updated file: {}", filepath);
+    }
+
+    /// Update the cluster nodes
+    pub fn set_cluster_nodes(&self, nodes: &[NodeInfo]) {
+        let nodes: Vec<NodeInfo> = nodes.to_vec();
+        tracing::debug!("Cluster nodes: [{}]", node_info_vec_to_string(&nodes));
+        self.inner.write().expect(POISONED_MUTEX).cluster_nodes = nodes;
     }
 
     fn file_path_from_dir(options: Arc<RwLock<ServerOptions>>) -> PathBuf {

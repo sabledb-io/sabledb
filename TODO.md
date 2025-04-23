@@ -20,5 +20,4 @@ SLOT <NUMBER> SENDTO <IP:PORT>
 
 ### Slot transfer flow open tasks:
 
-- The "MOVED" error should now contain the new owner of the slot (taken from the cluster database)
 - Add integration tests for the slot transfer use case
