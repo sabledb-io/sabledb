@@ -5,13 +5,13 @@ use crate::{
     commands::{HandleCommandResult, StringCommands},
     metadata::{CommonValueMetadata, KeyType},
     parse_string_to_number,
-    replication::NodeTalkClient,
+    replication::{ClusterManager, NodeBuilder, NodeTalkClient},
     server::ClientState,
     server::SlotFileExporter,
     storage::StringsDb,
     utils::SLOT_SIZE,
-    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError, Slot,
-    StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder, ValkeyCommand,
+    BytesMutUtils, Expiration, LockManager, PrimaryKeyMetadata, RespBuilderV2, SableError, Server,
+    Slot, StorageAdapter, StringUtils, Telemetry, TimeUtils, U8ArrayBuilder, ValkeyCommand,
     ValkeyCommandName,
 };
 use bytes::BytesMut;
@@ -363,7 +363,8 @@ impl ServerCommands {
 
         let _lock =
             LockManager::lock_multi_slots_shared(vec![slot_number], client_state.clone()).await?;
-        let _last_txn_id = client_state.database().latest_sequence_number()?;
+        let last_txn_id = client_state.database().latest_sequence_number()?;
+        let server_options = client_state.server_inner_state().options().clone();
         let mut exporter = SlotFileExporter::new(
             client_state.database(),
             client_state.database_id(),
@@ -428,6 +429,32 @@ impl ServerCommands {
                 return;
             }
 
+            // Update the database that we now own the slot
+            let cm = ClusterManager::with_options(server_options);
+            match cm.put_node(NodeBuilder::default().with_last_txn_id(last_txn_id).build()) {
+                Ok(Some(updated_node)) => {
+                    if !Server::state()
+                        .persistent_state()
+                        .slots()
+                        .to_string()
+                        .eq(updated_node.slots())
+                    {
+                        tracing::info!("Slots updated to: {}", updated_node.slots());
+                        let _ = Server::state()
+                            .persistent_state()
+                            .set_slots(updated_node.slots());
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to update node info in cluster manager database. {}",
+                        e
+                    );
+                }
+            }
+
+            // TODO: purge the slot from the database
             event_clone.set();
             send_result_clone.set_success(true);
         });

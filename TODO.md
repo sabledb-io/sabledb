@@ -13,3 +13,7 @@
     - the old slot owner should update its cluster database entry immediately (and do not rely on the cron thread)
     - the old slot owner should purge the slot from the database
 - Add integration tests for the slot transfer use case
+
+## Keys command:
+
+- Use the `async` ( `RespWriter` ) write API instead of building the response in memory

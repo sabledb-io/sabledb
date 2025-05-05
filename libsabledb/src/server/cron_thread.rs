@@ -201,7 +201,7 @@ impl Cron {
                     }
 
                     // If we are part of a cluster, load the cluster setup (primary nodes + their slots)
-                    Self::poll_cluster_info(&self.store, &cm).await?;
+                    Self::poll_cluster_info(&cm).await?;
                 }
             }
         }
@@ -390,10 +390,7 @@ impl Cron {
     }
 
     /// In case, this instance is part of a cluster, fetch the cluster information from the cluster database
-    async fn poll_cluster_info(
-        _store: &StorageAdapter,
-        cm: &ClusterManager,
-    ) -> Result<(), SableError> {
+    async fn poll_cluster_info(cm: &ClusterManager) -> Result<(), SableError> {
         if !Server::state().persistent_state().in_cluster() {
             return Ok(());
         }
