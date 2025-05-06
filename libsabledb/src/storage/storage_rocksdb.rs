@@ -6,7 +6,8 @@ use crate::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
         GetChangesLimits, PutFlags, StorageTrait, SEQUENCES_FILE,
     },
-    BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, StorageOpenParams, Telemetry,
+    BatchUpdate, BytesMutUtils, IoDurationStopWatch, SableError, Slot, StorageOpenParams,
+    Telemetry,
 };
 
 use bytes::BytesMut;
@@ -432,6 +433,52 @@ impl StorageTrait for StorageRocksDb {
         self.store.write_opt(updates, &self.write_opts)?;
         Ok(())
     }
+
+    /// Slot from the database
+    fn delete_slot(&self, db_id: u16, slot: &Slot) -> Result<(), SableError> {
+        let prefix_arr = slot.prefix(db_id)?;
+        if prefix_arr.is_empty() {
+            return Ok(());
+        }
+
+        // Create the start and end keys
+        for prefix in &prefix_arr {
+            let mut read_options = rocksdb::ReadOptions::default();
+            read_options.fill_cache(false);
+            let mut iterator = self.store.raw_iterator_opt(read_options);
+            iterator.seek(prefix);
+
+            if !iterator.valid() {
+                continue;
+            }
+
+            // determine that start and end key for this prefix
+            let Some(start_key) = iterator.key() else {
+                continue;
+            };
+
+            let start_key = BytesMut::from(start_key);
+            iterator.next();
+            let end_key = loop {
+                if !iterator.valid() {
+                    // eof?
+                    break None;
+                }
+                let Some(k) = iterator.key() else {
+                    break None;
+                };
+
+                if !k.starts_with(prefix) {
+                    // the first key that does not start with the prefix, is the end key
+                    break Some(BytesMut::from(k));
+                }
+                iterator.next();
+            };
+
+            self.delete_range(Some(&start_key), end_key.as_ref())?;
+        }
+        Ok(())
+    }
 }
 
 #[allow(unsafe_code)]
@@ -745,7 +792,6 @@ mod tests {
         println!("Checking db...done");
     }
 
-    #[cfg(feature = "rocks_db")]
     #[test]
     fn test_keys_by_range_with_start() {
         let _ = std::fs::create_dir_all("tests");
@@ -797,5 +843,71 @@ mod tests {
         }
         println!("OK: Keys 5000-9999 do not exist");
         println!("Checking db...done");
+    }
+
+    fn populate_slot(db: &mut StorageRocksDb, slot: &Slot) -> Vec<BytesMut> {
+        // Fill entries of all types
+        let arr = slot.prefix(0).unwrap();
+
+        // Insert 10 items per prefix
+        let mut keys_inserted = Vec::<BytesMut>::new();
+        for prefix in &arr {
+            for i in 0..10 {
+                let mut key = prefix.clone();
+                key.extend_from_slice(format!(":{i}").as_bytes());
+                db.put(&key, &key, PutFlags::Override).unwrap();
+                keys_inserted.push(key);
+            }
+        }
+        keys_inserted
+    }
+
+    #[test]
+    fn test_delete_slot() {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from("tests/test_delete_slot.db");
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        let mut db = crate::StorageRocksDb::open(open_params.clone()).expect("rockdb open");
+
+        let slot_41 = Slot::with_slot(41);
+        let slot_42 = Slot::with_slot(42);
+        let slot_43 = Slot::with_slot(43);
+
+        let keys_inserted_slot_41 = populate_slot(&mut db, &slot_41);
+        let keys_inserted_slot_42 = populate_slot(&mut db, &slot_42);
+        let keys_inserted_slot_43 = populate_slot(&mut db, &slot_43);
+
+        for k in &keys_inserted_slot_42 {
+            assert!(db.contains(k).unwrap());
+        }
+
+        for k in &keys_inserted_slot_41 {
+            assert!(db.contains(k).unwrap());
+        }
+
+        for k in &keys_inserted_slot_43 {
+            assert!(db.contains(k).unwrap());
+        }
+
+        // Delete the slot
+        db.delete_slot(0, &slot_42).unwrap();
+
+        // All keys for slot 42 should not exist in the database
+        for k in &keys_inserted_slot_42 {
+            assert!(!db.contains(k).unwrap());
+        }
+
+        // Slots 41 & 43 should remain in the database
+        for k in &keys_inserted_slot_41 {
+            assert!(db.contains(k).unwrap());
+        }
+
+        for k in &keys_inserted_slot_43 {
+            assert!(db.contains(k).unwrap());
+        }
     }
 }

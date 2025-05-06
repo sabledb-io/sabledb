@@ -399,6 +399,9 @@ impl ServerCommands {
         let event_clone = event.clone();
         let ip_clone = ip.clone();
         let filepath_clone = filepath.clone();
+        let db_clone = client_state.database().clone();
+        let db_id_clone = client_state.database_id();
+
         let h = std::thread::spawn(move || {
             let mut node_talk_client = NodeTalkClient::default();
             let remote_address = format!("{}:{}", String::from_utf8_lossy(&ip_clone), port);
@@ -454,7 +457,14 @@ impl ServerCommands {
                 }
             }
 
-            // TODO: purge the slot from the database
+            // And finally, purge the slot from the database
+            if let Err(e) = db_clone.delete_slot(db_id_clone, &Slot::with_slot(slot_number)) {
+                tracing::error!(
+                    "Failed to delete slot '{}' from the database. {}",
+                    slot_number,
+                    e
+                );
+            }
             event_clone.set();
             send_result_clone.set_success(true);
         });

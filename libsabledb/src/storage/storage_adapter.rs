@@ -660,6 +660,21 @@ impl StorageAdapter {
 
         db.delete_range(start, end)
     }
+
+    /// Delete slot from the database
+    ///
+    /// NOTE: this method can not be used within a txn
+    pub fn delete_slot(&self, db_id: u16, slot: &crate::Slot) -> Result<(), SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        if self.txn.is_some() {
+            return Err(SableError::OtherError(
+                "`delete_slot` can not be used within a txn".into(),
+            ));
+        };
+        db.delete_slot(db_id, slot)
+    }
 }
 
 #[allow(unsafe_code)]

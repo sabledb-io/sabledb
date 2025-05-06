@@ -169,4 +169,7 @@ pub trait StorageTrait {
         start: Option<&BytesMut>,
         end: Option<&BytesMut>,
     ) -> Result<(), SableError>;
+
+    /// Delete slot from the database
+    fn delete_slot(&self, db_id: u16, slot: &crate::Slot) -> Result<(), SableError>;
 }
