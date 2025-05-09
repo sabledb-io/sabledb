@@ -15,9 +15,9 @@ pub struct Instance {
     /// Command line arguments
     pub args: CommandLineArgs,
     /// Handle to SableDB process
-    hproc: Option<std::process::Child>,
+    pub hproc: Option<std::process::Child>,
     /// SableDB working directory
-    working_dir: String,
+    pub working_dir: String,
 }
 
 impl std::fmt::Display for Instance {
@@ -60,10 +60,12 @@ impl Instance {
         ServerRole::from_str(&role)
     }
 
+    /// Return client facing address
     pub fn address(&self) -> String {
         self.args.public_address.as_deref().unwrap().to_string()
     }
 
+    /// Return internal address (visible by other instances)
     pub fn private_address(&self) -> String {
         self.args.private_address.as_deref().unwrap().to_string()
     }
@@ -102,6 +104,7 @@ impl Instance {
     /// Terminate the current instance
     pub fn terminate(&mut self) {
         if let Some(hproc) = &mut self.hproc {
+            println!("Terminating process {}", hproc.id());
             let _ = hproc.kill();
             // wait for the process to exit
             let _ = hproc.wait();
@@ -141,15 +144,15 @@ impl Instance {
 }
 
 type InstanceRefCell = Rc<RefCell<Instance>>;
+
 #[allow(dead_code)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 /// Represents a collection of `Instances` that forms a a "Shard"
 /// In a Shard we have:
 /// - 1 cluster database
 /// - 1 primary instance
 /// - N replicas
 pub struct Shard {
-    cluster_db_instance: InstanceRefCell,
     instances: Vec<InstanceRefCell>,
     primary: Option<InstanceRefCell>,
     replicas: Option<Vec<InstanceRefCell>>,
@@ -168,12 +171,8 @@ impl std::fmt::Display for Shard {
 }
 
 impl Shard {
-    pub fn with_instances(
-        cluster_db_instance: InstanceRefCell,
-        instances: Vec<InstanceRefCell>,
-    ) -> Self {
+    pub fn with_instances(instances: Vec<InstanceRefCell>) -> Self {
         Shard {
-            cluster_db_instance,
             instances,
             primary: None,
             replicas: None,
@@ -355,7 +354,7 @@ impl Shard {
     }
 }
 
-impl Drop for Shard {
+impl Drop for Instance {
     fn drop(&mut self) {
         let keep_dir = if let Ok(val) = std::env::var("SABLEDB_KEEP_GARBAGE") {
             val.eq("1")
@@ -363,18 +362,17 @@ impl Drop for Shard {
             false
         };
 
-        let mut all_instances = self.instances.clone();
-        all_instances.push(self.cluster_db_instance.clone());
-
-        // Terminate the primary, replications and the cluster database instance
-        all_instances.iter().for_each(|inst| {
-            inst.borrow_mut().terminate();
-            if !keep_dir {
-                let d = &inst.borrow().working_dir;
-                let _ = std::fs::remove_dir_all(d);
-            }
-        });
+        self.terminate();
+        if !keep_dir {
+            let _ = std::fs::remove_dir_all(&self.working_dir);
+        }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Cluster {
+    pub shards: Vec<Shard>,
+    pub cluster_db_instance: InstanceRefCell,
 }
 
 fn create_sabledb_args(
@@ -446,39 +444,44 @@ fn pick_ports_for_instance() -> (u16, u16) {
     (public_port, private_port)
 }
 
-/// Start a shard of count instances. `count` must be greater than `2` (1 primary 1 replica)
-/// The shard will consist of:
-/// - `count - 1` replicas
-/// - 1 primary
-/// - 1 cluster database instance
-pub fn start_shard(instance_count: usize, name: &str) -> Result<Shard, SableError> {
-    if instance_count < 2 {
-        return Err(SableError::InvalidArgument(
-            "shard instance count must be greater or equal to 2".into(),
-        ));
-    }
-
+/// Create the cluster database instance
+pub fn create_db_instance(cluster_name: &str) -> Result<InstanceRefCell, SableError> {
     let (public_port, private_port) = pick_ports_for_instance();
     let (wd, cluster_db_args) = create_sabledb_args(
         None,
-        format!("CLUSTER_DB.{}", name).as_str(),
+        format!("CLUSTER_DB.{}", cluster_name).as_str(),
         public_port,
         private_port,
     );
-    let mut instances = Vec::<InstanceRefCell>::new();
 
     let cluster_inst = Instance::default()
         .with_args(cluster_db_args)
         .with_working_dir(&wd)
         .build()?;
 
-    // We use the public address
-    let cluster_address = cluster_inst.address();
-
     // Make sure that the host is reachable
     let _conn = cluster_inst.connect_with_retries()?;
     drop(_conn);
+    Ok(Rc::new(RefCell::new(cluster_inst)))
+}
 
+/// Start a shard of count instances. `count` must be greater than `2` (1 primary 1 replica)
+/// The shard will consist of:
+/// - `count - 1` replicas
+/// - 1 primary
+pub fn start_shard(
+    cluster_inst: InstanceRefCell,
+    instance_count: usize,
+    name: &str,
+) -> Result<Shard, SableError> {
+    if instance_count < 2 {
+        return Err(SableError::InvalidArgument(
+            "shard instance count must be greater or equal to 2".into(),
+        ));
+    }
+
+    let mut instances = Vec::<InstanceRefCell>::new();
+    let cluster_address = cluster_inst.borrow().address();
     for _ in 0..instance_count {
         let (public_port, private_port) = pick_ports_for_instance();
         let (wd, args) = create_sabledb_args(
@@ -498,7 +501,7 @@ pub fn start_shard(instance_count: usize, name: &str) -> Result<Shard, SableErro
 
         instances.push(Rc::new(RefCell::new(inst)));
     }
-    let mut shard = Shard::with_instances(Rc::new(RefCell::new(cluster_inst)), instances);
+    let mut shard = Shard::with_instances(instances);
 
     // Assign roles to each instance
     shard.create_replication_group()?;
@@ -539,7 +542,8 @@ mod test {
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_start_shard() {
         // Start shard of 1 primary 2 replicas
-        let shard = start_shard(3, "test_start_shard").unwrap();
+        let cluster_inst = create_db_instance("test_start_shard").unwrap();
+        let shard = start_shard(cluster_inst.clone(), 3, "test_start_shard").unwrap();
 
         let all_instances = shard.instances();
         assert_eq!(all_instances.len(), 3);
@@ -576,7 +580,8 @@ mod test {
     #[serial_test::serial]
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_restart() {
-        let shard = start_shard(2, "test_restart").unwrap();
+        let cluster_inst = create_db_instance("test_restart").unwrap();
+        let shard = start_shard(cluster_inst.clone(), 2, "test_restart").unwrap();
         assert!(shard.primary().unwrap().borrow().is_running());
         println!(
             "Server started with PID: {}",
@@ -598,7 +603,9 @@ mod test {
     fn test_auto_failover() {
         // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
         let inst_count = 3usize;
-        let mut shard = start_shard(inst_count, "test_auto_failover").unwrap();
+        let cluster_inst = create_db_instance("test_auto_failover").unwrap();
+        let mut shard =
+            start_shard(cluster_inst.clone(), inst_count, "test_auto_failover").unwrap();
         println!("Initial state: {}", shard);
         let primary_node_id = shard.primary().unwrap().borrow().node_id();
         assert!(!primary_node_id.is_empty());
