@@ -255,10 +255,6 @@ impl Shard {
         self.instances.clone()
     }
 
-    pub fn cluster_db_instance(&self) -> Rc<RefCell<Instance>> {
-        self.instances.first().unwrap().clone()
-    }
-
     /// Create the replication group by connecting the replicas to the primary
     fn create_replication_group(&mut self) -> Result<(), SableError> {
         let mut primary_address = Vec::<String>::new();

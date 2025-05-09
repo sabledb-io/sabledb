@@ -1,6 +1,6 @@
-mod shard;
+mod cluster;
 
-pub use shard::*;
+pub use cluster::*;
 
 use crate::SableError;
 use std::path::PathBuf;
