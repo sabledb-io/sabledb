@@ -1,4 +1,7 @@
-use crate::{file_utils, replication::ServerRole, server::SlotBitmap, ServerOptions};
+use crate::{
+    file_utils, replication::ServerRole, server::SlotBitmap, CommandLineArgs, SableError,
+    ServerOptions,
+};
 use ini::Ini;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -164,7 +167,7 @@ impl ServerPersistentState {
     }
 
     #[inline]
-    pub fn set_slots(&self, slots: &str) -> Result<(), crate::SableError> {
+    pub fn set_slots(&self, slots: &str) -> Result<(), SableError> {
         self.slots.from_string(slots)
     }
 
@@ -257,18 +260,13 @@ impl ServerPersistentState {
     }
 
     /// Find and return the owner of `slot`
-    pub fn node_owner_for_slot(
-        &self,
-        slot: u16,
-    ) -> Result<Option<(String, u16)>, crate::SableError> {
+    pub fn node_owner_for_slot(&self, slot: u16) -> Result<Option<(String, u16)>, SableError> {
         let state = self.inner.read().expect(POISONED_MUTEX);
         for node_info in &state.cluster_nodes {
             if let Some(slots) = &node_info.slots {
                 if slots.is_set(slot)? {
                     let Ok(socket) = node_info.public_address.parse::<SocketAddr>() else {
-                        return Err(super::SableError::InvalidArgument(
-                            "Invalid public address".into(),
-                        ));
+                        return Err(SableError::InvalidArgument("Invalid public address".into()));
                     };
                     return Ok(Some((socket.ip().to_string(), socket.port())));
                 }
@@ -349,6 +347,21 @@ impl ServerPersistentState {
         }
 
         self.save();
+    }
+
+    /// Initialise the node ID by loading or creating it
+    pub fn update_from_commandline_args(&self, args: &CommandLineArgs) -> Result<(), SableError> {
+        if let Some(shard_name) = args.shard_name() {
+            self.set_shard_name(shard_name);
+        }
+        if let Some(cluster_name) = args.cluster_name() {
+            self.set_cluster_name(cluster_name);
+        }
+        if let Some(slots) = args.slots() {
+            self.set_slots(slots.as_str())?;
+        }
+        self.save();
+        Ok(())
     }
 
     pub fn save(&self) {

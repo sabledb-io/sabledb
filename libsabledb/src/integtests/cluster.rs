@@ -143,6 +143,21 @@ impl Instance {
     }
 }
 
+impl Drop for Instance {
+    fn drop(&mut self) {
+        let keep_dir = if let Ok(val) = std::env::var("SABLEDB_KEEP_GARBAGE") {
+            val.eq("1")
+        } else {
+            false
+        };
+
+        self.terminate();
+        if !keep_dir {
+            let _ = std::fs::remove_dir_all(&self.working_dir);
+        }
+    }
+}
+
 type InstanceRefCell = Rc<RefCell<Instance>>;
 
 #[allow(dead_code)]
@@ -350,25 +365,31 @@ impl Shard {
     }
 }
 
-impl Drop for Instance {
-    fn drop(&mut self) {
-        let keep_dir = if let Ok(val) = std::env::var("SABLEDB_KEEP_GARBAGE") {
-            val.eq("1")
-        } else {
-            false
-        };
-
-        self.terminate();
-        if !keep_dir {
-            let _ = std::fs::remove_dir_all(&self.working_dir);
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Cluster {
     pub shards: Vec<Shard>,
     pub cluster_db_instance: InstanceRefCell,
+}
+
+impl Cluster {
+    /// Create and start a new cluster with `shard_count` shards, each shard with `replicas_count` replicas.
+    /// The slots are split between the shards evenly
+    pub fn new(
+        shard_count: usize,
+        replicas_count: usize,
+        cluster_name: &str,
+    ) -> Result<Self, SableError> {
+        let cluster_db_instance = create_db_instance(cluster_name)?;
+        let mut shards = Vec::<Shard>::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            let shard = start_shard(cluster_db_instance.clone(), replicas_count, cluster_name)?;
+            shards.push(shard);
+        }
+        Ok(Cluster {
+            shards,
+            cluster_db_instance,
+        })
+    }
 }
 
 fn create_sabledb_args(

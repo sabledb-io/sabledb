@@ -102,12 +102,10 @@ fn main() -> Result<(), SableError> {
         .persistent_state()
         .initialise(options.clone());
 
-    if let Some(shard_name) = args.shard_name() {
-        server_state_clone
-            .persistent_state()
-            .set_shard_name(shard_name);
-        server_state_clone.persistent_state().save();
-    }
+    // Now that we loaded the configuration file "NODE", apply any changes coming from the command line
+    server_state_clone
+        .persistent_state()
+        .update_from_commandline_args(&args)?;
 
     info!(
         "NodeID is set to: {}",
@@ -117,6 +115,11 @@ fn main() -> Result<(), SableError> {
     info!(
         "Node slots are: {}",
         server_state_clone.persistent_state().slots().to_string()
+    );
+
+    info!(
+        "This node is member of cluster: '{}'",
+        server_state_clone.persistent_state().cluster_name()
     );
 
     info!(

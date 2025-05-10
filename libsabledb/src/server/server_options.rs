@@ -121,7 +121,7 @@ pub struct CommandLineArgs {
     pub cluster_address: Option<String>,
 
     #[arg(short, long)]
-    /// Path to the storage directory (you may also set to special devices, e.g. /deb/shm/sabledb.db)
+    /// Path to the storage directory (you may also set to a special devices, e.g. /deb/shm/sabledb.db)
     pub db_path: Option<String>,
 
     #[arg(long)]
@@ -139,6 +139,16 @@ pub struct CommandLineArgs {
     /// An optional shard name (this will override the value from the NODE configuration file)
     #[arg(long)]
     pub shard_name: Option<String>,
+
+    /// An optional cluster name (this will override the value from the NODE configuration file)
+    #[arg(long)]
+    pub cluster_name: Option<String>,
+
+    /// An optional slots range. (this will override the value from the NODE configuration file).
+    /// Slots range can be in the form of: "0-1000,2000-4000,...." Default: 0-16383) unless specified
+    /// otherwise in the `NODE` configuration file
+    #[arg(long, verbatim_doc_comment)]
+    pub slots: Option<String>,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub parameters: Vec<String>,
@@ -185,6 +195,16 @@ impl CommandLineArgs {
         self
     }
 
+    pub fn with_cluster_name(mut self, cluster_name: &str) -> Self {
+        self.cluster_name = Some(cluster_name.into());
+        self
+    }
+
+    pub fn with_slots(mut self, slots: &str) -> Self {
+        self.slots = Some(slots.into());
+        self
+    }
+
     pub fn to_vec(&self) -> Vec<String> {
         let mut args = Vec::<String>::new();
         if let Some(public_address) = &self.public_address {
@@ -225,6 +245,16 @@ impl CommandLineArgs {
         if let Some(shard_name) = &self.shard_name {
             args.push("--shard-name".into());
             args.push(shard_name.into());
+        }
+
+        if let Some(cluster_name) = &self.cluster_name {
+            args.push("--cluster-name".into());
+            args.push(cluster_name.into());
+        }
+
+        if let Some(slots) = &self.slots {
+            args.push("--slots".into());
+            args.push(slots.into());
         }
         args
     }
@@ -293,6 +323,14 @@ impl CommandLineArgs {
 
     pub fn shard_name(&self) -> Option<String> {
         self.shard_name.clone()
+    }
+
+    pub fn cluster_name(&self) -> Option<String> {
+        self.cluster_name.clone()
+    }
+
+    pub fn slots(&self) -> Option<String> {
+        self.slots.clone()
     }
 }
 
