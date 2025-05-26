@@ -1,4 +1,6 @@
-use crate::{ini_bool, ini_read_prop, ini_usize, parse_number, SableError, StorageOpenParams};
+use crate::{
+    ini_bool, ini_read_prop, ini_usize, parse_number, SableError, SlotBitmap, StorageOpenParams,
+};
 use clap::Parser;
 use ini::Ini;
 use std::path::PathBuf;
@@ -195,13 +197,13 @@ impl CommandLineArgs {
         self
     }
 
-    pub fn with_cluster_name(mut self, cluster_name: &str) -> Self {
-        self.cluster_name = Some(cluster_name.into());
+    pub fn with_slots(mut self, slots: &SlotBitmap) -> Self {
+        self.slots = Some(slots.to_string());
         self
     }
 
-    pub fn with_slots(mut self, slots: &str) -> Self {
-        self.slots = Some(slots.into());
+    pub fn with_cluster_name(mut self, cluster_name: &str) -> Self {
+        self.cluster_name = Some(cluster_name.into());
         self
     }
 

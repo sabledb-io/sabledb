@@ -1,10 +1,10 @@
 use crate::{replication::ServerRole, CommandLineArgs, SableError, SlotBitmap};
 use divide_range::RangeDivisions;
 use std::cell::RefCell;
+use std::ops::Range;
 use std::process::Command;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::ops::Range;
 
 #[cfg(debug_assertions)]
 const TARGET_CONFIG: &str = "debug";
@@ -381,14 +381,19 @@ impl Cluster {
         replicas_count: usize,
         cluster_name: &str,
     ) -> Result<Self, SableError> {
-        let cluster_db_instance = create_db_instance(cluster_name)?;
+        let cluster_db_instance = create_db_instance(cluster_name, SlotBitmap::new_all_set())?;
         let mut shards = Vec::<Shard>::with_capacity(shard_count);
 
         let range: Range<u16> = 0..16384;
         let it = range.divide_evenly_into(shard_count);
         for slot_range in it {
-            let shard_slots = SlotBitmap::default(format!("{}-{}", ));
-            let shard = start_shard(cluster_db_instance.clone(), replicas_count, cluster_name)?;
+            let shard_slots = SlotBitmap::try_from(&slot_range)?;
+            let shard = start_shard(
+                cluster_db_instance.clone(),
+                replicas_count,
+                cluster_name,
+                shard_slots,
+            )?;
             shards.push(shard);
         }
 
@@ -404,7 +409,7 @@ fn create_sabledb_args(
     shard_name: &str,
     public_port: u16,
     private_port: u16,
-    slots: Option<SlotBitmap>,
+    slots: SlotBitmap,
 ) -> (String, CommandLineArgs) {
     let mut db_dir = std::env::temp_dir();
     db_dir.push("sabledb_tests");
@@ -422,7 +427,8 @@ fn create_sabledb_args(
         .with_public_address(public_address.as_str())
         .with_private_address(private_address.as_str())
         .with_log_dir("logs")
-        .with_shard_name(shard_name);
+        .with_shard_name(shard_name)
+        .with_slots(&slots);
 
     if let Some(cluster_address) = &cluster_address {
         args = args.with_cluster_address(cluster_address);
@@ -470,13 +476,17 @@ fn pick_ports_for_instance() -> (u16, u16) {
 }
 
 /// Create the cluster database instance
-pub fn create_db_instance(cluster_name: &str) -> Result<InstanceRefCell, SableError> {
+pub fn create_db_instance(
+    cluster_name: &str,
+    slots: SlotBitmap,
+) -> Result<InstanceRefCell, SableError> {
     let (public_port, private_port) = pick_ports_for_instance();
     let (wd, cluster_db_args) = create_sabledb_args(
         None,
         format!("CLUSTER_DB.{}", cluster_name).as_str(),
         public_port,
         private_port,
+        slots,
     );
 
     let cluster_inst = Instance::default()
@@ -498,7 +508,7 @@ pub fn start_shard(
     cluster_inst: InstanceRefCell,
     instance_count: usize,
     name: &str,
-    slots: Option<SlotBitmap>,
+    slots: SlotBitmap,
 ) -> Result<Shard, SableError> {
     if instance_count < 2 {
         return Err(SableError::InvalidArgument(
@@ -515,6 +525,7 @@ pub fn start_shard(
             name,
             public_port,
             private_port,
+            slots.clone(),
         );
         let inst = Instance::default()
             .with_args(args)
@@ -554,6 +565,7 @@ mod test {
             "test_shard_args_are_unique",
             public_port,
             private_port,
+            SlotBitmap::new_all_set(),
         )
         .1
         .to_vec();
@@ -568,8 +580,15 @@ mod test {
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_start_shard() {
         // Start shard of 1 primary 2 replicas
-        let cluster_inst = create_db_instance("test_start_shard").unwrap();
-        let shard = start_shard(cluster_inst.clone(), 3, "test_start_shard").unwrap();
+        let cluster_inst =
+            create_db_instance("test_start_shard", SlotBitmap::new_all_set()).unwrap();
+        let shard = start_shard(
+            cluster_inst.clone(),
+            3,
+            "test_start_shard",
+            SlotBitmap::new_all_set(),
+        )
+        .unwrap();
 
         let all_instances = shard.instances();
         assert_eq!(all_instances.len(), 3);
@@ -606,8 +625,14 @@ mod test {
     #[serial_test::serial]
     #[ntest_timeout::timeout(300_000)] // 5 minutes
     fn test_restart() {
-        let cluster_inst = create_db_instance("test_restart").unwrap();
-        let shard = start_shard(cluster_inst.clone(), 2, "test_restart").unwrap();
+        let cluster_inst = create_db_instance("test_restart", SlotBitmap::new_all_set()).unwrap();
+        let shard = start_shard(
+            cluster_inst.clone(),
+            2,
+            "test_restart",
+            SlotBitmap::new_all_set(),
+        )
+        .unwrap();
         assert!(shard.primary().unwrap().borrow().is_running());
         println!(
             "Server started with PID: {}",
@@ -629,9 +654,15 @@ mod test {
     fn test_auto_failover() {
         // start a shard consisting of 1 primary, 2 replicas and 1 cluster database
         let inst_count = 3usize;
-        let cluster_inst = create_db_instance("test_auto_failover").unwrap();
-        let mut shard =
-            start_shard(cluster_inst.clone(), inst_count, "test_auto_failover").unwrap();
+        let cluster_inst =
+            create_db_instance("test_auto_failover", SlotBitmap::new_all_set()).unwrap();
+        let mut shard = start_shard(
+            cluster_inst.clone(),
+            inst_count,
+            "test_auto_failover",
+            SlotBitmap::new_all_set(),
+        )
+        .unwrap();
         println!("Initial state: {}", shard);
         let primary_node_id = shard.primary().unwrap().borrow().node_id();
         assert!(!primary_node_id.is_empty());

@@ -13,6 +13,7 @@ use bytes::{Buf, BytesMut};
 use enum_iterator::next;
 use std::fs::File as StdFile;
 use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -60,6 +61,12 @@ impl PartialEq for SlotBitmap {
 /// Each slot uses a single bit to mark whether it is owned by this instance or not.
 /// We use an array of 256 items of `AtomicU64` primitives to keep track of the slots (total of ~16K memory)
 impl SlotBitmap {
+    pub fn new_all_set() -> Self {
+        let bitmap = Self::default();
+        bitmap.set_all();
+        bitmap
+    }
+
     /// Set or clear `slot` in this slots set
     pub fn set(&self, slot: u16, b: bool) -> Result<(), SableError> {
         // Find the bucket that holds the bit
@@ -155,13 +162,18 @@ impl SlotBitmap {
     }
 }
 
-impl TryFrom<std::ops::Range<u16>> for SlotBitmap {
+impl TryFrom<&Range<u16>> for SlotBitmap {
     type Error = SableError;
-    fn try_from(slots: &std::ops::Range<u16>) -> Result<Self, Self::Error> {
+    fn try_from(slots: &Range<u16>) -> Result<Self, Self::Error> {
         if slots.end >= SLOT_SIZE {
-            return Err(SableError::InvalidArgument("Slot range is expected from 0..16384 (exclusive)".into()));
+            return Err(SableError::InvalidArgument(
+                "Slot range is expected from 0..16384 (exclusive)".into(),
+            ));
         }
         let s = format!("{}-{}", slots.start, slots.end);
+        let slots = SlotBitmap::default();
+        slots.from_string(s.as_str())?;
+        Ok(slots)
     }
 }
 
