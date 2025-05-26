@@ -155,6 +155,16 @@ impl SlotBitmap {
     }
 }
 
+impl TryFrom<std::ops::Range<u16>> for SlotBitmap {
+    type Error = SableError;
+    fn try_from(slots: &std::ops::Range<u16>) -> Result<Self, Self::Error> {
+        if slots.end >= SLOT_SIZE {
+            return Err(SableError::InvalidArgument("Slot range is expected from 0..16384 (exclusive)".into()));
+        }
+        let s = format!("{}-{}", slots.start, slots.end);
+    }
+}
+
 impl FromStr for SlotBitmap {
     type Err = SableError;
     /// Parse `s` into `SlotBitmap`

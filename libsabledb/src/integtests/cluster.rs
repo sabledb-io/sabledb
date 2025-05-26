@@ -1,8 +1,10 @@
-use crate::{replication::ServerRole, CommandLineArgs, SableError};
+use crate::{replication::ServerRole, CommandLineArgs, SableError, SlotBitmap};
+use divide_range::RangeDivisions;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::ops::Range;
 
 #[cfg(debug_assertions)]
 const TARGET_CONFIG: &str = "debug";
@@ -381,10 +383,15 @@ impl Cluster {
     ) -> Result<Self, SableError> {
         let cluster_db_instance = create_db_instance(cluster_name)?;
         let mut shards = Vec::<Shard>::with_capacity(shard_count);
-        for _ in 0..shard_count {
+
+        let range: Range<u16> = 0..16384;
+        let it = range.divide_evenly_into(shard_count);
+        for slot_range in it {
+            let shard_slots = SlotBitmap::default(format!("{}-{}", ));
             let shard = start_shard(cluster_db_instance.clone(), replicas_count, cluster_name)?;
             shards.push(shard);
         }
+
         Ok(Cluster {
             shards,
             cluster_db_instance,
@@ -397,6 +404,7 @@ fn create_sabledb_args(
     shard_name: &str,
     public_port: u16,
     private_port: u16,
+    slots: Option<SlotBitmap>,
 ) -> (String, CommandLineArgs) {
     let mut db_dir = std::env::temp_dir();
     db_dir.push("sabledb_tests");
@@ -490,6 +498,7 @@ pub fn start_shard(
     cluster_inst: InstanceRefCell,
     instance_count: usize,
     name: &str,
+    slots: Option<SlotBitmap>,
 ) -> Result<Shard, SableError> {
     if instance_count < 2 {
         return Err(SableError::InvalidArgument(

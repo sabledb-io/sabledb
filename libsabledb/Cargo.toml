@@ -52,6 +52,7 @@ futures-intrusive = "0"
 ntest_timeout  = "0"
 enum-iterator = "2.1.0"
 bincode = "1"
+divide_range = "0.1.1"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 affinity = "0"
