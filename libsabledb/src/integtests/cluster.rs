@@ -480,7 +480,7 @@ fn create_sabledb_args(
 
     let mut args = CommandLineArgs::default()
         .with_workers(2)
-        .with_log_level("info")
+        .with_log_level("debug")
         .with_db_path(db_dir.to_str().unwrap())
         .with_public_address(public_address.as_str())
         .with_private_address(private_address.as_str())
