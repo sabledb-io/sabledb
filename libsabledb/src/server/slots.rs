@@ -123,9 +123,9 @@ impl SlotBitmap {
     ///
     /// ```no_compile
     /// let slots = SlotBitmap::default();
-    /// slots.from_string("0-9000,10000")?;
+    /// slots.from_string("0-9000,10000")?; // 0-9000 (inclusive) + 10,000
     /// assert(slots.is_set(10000));
-    /// for i in 0..9000 {
+    /// for i in 0..=9000 {
     ///     assert!(slots.is_set(i));
     /// }
     /// ```
@@ -165,12 +165,21 @@ impl SlotBitmap {
 impl TryFrom<&Range<u16>> for SlotBitmap {
     type Error = SableError;
     fn try_from(slots: &Range<u16>) -> Result<Self, Self::Error> {
-        if slots.end >= SLOT_SIZE {
-            return Err(SableError::InvalidArgument(
-                "Slot range is expected from 0..16384 (exclusive)".into(),
-            ));
+        if slots.end > SLOT_SIZE {
+            return Err(SableError::InvalidArgument(format!(
+                "Invalid slot range {:?}. Slot range is expected from 0..16384 (exclusive)",
+                slots
+            )));
         }
-        let s = format!("{}-{}", slots.start, slots.end);
+
+        if slots.end.saturating_sub(slots.start) == 0 {
+            return Err(SableError::InvalidArgument(format!(
+                "Invalid slot range {:?}. End slot must be greater than start slot",
+                slots
+            )));
+        }
+
+        let s = format!("{}-{}", slots.start, slots.end - 1);
         let slots = SlotBitmap::default();
         slots.from_string(s.as_str())?;
         Ok(slots)

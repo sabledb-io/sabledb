@@ -1,4 +1,6 @@
-use crate::{replication::ServerRole, CommandLineArgs, SableError, SlotBitmap};
+use crate::{
+    impl_builder_with_fn, replication::ServerRole, CommandLineArgs, SableError, SlotBitmap,
+};
 use divide_range::RangeDivisions;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -12,7 +14,7 @@ const TARGET_CONFIG: &str = "debug";
 #[cfg(not(debug_assertions))]
 const TARGET_CONFIG: &str = "release";
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Instance {
     /// Command line arguments
     pub args: CommandLineArgs,
@@ -22,20 +24,15 @@ pub struct Instance {
     pub working_dir: String,
 }
 
-impl std::fmt::Display for Instance {
+impl std::fmt::Debug for Instance {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let node_id = self.node_id();
-        let primary_node_id = self.primary_node_id();
-        let role = match self.role() {
-            Ok(role) => format!("{}", role),
-            Err(_) => String::from("Unknown"),
-        };
-
-        write!(f, "Role: {}, NodeID: {}", role, node_id)?;
-        if let Ok(ServerRole::Replica) = self.role() {
-            write!(f, ", Primary NodeID: {}", primary_node_id)?
-        }
-        Ok(())
+        f.debug_struct("Instance")
+            .field("id", &self.node_id())
+            .field("working_dir", &self.working_dir)
+            .field("role", &self.role())
+            .field("public_address", &self.address())
+            .field("private_address", &self.private_address())
+            .finish()
     }
 }
 
@@ -163,7 +160,7 @@ impl Drop for Instance {
 type InstanceRefCell = Rc<RefCell<Instance>>;
 
 #[allow(dead_code)]
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 /// Represents a collection of `Instances` that forms a a "Shard"
 /// In a Shard we have:
 /// - 1 cluster database
@@ -173,29 +170,56 @@ pub struct Shard {
     instances: Vec<InstanceRefCell>,
     primary: Option<InstanceRefCell>,
     replicas: Option<Vec<InstanceRefCell>>,
+    name: String,
+    slots: String,
+    cluster_db_address: String,
 }
 
-impl std::fmt::Display for Shard {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "Shard {{")?;
-        writeln!(f, "  Is stabilised: {}", self.is_stabilised())?;
-        writeln!(f, "  Instance count: {}", self.instances.len())?;
-        for inst in &self.instances {
-            writeln!(f, "  {}", inst.borrow())?;
+/// Needed for the macro below
+type InstanceRefCellVec = Vec<InstanceRefCell>;
+
+#[derive(Default)]
+pub struct ShardBuilder {
+    instances: Vec<InstanceRefCell>,
+    name: String,
+    slots: String,
+    cluster_db_address: String,
+}
+
+impl ShardBuilder {
+    impl_builder_with_fn!(instances, InstanceRefCellVec);
+    impl_builder_with_fn!(name, String);
+    impl_builder_with_fn!(slots, String);
+    impl_builder_with_fn!(cluster_db_address, String);
+
+    pub fn build(self) -> Shard {
+        Shard {
+            instances: self.instances,
+            slots: self.slots,
+            name: self.name,
+            cluster_db_address: self.cluster_db_address,
+            ..Default::default()
         }
-        writeln!(f, "}}")
+    }
+}
+
+impl std::fmt::Debug for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut ds = f.debug_struct("Shard");
+        ds.field("name", &self.name)
+            .field("slots", &self.slots)
+            .field("cluster_db", &self.cluster_db_address)
+            .field("stabilised", &self.is_stabilised());
+        let mut counter = 0usize;
+        for inst in &self.instances {
+            ds.field(&format!("instance-{}", counter), &inst.borrow());
+            counter = counter.saturating_add(1);
+        }
+        ds.finish()
     }
 }
 
 impl Shard {
-    pub fn with_instances(instances: Vec<InstanceRefCell>) -> Self {
-        Shard {
-            instances,
-            primary: None,
-            replicas: None,
-        }
-    }
-
     /// Run shard wide INFO command and populate the replicas / primary
     /// lists. Return true on success (i.e. exactly 1 primary was found and 1+ replicas)
     /// false otherwise
@@ -367,10 +391,19 @@ impl Shard {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Cluster {
     pub shards: Vec<Shard>,
     pub cluster_db_instance: InstanceRefCell,
+}
+
+impl std::fmt::Debug for Cluster {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Cluster")
+            .field("shards", &self.shards)
+            .field("cluster_db", &self.cluster_db_instance.borrow())
+            .finish()
+    }
 }
 
 impl Cluster {
@@ -384,17 +417,20 @@ impl Cluster {
         let cluster_db_instance = create_db_instance(cluster_name, SlotBitmap::new_all_set())?;
         let mut shards = Vec::<Shard>::with_capacity(shard_count);
 
-        let range: Range<u16> = 0..16384;
+        let range: Range<u16> = 0..16384; // 0-16384 (excluding)
         let it = range.divide_evenly_into(shard_count);
+        let mut shard_counter = 0usize;
         for slot_range in it {
             let shard_slots = SlotBitmap::try_from(&slot_range)?;
             let shard = start_shard(
                 cluster_db_instance.clone(),
                 replicas_count,
                 cluster_name,
+                format!("{}.shard-{}", cluster_name, shard_counter).as_str(),
                 shard_slots,
             )?;
             shards.push(shard);
+            shard_counter = shard_counter.saturating_add(1);
         }
 
         Ok(Cluster {
@@ -402,10 +438,32 @@ impl Cluster {
             cluster_db_instance,
         })
     }
+
+    /// Return a connection to shard at a given index
+    pub fn connection_to_shard(&self, index: usize) -> Result<redis::Connection, SableError> {
+        let shard = self
+            .shards
+            .get(index)
+            .ok_or(SableError::IndexOutOfRange("Shard index invalid".into()))?;
+        let primary = shard.primary()?;
+        let primary = primary.borrow();
+        primary.connect()
+    }
+
+    /// Return the primary node of shard at a given index
+    pub fn shard_primary(&self, index: usize) -> Result<InstanceRefCell, SableError> {
+        self.shards
+            .get(index)
+            .ok_or(SableError::IndexOutOfRange("Shard index invalid".into()))?
+            .primary
+            .clone()
+            .ok_or(SableError::NotFound)
+    }
 }
 
 fn create_sabledb_args(
     cluster_address: Option<String>,
+    cluster_name: &str,
     shard_name: &str,
     public_port: u16,
     private_port: u16,
@@ -428,7 +486,8 @@ fn create_sabledb_args(
         .with_private_address(private_address.as_str())
         .with_log_dir("logs")
         .with_shard_name(shard_name)
-        .with_slots(&slots);
+        .with_slots(&slots)
+        .with_cluster_name(cluster_name);
 
     if let Some(cluster_address) = &cluster_address {
         args = args.with_cluster_address(cluster_address);
@@ -483,6 +542,7 @@ pub fn create_db_instance(
     let (public_port, private_port) = pick_ports_for_instance();
     let (wd, cluster_db_args) = create_sabledb_args(
         None,
+        "",
         format!("CLUSTER_DB.{}", cluster_name).as_str(),
         public_port,
         private_port,
@@ -507,6 +567,7 @@ pub fn create_db_instance(
 pub fn start_shard(
     cluster_inst: InstanceRefCell,
     instance_count: usize,
+    cluster_name: &str,
     name: &str,
     slots: SlotBitmap,
 ) -> Result<Shard, SableError> {
@@ -522,6 +583,7 @@ pub fn start_shard(
         let (public_port, private_port) = pick_ports_for_instance();
         let (wd, args) = create_sabledb_args(
             Some(cluster_address.clone()),
+            cluster_name,
             name,
             public_port,
             private_port,
@@ -538,7 +600,13 @@ pub fn start_shard(
 
         instances.push(Rc::new(RefCell::new(inst)));
     }
-    let mut shard = Shard::with_instances(instances);
+
+    let mut shard = ShardBuilder::default()
+        .with_instances(instances)
+        .with_name(name.into())
+        .with_slots(slots.to_string())
+        .with_cluster_db_address(cluster_address)
+        .build();
 
     // Assign roles to each instance
     shard.create_replication_group()?;
@@ -562,6 +630,7 @@ mod test {
         let private_port = portpicker::pick_unused_port().expect("no free ports!");
         let args_vec = create_sabledb_args(
             None,
+            "",
             "test_shard_args_are_unique",
             public_port,
             private_port,
@@ -585,6 +654,7 @@ mod test {
         let shard = start_shard(
             cluster_inst.clone(),
             3,
+            "",
             "test_start_shard",
             SlotBitmap::new_all_set(),
         )
@@ -629,6 +699,7 @@ mod test {
         let shard = start_shard(
             cluster_inst.clone(),
             2,
+            "",
             "test_restart",
             SlotBitmap::new_all_set(),
         )
@@ -659,11 +730,12 @@ mod test {
         let mut shard = start_shard(
             cluster_inst.clone(),
             inst_count,
+            "",
             "test_auto_failover",
             SlotBitmap::new_all_set(),
         )
         .unwrap();
-        println!("Initial state: {}", shard);
+        println!("Initial state: {:?}", shard);
         let primary_node_id = shard.primary().unwrap().borrow().node_id();
         assert!(!primary_node_id.is_empty());
 
@@ -683,7 +755,7 @@ mod test {
         let old_primary = shard.terminate_and_remove_primary().unwrap();
         println!("Primary node {} terminated and removed", old_primary_id);
         println!(
-            "Shard state after primary terminated and removed: {}",
+            "Shard state after primary terminated and removed: {:?}",
             shard
         );
         assert_eq!(primary_node_id, old_primary_id);
@@ -696,7 +768,7 @@ mod test {
         // Wait for the shard to auto failover
         println!("Waiting for fail-over to take place... (this can take up to 30 seconds)");
         shard.wait_for_shard_to_stabilise().unwrap();
-        println!("{}", shard);
+        println!("{:?}", shard);
         assert!(shard.is_stabilised());
 
         // Restart the terminated primary and re-add it to the shard
@@ -705,7 +777,52 @@ mod test {
         shard.add_terminated_primary(old_primary);
         println!("Waiting for old primary to switch role and join the shard...");
         shard.wait_for_shard_to_stabilise().unwrap();
-        println!("{}", shard);
+        println!("{:?}", shard);
         println!("Success!");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
+    fn test_cluster_moved() {
+        let cluster = match Cluster::new(3, 2, "my-cluster") {
+            Ok(cluster) => cluster,
+            Err(e) => {
+                panic!("Could not create cluster. {}", e);
+            }
+        };
+        println!("{:#?}", cluster);
+
+        assert_eq!(cluster.shards.len(), 3);
+        for shard in &cluster.shards {
+            assert!(shard.is_stabilised());
+        }
+
+        // slots: 0-5460
+        let mut shard_1_conn = cluster.connection_to_shard(0).unwrap();
+
+        // slots: 5461-10921
+        let mut shard_2_conn = cluster.connection_to_shard(1).unwrap();
+
+        // slots: 10922-16383
+        let mut shard_3_conn = cluster.connection_to_shard(2).unwrap();
+
+        let shard_3_primary_node = cluster.shard_primary(2).unwrap();
+        let shard_3_primary_node_address = shard_3_primary_node.borrow().address();
+
+        // put "a" (slot: 15495, which is located in "shard-3") in the wrong shard
+        let res = shard_1_conn.set::<&str, &str, redis::Value>("a", "b");
+        // We expect "MOVED" with the address of the "shard3" primary address
+        assert!(res.is_err_and(|e| e.kind() == redis::ErrorKind::Moved
+            && e.detail().unwrap().contains(&shard_3_primary_node_address)));
+
+        // We expect "MOVED" with the address of the "shard3" primary address
+        let res = shard_2_conn.set::<&str, &str, redis::Value>("a", "b");
+        assert!(res.is_err_and(|e| e.kind() == redis::ErrorKind::Moved
+            && e.detail().unwrap().contains(&shard_3_primary_node_address)));
+
+        // We expect "OK"
+        let res = shard_3_conn.set::<&str, &str, redis::Value>("a", "b");
+        assert_eq!(res.unwrap(), redis::Value::Okay);
     }
 }
