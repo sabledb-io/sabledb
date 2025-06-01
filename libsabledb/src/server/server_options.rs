@@ -1,4 +1,6 @@
-use crate::{ini_bool, ini_read_prop, ini_usize, parse_number, SableError, StorageOpenParams};
+use crate::{
+    ini_bool, ini_read_prop, ini_usize, parse_number, SableError, SlotBitmap, StorageOpenParams,
+};
 use clap::Parser;
 use ini::Ini;
 use std::path::PathBuf;
@@ -93,6 +95,11 @@ pub struct CronSettings {
     pub instant_delete: bool,
     /// Scan the database and collect statistics every `scan_keys_secs` seconds
     pub scan_keys_secs: usize,
+    /// In a cluster configuration or as part of a replication group, this node will update its status in the cluster
+    /// database every N milliseconds.
+    pub cluster_database_updates_interval_ms: usize,
+    /// The cron job is set to activate every N milliseconds to complete its tasks.
+    pub cron_interval_ms: usize,
 }
 
 impl Default for CronSettings {
@@ -101,6 +108,8 @@ impl Default for CronSettings {
             evict_orphan_records_secs: 60, // 1 minute
             instant_delete: true,
             scan_keys_secs: 30,
+            cluster_database_updates_interval_ms: 500,
+            cron_interval_ms: 100,
         }
     }
 }
@@ -195,13 +204,13 @@ impl CommandLineArgs {
         self
     }
 
-    pub fn with_cluster_name(mut self, cluster_name: &str) -> Self {
-        self.cluster_name = Some(cluster_name.into());
+    pub fn with_slots(mut self, slots: &SlotBitmap) -> Self {
+        self.slots = Some(slots.to_string());
         self
     }
 
-    pub fn with_slots(mut self, slots: &str) -> Self {
-        self.slots = Some(slots.into());
+    pub fn with_cluster_name(mut self, cluster_name: &str) -> Self {
+        self.cluster_name = Some(cluster_name.into());
         self
     }
 
@@ -561,6 +570,20 @@ impl ServerOptions {
             "cron",
             "scan_keys_secs",
             &mut options.cron.scan_keys_secs,
+        )?;
+
+        Self::read_usize_with_unit(
+            &ini_file,
+            "cron",
+            "cluster_database_updates_interval_ms",
+            &mut options.cron.cluster_database_updates_interval_ms,
+        )?;
+
+        Self::read_usize_with_unit(
+            &ini_file,
+            "cron",
+            "cron_interval_ms",
+            &mut options.cron.cron_interval_ms,
         )?;
         Ok(options)
     }

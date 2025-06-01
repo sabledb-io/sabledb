@@ -13,6 +13,7 @@ use bytes::{Buf, BytesMut};
 use enum_iterator::next;
 use std::fs::File as StdFile;
 use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -60,6 +61,12 @@ impl PartialEq for SlotBitmap {
 /// Each slot uses a single bit to mark whether it is owned by this instance or not.
 /// We use an array of 256 items of `AtomicU64` primitives to keep track of the slots (total of ~16K memory)
 impl SlotBitmap {
+    pub fn new_all_set() -> Self {
+        let bitmap = Self::default();
+        bitmap.set_all();
+        bitmap
+    }
+
     /// Set or clear `slot` in this slots set
     pub fn set(&self, slot: u16, b: bool) -> Result<(), SableError> {
         // Find the bucket that holds the bit
@@ -116,9 +123,9 @@ impl SlotBitmap {
     ///
     /// ```no_compile
     /// let slots = SlotBitmap::default();
-    /// slots.from_string("0-9000,10000")?;
+    /// slots.from_string("0-9000,10000")?; // 0-9000 (inclusive) + 10,000
     /// assert(slots.is_set(10000));
-    /// for i in 0..9000 {
+    /// for i in 0..=9000 {
     ///     assert!(slots.is_set(i));
     /// }
     /// ```
@@ -152,6 +159,30 @@ impl SlotBitmap {
     fn position_in_bucket(slot: &u16) -> u64 {
         let index_in_bucket = slot.rem_euclid(64) as usize;
         1u64 << index_in_bucket
+    }
+}
+
+impl TryFrom<&Range<u16>> for SlotBitmap {
+    type Error = SableError;
+    fn try_from(slots: &Range<u16>) -> Result<Self, Self::Error> {
+        if slots.end > SLOT_SIZE {
+            return Err(SableError::InvalidArgument(format!(
+                "Invalid slot range {:?}. Slot range is expected from 0..16384 (exclusive)",
+                slots
+            )));
+        }
+
+        if slots.end.saturating_sub(slots.start) == 0 {
+            return Err(SableError::InvalidArgument(format!(
+                "Invalid slot range {:?}. End slot must be greater than start slot",
+                slots
+            )));
+        }
+
+        let s = format!("{}-{}", slots.start, slots.end - 1);
+        let slots = SlotBitmap::default();
+        slots.from_string(s.as_str())?;
+        Ok(slots)
     }
 }
 

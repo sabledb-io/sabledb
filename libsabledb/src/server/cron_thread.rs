@@ -5,11 +5,14 @@ use crate::{
     server::NodeInfo,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
+    utils::StopWatch,
     LockManager, SableError, Server, ServerOptions, StorageAdapter, ToU8Writer, U8ArrayBuilder,
     U8ArrayReader, WorkerHandle,
 };
 use bytes::BytesMut;
+use num_format::{Locale, ToFormattedString};
 use std::sync::{Arc, RwLock as StdRwLock};
+use tokio::time;
 
 const OPTIONS_LOCK_ERR: &str = "Failed to obtain read lock on ServerOptions";
 
@@ -159,8 +162,26 @@ impl Cron {
                 .scan_keys_secs as u64,
         ));
 
-        let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Seconds(5));
+        // The cron will wake-up every N milliseconds to execute the tasks
+        let cron_interval_ms = self
+            .server_options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .cron
+            .cron_interval_ms as u64;
 
+        // In a cluster configuration or as part of a replication group, the cron will update its status in the cluster
+        // database every N milliseconds.
+        let cluster_database_updates_interval_ms =
+            self.server_options
+                .read()
+                .expect(OPTIONS_LOCK_ERR)
+                .cron
+                .cluster_database_updates_interval_ms as u64;
+
+        let mut cluster_db_updater_ticker = Ticker::new(TickInterval::Milliseconds(
+            cluster_database_updates_interval_ms,
+        ));
         loop {
             tokio::select! {
                 msg = self.rx_channel.recv() => {
@@ -178,17 +199,17 @@ impl Cron {
                         None => {}
                     }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                _ =  tokio::time::sleep_until(
+                        time::Instant::now() + time::Duration::from_millis(cron_interval_ms)) => {
                     let cm = ClusterManager::with_options(self.server_options.clone());
                     evict_ticker.tick_if_needed(Self::evict(&self.store)).await?;
                     scan_ticker.tick_if_needed(Self::scan(&self.store)).await?;
                     if cluster_db_updater_ticker.try_tick()? {
-                        // update the cluster database
-                        if let Some(updated_node) = cm.put_node(
-                            NodeBuilder::default()
+                        let node_info =  NodeBuilder::default()
                                 .with_last_txn_id(self.store.latest_sequence_number()?)
-                                .build(),
-                        )? {
+                                .build();
+                        // update the cluster database
+                        if let Some(updated_node) = cm.put_node(node_info.clone())? {
                             if !Server::state()
                                     .persistent_state()
                                     .slots()
@@ -198,13 +219,18 @@ impl Cron {
                                 Server::state().persistent_state().set_slots(updated_node.slots())?;
                             }
                         }
+                        tracing::debug!(
+                            "Cluster database updated with node info: {:?}",
+                            node_info
+                        );
                     }
 
                     // If we are part of a cluster, load the cluster setup (primary nodes + their slots)
-                    Self::poll_cluster_info(&cm).await?;
+                    Self::read_cluster_info(&cm).await?;
                 }
             }
         }
+
         Ok(())
     }
 
@@ -260,6 +286,9 @@ impl Cron {
 
         let mut items_evicted = 0usize;
         let mut write_cache = DbWriteCache::with_storage(store);
+        tracing::info!("Eviction of unreachable records started...");
+        let sw = StopWatch::default();
+
         for (primary_type, sub_items) in &prefix_arr {
             let prefix = Bookkeeping::prefix(primary_type);
             let mut db_iter = store.create_iterator(&prefix)?;
@@ -322,6 +351,14 @@ impl Cron {
         if !write_cache.is_empty() {
             write_cache.flush()?;
         }
+        tracing::info!(
+            "Eviction completed in {} milliseconds. Total items deleted: {}",
+            sw.elapsed_micros()
+                .unwrap_or_default()
+                .saturating_div(1000)
+                .to_formatted_string(&Locale::en),
+            items_evicted.to_formatted_string(&Locale::en),
+        );
         Ok(items_evicted)
     }
 
@@ -390,7 +427,7 @@ impl Cron {
     }
 
     /// In case, this instance is part of a cluster, fetch the cluster information from the cluster database
-    async fn poll_cluster_info(cm: &ClusterManager) -> Result<(), SableError> {
+    async fn read_cluster_info(cm: &ClusterManager) -> Result<(), SableError> {
         if !Server::state().persistent_state().in_cluster() {
             return Ok(());
         }
