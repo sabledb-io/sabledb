@@ -675,6 +675,19 @@ impl StorageAdapter {
         };
         db.delete_slot(db_id, slot)
     }
+
+    /// Trigger a database vacuum
+    pub fn vacuum(&self) -> Result<(), SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        if self.txn.is_some() {
+            return Err(SableError::OtherError(
+                "`vacuum` can not be used within a txn".into(),
+            ));
+        };
+        db.vacuum()
+    }
 }
 
 #[allow(unsafe_code)]

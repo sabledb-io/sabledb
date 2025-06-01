@@ -170,6 +170,13 @@ impl Cron {
             .cron
             .cron_interval_ms as u64;
 
+        let compaction_after_eviction = self
+            .server_options
+            .read()
+            .expect(OPTIONS_LOCK_ERR)
+            .cron
+            .compaction_after_eviction;
+
         // In a cluster configuration or as part of a replication group, the cron will update its status in the cluster
         // database every N milliseconds.
         let cluster_database_updates_interval_ms =
@@ -190,7 +197,7 @@ impl Cron {
                         Some(CronMessage::Evict) => {
                             // Do evict now
                             tracing::info!("Evicting records from the database");
-                            Self::evict(&self.store).await?;
+                            Self::evict(&self.store, compaction_after_eviction).await?;
                         }
                         Some(CronMessage::Shutdown) => {
                             tracing::info!("Exiting");
@@ -202,7 +209,7 @@ impl Cron {
                 _ =  tokio::time::sleep_until(
                         time::Instant::now() + time::Duration::from_millis(cron_interval_ms)) => {
                     let cm = ClusterManager::with_options(self.server_options.clone());
-                    evict_ticker.tick_if_needed(Self::evict(&self.store)).await?;
+                    evict_ticker.tick_if_needed(Self::evict(&self.store, compaction_after_eviction)).await?;
                     scan_ticker.tick_if_needed(Self::scan(&self.store)).await?;
                     if cluster_db_updater_ticker.try_tick()? {
                         let node_info =  NodeBuilder::default()
@@ -273,7 +280,10 @@ impl Cron {
     /// ```
     /// So in the above example, even if a user overrode the value by calling `set` command
     /// we can still access the orphan values and remove them from the database
-    async fn evict(store: &StorageAdapter) -> Result<usize, SableError> {
+    async fn evict(
+        store: &StorageAdapter,
+        compaction_after_eviction: bool,
+    ) -> Result<usize, SableError> {
         let prefix_arr = vec![
             (ValueType::Hash, vec![KeyType::HashItem]),
             (ValueType::List, vec![KeyType::ListItem]),
@@ -323,7 +333,7 @@ impl Cron {
                                 )?;
 
                                 if count > 0 {
-                                    tracing::info!(
+                                    tracing::debug!(
                                         "Deleted {} zombie items of type {:?} belonged to: {:?}",
                                         count,
                                         key_type,
@@ -336,7 +346,7 @@ impl Cron {
 
                             // Avoid building too many records in memory
                             // TODO: move this to the configuration
-                            if write_cache.len() > 1000 {
+                            if write_cache.len() > 10_000 {
                                 write_cache.flush()?;
                             }
                         }
@@ -351,6 +361,13 @@ impl Cron {
         if !write_cache.is_empty() {
             write_cache.flush()?;
         }
+
+        if compaction_after_eviction {
+            tracing::info!("Running compaction...");
+            store.vacuum()?;
+            tracing::info!("Success");
+        }
+
         tracing::info!(
             "Eviction completed in {} milliseconds. Total items deleted: {}",
             sw.elapsed_micros()
@@ -576,7 +593,7 @@ mod tests {
                 ZSetLenResult::Some(4)
             );
 
-            let items_evicted = Cron::evict(&db).await.unwrap();
+            let items_evicted = Cron::evict(&db, false).await.unwrap();
             assert_eq!(items_evicted, 8); // we expected 4 items for the "score" + 4 items for the "member"
         });
     }
@@ -606,7 +623,7 @@ mod tests {
             set_db.commit().unwrap();
             assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
 
-            let items_evicted = Cron::evict(&db).await.unwrap();
+            let items_evicted = Cron::evict(&db, false).await.unwrap();
             assert_eq!(items_evicted, 0); // 0 items should be evicted
 
             // Create another set, using the same *name* but with a different UID
@@ -617,7 +634,7 @@ mod tests {
             assert_eq!(set_db.len(&set1).unwrap(), SetLenResult::Some(3));
 
             // Try evicting again, this time we expect 3 items to be evicted
-            let items_evicted = Cron::evict(&db).await.unwrap();
+            let items_evicted = Cron::evict(&db, false).await.unwrap();
             assert_eq!(items_evicted, 3); // 3 items should be evicted
 
             // The length should be still 3

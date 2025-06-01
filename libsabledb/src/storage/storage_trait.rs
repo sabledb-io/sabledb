@@ -172,4 +172,7 @@ pub trait StorageTrait {
 
     /// Delete slot from the database
     fn delete_slot(&self, db_id: u16, slot: &crate::Slot) -> Result<(), SableError>;
+
+    /// Trigger a database vacuum
+    fn vacuum(&self) -> Result<(), SableError>;
 }

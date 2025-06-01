@@ -90,6 +90,8 @@ impl Default for ClientLimits {
 pub struct CronSettings {
     /// Purge orphan records every N seconds
     pub evict_orphan_records_secs: usize,
+    /// Should the cron thread run "compaction" after a successful eviction?
+    pub compaction_after_eviction: bool,
     /// Delete of a single item is always `O(1)` regardless of its type. If the type has children
     /// they are purged by the evictor background thread
     pub instant_delete: bool,
@@ -110,6 +112,7 @@ impl Default for CronSettings {
             scan_keys_secs: 30,
             cluster_database_updates_interval_ms: 500,
             cron_interval_ms: 100,
+            compaction_after_eviction: true,
         }
     }
 }
@@ -563,6 +566,13 @@ impl ServerOptions {
             "cron",
             "instant_delete",
             &mut options.cron.instant_delete,
+        )?;
+
+        Self::read_bool(
+            &ini_file,
+            "cron",
+            "compaction_after_eviction",
+            &mut options.cron.compaction_after_eviction,
         )?;
 
         Self::read_usize_with_unit(

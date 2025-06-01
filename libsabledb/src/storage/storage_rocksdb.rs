@@ -479,6 +479,12 @@ impl StorageTrait for StorageRocksDb {
         }
         Ok(())
     }
+
+    /// Trigger a database vacuum
+    fn vacuum(&self) -> Result<(), SableError> {
+        self.store.compact_range::<&BytesMut, &BytesMut>(None, None);
+        Ok(())
+    }
 }
 
 #[allow(unsafe_code)]
