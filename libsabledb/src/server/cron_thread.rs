@@ -178,7 +178,7 @@ impl Cron {
                         None => {}
                     }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
                     let cm = ClusterManager::with_options(self.server_options.clone());
                     evict_ticker.tick_if_needed(Self::evict(&self.store)).await?;
                     scan_ticker.tick_if_needed(Self::scan(&self.store)).await?;
@@ -201,7 +201,7 @@ impl Cron {
                     }
 
                     // If we are part of a cluster, load the cluster setup (primary nodes + their slots)
-                    Self::poll_cluster_info(&cm).await?;
+                    Self::read_cluster_info(&cm).await?;
                 }
             }
         }
@@ -390,7 +390,7 @@ impl Cron {
     }
 
     /// In case, this instance is part of a cluster, fetch the cluster information from the cluster database
-    async fn poll_cluster_info(cm: &ClusterManager) -> Result<(), SableError> {
+    async fn read_cluster_info(cm: &ClusterManager) -> Result<(), SableError> {
         if !Server::state().persistent_state().in_cluster() {
             return Ok(());
         }
