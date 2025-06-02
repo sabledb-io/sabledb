@@ -1,47 +1,30 @@
-# Data eviction
+Data eviction in **SableDB** occurs in three primary scenarios:
 
-This chapter covers the data eviction as it being handled by `SableDB`.
+---
 
-There are 3 cases where items needs to be purged:
+## Expired Items
 
-- Item is expired
-- A composite item was overwritten by another type (e.g. user called `SET MYHASH SOMEVALUE` on an item `MYHASH` which was previously a `Hash`)
-- User called `FLUSHDB` or `FLUSHALL`
+**SableDB** stores data primarily on disk, a cost-effective solution. To manage expired items efficiently, **SableDB**
+checks an item's expiration status only when it's accessed. If an item is found to be expired, it's deleted, and a `null`
+value is returned to the caller.
 
-## Expired items
+---
 
-Since the main storage used by `SableDB` is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
-the item is deleted and a `null` value is returned to the caller.
+## Overwritten Composite Items
 
-## Composite item has been overwritten
+A common issue arises when a composite item (like a **Hash**) is overwritten by a different data type. For instance, if
+you have a **Hash** named `OverwatchTanks` containing multiple fields (e.g. `tank_1`, `tank_2`, and `tank_3`), and then
+execute `SET OverwatchTanks "bla"`, the `OverwatchTanks` key becomes a **String**. However, as each **Hash** field is
+stored as a separate record in `RocksDB`, the original `tank_1`, `tank_2`, and `tank_3` fields become "orphaned" and inaccessible.
 
-To explain the problem here, consider the following data is stored in `SableDB` (using `Hash` data type):
+**SableDB** addresses this with a background cron task. This task periodically compares the declared type of a composite
+item with its actual stored value. If a mismatch is detected (e.g., `OverwatchTanks` is now a **String** but still has
+associated **Hash** records), the cron job uses **bookkeeping records** to identify the original type and then deletes
+the orphaned records from the database.
 
-```
-"OverwatchTanks" =>
-    {
-        {"tank_1" => "Reinhardt"},
-        {"tank_2" => "Orisa"},
-        {"tank_3" => "Roadhog"}
-    }
-```
+---
 
-In the above example, we have a hash identified by the key `OverwatchTanks`. Now, imagine a user that executes the following command:
+## User-Triggered Cleanup
 
-`set OverwatchTanks bla` - this effectively changes the type of the key `OverwatchTanks` and set it into a `String`.
-However, as explained in [`the encoding data chapter`][1], we know that each hash field is stored in its own `RocksDB` records.
-So by calling the `set` command, the `hash` fields `tank_1`, `tank_2` and `tank_3` are now "orphaned" (i.e. the user can not access them)
-
-`SableDB` solves this problem by running an cron task that compares the type of the a composite item against its actual value.
-In the above example: the type of the key `OverwatchTanks` is a `String` while it should have been `Hash`. When such a discrepancy is detected,
-the cron task deletes the orphan records from the database.
-
-The cron job knows the original type by checking the [`bookkeeping record`][2]
-
-## User triggered clean-up (`FLUSHALL` or `FLUSHDB`)
-
-When one of these commands is called, `SableDB` uses `RocksDB` [`delete_range`][3] method.
-
-[1]: /sabledb/design/data-encoding/#the-hash-data-type
-[2]: /sabledb/design/data-encoding/#bookkeeping-records
-[3]: https://rocksdb.org/blog/2018/11/21/delete-range.html
+When a user initiates a `FLUSHALL` or `FLUSHDB` command, **SableDB** leverages `RocksDB`'s `delete_range` method to
+efficiently purge the data.

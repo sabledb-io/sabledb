@@ -48,7 +48,7 @@ the replica node does the following:
 
 ### The replica that initiated the failover
 
-- Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a [unique lock record][4]
+- Marks in the centralised database that a failover is initiated for the non responsive primary
 - The node that started the failover decides on the new primary. It does that by picking the one with the highest `last_txn_id` property
 - Dispatches a command to the new replica instructing it to switch to Primary mode (we achieve this by using `LPUSH / BRPOP` blocking command)
 - Dispatch commands to all of the remaining replicas instructing them to perform a `REPLICAOF <NEW_PRIMARY_IP> <NEW_PRIMARY_PORT>`

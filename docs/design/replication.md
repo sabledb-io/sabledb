@@ -1,51 +1,46 @@
 ## Overview
 
-`SableDB` supports a `1` : `N` replication (single primary -> multiple replicas) configuration.
+`SableDB` is compatible with a `1`:`N` replication setup, where one primary server replicates to multiple secondary servers.
 
-### Replication Client / Server model
+### Replication Client/Server Model
 
-On startup, `SableDB` spawns a thread (internally called `Relicator`) which is listening on the main port + `1000`.
-So if, for example, the server is configured to listen on port `6379`, the replication port is set to `7379`
+Upon initialization, `SableDB` creates a thread known internally as the `Replicator`, which listens on the `private_address`
+(by default it is set to: main port plus `1000`).
 
-For every new incoming replication client, a new thread is spawned to serve it.
+For each new incoming replication client, a dedicated thread is spawned to handle the connection.
 
-The replication is done using the following methodology:
+The replication process follows this methodology:
 
-1. The replica is requesting from the primary a set of changes starting from a given ID (initially, it starts with `0`)
-2. If this is the first request sent from the Replica -> Primary, the primary replies with an error and set the reason to `FullSyncNotDone`
-3. The replica replies with a `FullSync` request to which the primary sends the complete data store
-4. From this point on, the replica sends the `GetChanges` request and applies them locally. Any error that might occur on the any side (Replica or Primary) triggers a `FullSync` request
-5. Step 4 is repeated indefinitely, on any error - the shard falls back to `FullSync`
+1. The replica requests a set of changes from the primary starting from a specific ID (initially set to `0`).
+2. If this is the first request from the replica to the primary, the primary responds with an error, indicating `FullSyncNotDone`.
+3. The replica then sends a `FullSync` request, prompting the primary to send the entire data store.
+4. Subsequently, the replica sends `GetChanges` requests and applies these changes locally. Any errors on either the replica or primary side trigger a `FullSync` request.
+5. Step 4 repeats indefinitely; any error causes the shard to revert to `FullSync`.
 
-!!!Note
-    Its worth mentioning that the primary server is **stateless** i.e. it does not keep track of its replicas. It is up to the
-    replica server to pull data from the primary and to keep track of the next change sequence ID to pull.
+!!! Note
+    It is important to note that the primary server is stateless, meaning it does not track its replicas. The replica server is responsible for pulling data from the primary and keeping track of the next change sequence ID to pull.
 
-!!!Note
-    In case there are no changes to send to the replica, the primary delays the as dictated by the configuration file
+!!! Note
+    If there are no changes to send to the replica, the primary delays the response as specified in the configuration file.
 
+### In-Depth Overview of `GetChanges` and `FullSync` Requests
 
-### In depth overview of the `GetChanges` & `FullSync` requests
+`SableDB` internally uses `RocksDB` APIs: [`create_checkpoint`](https://github.com/facebook/rocksdb/wiki/Checkpoints) and
+[`get_updates_since`](https://github.com/facebook/rocksdb/wiki/Replication-Helpers).
 
-Internally, `SableDB` utilizes `RocksDB` APIs: [`create_checkpoint`][1] and [`get_updates_since`][2]
+Additionally, `SableDB` maintains a file named `changes.seq` in the replica server's database folder, which stores the
+next transaction ID to be pulled from the primary.
 
-In addition to the above APIs, `SableDB` maintains a file named `changes.seq` inside the database folder of the replica server
-which holds the next transaction ID that should be pulled from the primary.
+In case of any error, the replica switches to a `FullSync` request.
 
-In any case of error, the replica switches to `FullSync` request.
+The following sequence of events describes the data flow between the replica and the primary:
 
-The below sequence of events describes the data flow between the replica and the primary:
+![Changes Sync](../images/happy-flow-sync.svg)
 
-![changes sync](../images/happy-flow-sync.svg)
+When a `FullSync` is required, the flow changes to:
 
-When a `FullSync` is needed, the flow changes to this:
+![Full Sync](../images/fullsync.svg)
 
-![fullsync](../images/fullsync.svg)
+### Replication Client
 
-### Replication client
-
-In addition to the above, the replication instance of `SableDB` is running in `read-only` mode. i.e. it does not allow
-execution of any command marked as `Write`
-
-[1]: https://github.com/facebook/rocksdb/wiki/Checkpoints
-[2]: https://github.com/facebook/rocksdb/wiki/Replication-Helpers
+The replication instance of `SableDB` operates in `read-only` mode, meaning it does not allow the execution of any commands marked as `Write`.
