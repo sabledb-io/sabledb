@@ -297,9 +297,9 @@ and visit this page again in couple of days
 | flushall | ✓ | ✓ |   |
 | flushdb | ✓ | ✓ |   |
 | dbsize | ✓ | ✓ | Data is accurate for the last scan performed on the storage |
-| slot count <SLOT_NUM> | ✓ | ✓ | An extension command. Count the number of keys belongs to a slot <SLOT_NUM>|
-| slot calc <KEY> | ✓ | ✓ | An extension command. Return the slot number for a given <KEY> |
-| slot sendto <NODE_ID> <SLOT_NUM> | ✓ | ✓ | An extension command. Send slot <SLOT_NUM> to node <NODE_ID> |
+| slot count `SLOT_NUM` | ✓ | ✓ | An extension command. Count how many keys map to `SLOT_NUM`|
+| slot calc `KEY` | ✓ | ✓ | An extension command. Return the slot number for a given `KEY` |
+| slot sendto `NODE_ID` `SLOT_NUM` | ✓ | ✓ | An extension command. Send slot `SLOT_NUM` to node `NODE_ID` |
 
 ### Transaction
 
