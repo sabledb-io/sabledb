@@ -6,10 +6,11 @@ edit_uri: edit/main/docs/site
 
 nav:
     - High Level Design: design/overview.md
-    - Replication: design/replication.md
-    - Auto Failover: design/auto-failover.md
     - Data encoding: design/data-encoding.md
     - Data eviction: design/eviction.md
+    - Replication: design/replication.md
+    - Cluster: design/cluster.md
+    - Auto Failover: design/auto-failover.md
 
 theme:
   name: material
