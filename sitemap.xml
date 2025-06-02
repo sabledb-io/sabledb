@@ -2,26 +2,30 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://sabledb.io/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
     </url>
     <url>
          <loc>https://sabledb.io/design/auto-failover/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
+    </url>
+    <url>
+         <loc>https://sabledb.io/design/cluster/</loc>
+         <lastmod>2025-06-02</lastmod>
     </url>
     <url>
          <loc>https://sabledb.io/design/data-encoding/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
     </url>
     <url>
          <loc>https://sabledb.io/design/eviction/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
     </url>
     <url>
          <loc>https://sabledb.io/design/overview/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
     </url>
     <url>
          <loc>https://sabledb.io/design/replication/</loc>
-         <lastmod>2025-01-17</lastmod>
+         <lastmod>2025-06-02</lastmod>
     </url>
 </urlset>

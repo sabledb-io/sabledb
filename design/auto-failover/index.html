@@ -11,10 +11,8 @@
         <link rel="canonical" href="https://sabledb.io/design/auto-failover/">
       
       
-        <link rel="prev" href="../replication/">
+        <link rel="prev" href="../cluster/">
       
-      
-        <link rel="next" href="../data-encoding/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -245,11 +243,71 @@
   
   
     <li class="md-nav__item">
+      <a href="../data-encoding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data encoding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../eviction/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data eviction
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../replication/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
     Replication
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Cluster
   </span>
   
 
@@ -392,46 +450,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../data-encoding/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Data encoding
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../eviction/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Data eviction
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -592,9 +610,9 @@ node - this is to minimise the risk of attempting to start multiple failover pro
 the replica node does the following:</p>
 <h3 id="the-replica-that-initiated-the-failover">The replica that initiated the failover</h3>
 <ul>
-<li>Marks in the centralised database that a failover initiated for the non responsive primary. It does not by creating a <a href="/sabledb/design/auto-failover/#a-note-about-locking">unique lock record</a></li>
+<li>Marks in the centralised database that a failover is initiated for the non responsive primary</li>
 <li>The node that started the failover decides on the new primary. It does that by picking the one with the highest <code>last_txn_id</code> property</li>
-<li>Dispatches a command to the new replica instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
+<li>Dispatches a command to the new selected node, instructing it to switch to Primary mode (we achieve this by using <code>LPUSH / BRPOP</code> blocking command)</li>
 <li>Dispatch commands to all of the remaining replicas instructing them to perform a <code>REPLICAOF &lt;NEW_PRIMARY_IP&gt; &lt;NEW_PRIMARY_PORT&gt;</code></li>
 <li>Delete the old primary records from the database (if this node comes back online again later, it will re-create them)</li>
 </ul>

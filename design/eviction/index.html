@@ -14,6 +14,8 @@
         <link rel="prev" href="../data-encoding/">
       
       
+        <link rel="next" href="../replication/">
+      
       
       <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.49">
@@ -70,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#data-eviction" class="md-skip">
+        <a href="#expired-items" class="md-skip">
           Skip to content
         </a>
       
@@ -243,46 +245,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../replication/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Replication
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../auto-failover/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Auto Failover
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../data-encoding/" class="md-nav__link">
         
   
@@ -308,8 +270,6 @@
       
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
-      
-        
       
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
@@ -339,8 +299,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -351,25 +309,25 @@
         <li class="md-nav__item">
   <a href="#expired-items" class="md-nav__link">
     <span class="md-ellipsis">
-      Expired items
+      Expired Items
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
+  <a href="#overwritten-composite-items" class="md-nav__link">
     <span class="md-ellipsis">
-      Composite item has been overwritten
+      Overwritten Composite Items
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
+  <a href="#user-triggered-cleanup" class="md-nav__link">
     <span class="md-ellipsis">
-      User triggered clean-up (FLUSHALL or FLUSHDB)
+      User-Triggered Cleanup
     </span>
   </a>
   
@@ -379,6 +337,66 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../replication/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Replication
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Cluster
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../auto-failover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auto Failover
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -400,8 +418,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -412,25 +428,25 @@
         <li class="md-nav__item">
   <a href="#expired-items" class="md-nav__link">
     <span class="md-ellipsis">
-      Expired items
+      Expired Items
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#composite-item-has-been-overwritten" class="md-nav__link">
+  <a href="#overwritten-composite-items" class="md-nav__link">
     <span class="md-ellipsis">
-      Composite item has been overwritten
+      Overwritten Composite Items
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#user-triggered-clean-up-flushall-or-flushdb" class="md-nav__link">
+  <a href="#user-triggered-cleanup" class="md-nav__link">
     <span class="md-ellipsis">
-      User triggered clean-up (FLUSHALL or FLUSHDB)
+      User-Triggered Cleanup
     </span>
   </a>
   
@@ -454,36 +470,28 @@
   
 
 
-<h1 id="data-eviction">Data eviction</h1>
-<p>This chapter covers the data eviction as it being handled by <code>SableDB</code>.</p>
-<p>There are 3 cases where items needs to be purged:</p>
-<ul>
-<li>Item is expired</li>
-<li>A composite item was overwritten by another type (e.g. user called <code>SET MYHASH SOMEVALUE</code> on an item <code>MYHASH</code> which was previously a <code>Hash</code>)</li>
-<li>User called <code>FLUSHDB</code> or <code>FLUSHALL</code></li>
-</ul>
-<h2 id="expired-items">Expired items</h2>
-<p>Since the main storage used by <code>SableDB</code> is disk (which is cheap), an item is checked for expiration only when it is being accessed, if it is expired
-the item is deleted and a <code>null</code> value is returned to the caller.</p>
-<h2 id="composite-item-has-been-overwritten">Composite item has been overwritten</h2>
-<p>To explain the problem here, consider the following data is stored in <code>SableDB</code> (using <code>Hash</code> data type):</p>
-<div class="highlight"><pre><span></span><code>&quot;OverwatchTanks&quot; =&gt;
-    {
-        {&quot;tank_1&quot; =&gt; &quot;Reinhardt&quot;},
-        {&quot;tank_2&quot; =&gt; &quot;Orisa&quot;},
-        {&quot;tank_3&quot; =&gt; &quot;Roadhog&quot;}
-    }
-</code></pre></div>
-<p>In the above example, we have a hash identified by the key <code>OverwatchTanks</code>. Now, imagine a user that executes the following command:</p>
-<p><code>set OverwatchTanks bla</code> - this effectively changes the type of the key <code>OverwatchTanks</code> and set it into a <code>String</code>.
-However, as explained in <a href="/sabledb/design/data-encoding/#the-hash-data-type"><code>the encoding data chapter</code></a>, we know that each hash field is stored in its own <code>RocksDB</code> records.
-So by calling the <code>set</code> command, the <code>hash</code> fields <code>tank_1</code>, <code>tank_2</code> and <code>tank_3</code> are now "orphaned" (i.e. the user can not access them)</p>
-<p><code>SableDB</code> solves this problem by running an cron task that compares the type of the a composite item against its actual value.
-In the above example: the type of the key <code>OverwatchTanks</code> is a <code>String</code> while it should have been <code>Hash</code>. When such a discrepancy is detected,
-the cron task deletes the orphan records from the database.</p>
-<p>The cron job knows the original type by checking the <a href="/sabledb/design/data-encoding/#bookkeeping-records"><code>bookkeeping record</code></a></p>
-<h2 id="user-triggered-clean-up-flushall-or-flushdb">User triggered clean-up (<code>FLUSHALL</code> or <code>FLUSHDB</code>)</h2>
-<p>When one of these commands is called, <code>SableDB</code> uses <code>RocksDB</code> <a href="https://rocksdb.org/blog/2018/11/21/delete-range.html"><code>delete_range</code></a> method.</p>
+  <h1>Data eviction</h1>
+
+<p>Data eviction in <strong>SableDB</strong> occurs in three primary scenarios:</p>
+<hr />
+<h2 id="expired-items">Expired Items</h2>
+<p><strong>SableDB</strong> stores data primarily on disk, a cost-effective solution. To manage expired items efficiently, <strong>SableDB</strong>
+checks an item's expiration status only when it's accessed. If an item is found to be expired, it's deleted, and a <code>null</code>
+value is returned to the caller.</p>
+<hr />
+<h2 id="overwritten-composite-items">Overwritten Composite Items</h2>
+<p>A common issue arises when a composite item (like a <strong>Hash</strong>) is overwritten by a different data type. For instance, if
+you have a <strong>Hash</strong> named <code>OverwatchTanks</code> containing multiple fields (e.g. <code>tank_1</code>, <code>tank_2</code>, and <code>tank_3</code>), and then
+execute <code>SET OverwatchTanks "bla"</code>, the <code>OverwatchTanks</code> key becomes a <strong>String</strong>. However, as each <strong>Hash</strong> field is
+stored as a separate record in <code>RocksDB</code>, the original <code>tank_1</code>, <code>tank_2</code>, and <code>tank_3</code> fields become "orphaned" and inaccessible.</p>
+<p><strong>SableDB</strong> addresses this with a background cron task. This task periodically compares the declared type of a composite
+item with its actual stored value. If a mismatch is detected (e.g., <code>OverwatchTanks</code> is now a <strong>String</strong> but still has
+associated <strong>Hash</strong> records), the cron job uses <strong>bookkeeping records</strong> to identify the original type and then deletes
+the orphaned records from the database.</p>
+<hr />
+<h2 id="user-triggered-cleanup">User-Triggered Cleanup</h2>
+<p>When a user initiates a <code>FLUSHALL</code> or <code>FLUSHDB</code> command, <strong>SableDB</strong> leverages <code>RocksDB</code>'s <code>delete_range</code> method to
+efficiently purge the data.</p>
 
 
 

@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://sabledb.io/design/replication/">
+        <link rel="canonical" href="https://sabledb.io/design/cluster/">
       
       
-        <link rel="prev" href="../eviction/">
+        <link rel="prev" href="../replication/">
       
       
-        <link rel="next" href="../cluster/">
+        <link rel="next" href="../auto-failover/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Replication - SableDB</title>
+        <title>Cluster - SableDB</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#overview" class="md-skip">
+        <a href="#understanding-the-sabledb-cluster" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Replication
+              Cluster
             
           </span>
         </div>
@@ -282,6 +282,26 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../replication/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Replication
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -296,7 +316,7 @@
           
   
   <span class="md-ellipsis">
-    Replication
+    Cluster
   </span>
   
 
@@ -307,7 +327,7 @@
         
   
   <span class="md-ellipsis">
-    Replication
+    Cluster
   </span>
   
 
@@ -327,37 +347,46 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#understanding-the-sabledb-cluster" class="md-nav__link">
     <span class="md-ellipsis">
-      Overview
+      Understanding the SableDB Cluster
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
+    <nav class="md-nav" aria-label="Understanding the SableDB Cluster">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#replication-clientserver-model" class="md-nav__link">
+  <a href="#slots-data-distribution" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication Client/Server Model
+      Slots: Data Distribution
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#in-depth-overview-of-getchanges-and-fullsync-requests" class="md-nav__link">
+  <a href="#shards-high-availability" class="md-nav__link">
     <span class="md-ellipsis">
-      In-Depth Overview of GetChanges and FullSync Requests
+      Shards: High Availability
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#replication-client" class="md-nav__link">
+  <a href="#centralized-cluster-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication Client
+      Centralized Cluster Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flexible-slot-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Flexible Slot Migration
     </span>
   </a>
   
@@ -372,26 +401,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../cluster/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Cluster
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -441,37 +450,46 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#understanding-the-sabledb-cluster" class="md-nav__link">
     <span class="md-ellipsis">
-      Overview
+      Understanding the SableDB Cluster
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
+    <nav class="md-nav" aria-label="Understanding the SableDB Cluster">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#replication-clientserver-model" class="md-nav__link">
+  <a href="#slots-data-distribution" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication Client/Server Model
+      Slots: Data Distribution
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#in-depth-overview-of-getchanges-and-fullsync-requests" class="md-nav__link">
+  <a href="#shards-high-availability" class="md-nav__link">
     <span class="md-ellipsis">
-      In-Depth Overview of GetChanges and FullSync Requests
+      Shards: High Availability
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#replication-client" class="md-nav__link">
+  <a href="#centralized-cluster-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Replication Client
+      Centralized Cluster Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flexible-slot-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Flexible Slot Migration
     </span>
   </a>
   
@@ -500,42 +518,18 @@
   
 
 
-  <h1>Replication</h1>
+  <h1>Cluster</h1>
 
-<h2 id="overview">Overview</h2>
-<p><code>SableDB</code> is compatible with a <code>1</code>:<code>N</code> replication setup, where one primary server replicates to multiple secondary servers.</p>
-<h3 id="replication-clientserver-model">Replication Client/Server Model</h3>
-<p>Upon initialization, <code>SableDB</code> creates a thread known internally as the <code>Replicator</code>, which listens on the <code>private_address</code>
-(by default it is set to: main port plus <code>1000</code>).</p>
-<p>For each new incoming replication client, a dedicated thread is spawned to handle the connection.</p>
-<p>The replication process follows this methodology:</p>
-<ol>
-<li>The replica requests a set of changes from the primary starting from a specific ID (initially set to <code>0</code>).</li>
-<li>If this is the first request from the replica to the primary, the primary responds with an error, indicating <code>FullSyncNotDone</code>.</li>
-<li>The replica then sends a <code>FullSync</code> request, prompting the primary to send the entire data store.</li>
-<li>Subsequently, the replica sends <code>GetChanges</code> requests and applies these changes locally. Any errors on either the replica or primary side trigger a <code>FullSync</code> request.</li>
-<li>Step 4 repeats indefinitely; any error causes the shard to revert to <code>FullSync</code>.</li>
-</ol>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>It is important to note that the primary server is stateless, meaning it does not track its replicas. The replica server is responsible for pulling data from the primary and keeping track of the next change sequence ID to pull.</p>
-</div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>If there are no changes to send to the replica, the primary delays the response as specified in the configuration file.</p>
-</div>
-<h3 id="in-depth-overview-of-getchanges-and-fullsync-requests">In-Depth Overview of <code>GetChanges</code> and <code>FullSync</code> Requests</h3>
-<p><code>SableDB</code> internally uses <code>RocksDB</code> APIs: <a href="https://github.com/facebook/rocksdb/wiki/Checkpoints"><code>create_checkpoint</code></a> and
-<a href="https://github.com/facebook/rocksdb/wiki/Replication-Helpers"><code>get_updates_since</code></a>.</p>
-<p>Additionally, <code>SableDB</code> maintains a file named <code>changes.seq</code> in the replica server's database folder, which stores the
-next transaction ID to be pulled from the primary.</p>
-<p>In case of any error, the replica switches to a <code>FullSync</code> request.</p>
-<p>The following sequence of events describes the data flow between the replica and the primary:</p>
-<p><img alt="Changes Sync" src="../../images/happy-flow-sync.svg" /></p>
-<p>When a <code>FullSync</code> is required, the flow changes to:</p>
-<p><img alt="Full Sync" src="../../images/fullsync.svg" /></p>
-<h3 id="replication-client">Replication Client</h3>
-<p>The replication instance of <code>SableDB</code> operates in <code>read-only</code> mode, meaning it does not allow the execution of any commands marked as <code>Write</code>.</p>
+<h3 id="understanding-the-sabledb-cluster">Understanding the SableDB Cluster</h3>
+<p><code>SableDB</code> organizes its data into a distributed cluster using a system of <strong>slots</strong> and <strong>shards</strong>.</p>
+<h4 id="slots-data-distribution">Slots: Data Distribution</h4>
+<p>Every key in <code>SableDB</code> is assigned a unique number between 0 and 16,383, determining its <strong>slot</strong>. Each node in the cluster is responsible for a specific range of these slots. If a client requests a key from a node that doesn't own its corresponding slot, the node returns a <code>MOVED</code> error, directing the client to the correct location.</p>
+<h4 id="shards-high-availability">Shards: High Availability</h4>
+<p>A <code>SableDB</code> cluster is built from one or more <strong>shards</strong>. Each shard consists of a <strong>primary node</strong> and can optionally include multiple <strong>replicas</strong> for redundancy. Ideally, slots are evenly distributed among these shards, with each managing <code>16384 / K</code> slots in a cluster of <code>K</code> shards. This architecture can theoretically support up to 16,000 primary nodes, accommodating substantial workloads.</p>
+<h4 id="centralized-cluster-management">Centralized Cluster Management</h4>
+<p><code>SableDB</code> employs a <strong>central database</strong> (itself a <code>SableDB</code> instance) to manage cluster communication and maintain its overall state. Each node periodically registers and updates its information (like owned slots and public address) in this central database, and also pulls information about other nodes from it.</p>
+<h4 id="flexible-slot-migration">Flexible Slot Migration</h4>
+<p><code>SableDB</code> provides commands for <strong>transferring slot ownership</strong> between shards. For example, to move slot <code>1234</code> from <code>Node_1</code> to <code>Node_2</code>, you'd simply connect to <code>Node_1</code> via <code>sabledb-cli</code> and execute <code>SLOT SENDTO &lt;NODE_ID&gt; 1234</code>. The command returns <code>OK</code> upon successful completion.</p>
 
 
 
