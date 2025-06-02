@@ -93,6 +93,7 @@ impl NodeTalkClient {
                     .slots()
                     .set(slot, false)?;
                 Server::state().persistent_state().save();
+                tracing::info!("Removed slot: {} from this node configuration", slot);
                 Ok(())
             }
             NodeResponse::NotOk(resp) => Err(SableError::OtherError(format!(

@@ -307,7 +307,7 @@ impl ServerCommands {
         Ok(())
     }
 
-    /// `SLOT SENDTO <IP> <PORT> <NUMBER>` Transfer slot ownership to `<IP>:<PORT>`.
+    /// `SLOT SENDTO <NODE_ID> <NUMBER>` Transfer slot ownership to `<IP>:<PORT>`.
     ///
     /// #### Phase 1: no locking are done
     ///
@@ -332,10 +332,9 @@ impl ServerCommands {
         command: Rc<ValkeyCommand>,
         response_buffer: &mut BytesMut,
     ) -> Result<(), SableError> {
-        check_args_count!(command, 5, response_buffer);
-        let slot_number = command_arg_at!(command, 4);
-        let ip = command_arg_at!(command, 2);
-        let port = command_arg_at!(command, 3);
+        check_args_count!(command, 4, response_buffer);
+        let target_node_id = command_arg_at!(command, 2);
+        let slot_number = command_arg_at!(command, 3);
         let builder = RespBuilderV2::default();
 
         // Make sure that slot passed is a u16
@@ -343,10 +342,28 @@ impl ServerCommands {
             builder_return_value_not_int!(builder, response_buffer);
         };
 
+        let target_node_id = String::from_utf8_lossy(target_node_id).to_string();
         // Make sure we got a valid port
-        let Some(port) = BytesMutUtils::parse::<u16>(port) else {
-            builder_return_value_not_int!(builder, response_buffer);
+        let Some(target_node) = client_state
+            .server_inner_state()
+            .persistent_state()
+            .node_by_id(&target_node_id)
+        else {
+            builder.error_string(
+                response_buffer,
+                format!("Could not find node with id: {}", target_node_id).as_str(),
+            );
+            return Ok(());
         };
+
+        if target_node
+            .inner()
+            .node_id()
+            .eq(&client_state.server_inner_state().persistent_state().id())
+        {
+            builder.error_string(response_buffer, "Target node and source node are the same");
+            return Ok(());
+        }
 
         // And it is in the valid range [0..SLOT_SIZE)
         if slot_number >= SLOT_SIZE {
@@ -355,10 +372,10 @@ impl ServerCommands {
 
         // During slot migration we lock the slot for read-only mode
         tracing::info!(
-            "Preparing to send slot {} to server: {:?}:{} ",
+            "Preparing to send slot {} to node: {} ({})",
             slot_number,
-            ip,
-            port,
+            target_node_id,
+            target_node.inner().private_address(),
         );
 
         let _lock =
@@ -397,29 +414,27 @@ impl ServerCommands {
         // We process the slot transfer on a separate thread
         let send_result_clone = send_result.clone();
         let event_clone = event.clone();
-        let ip_clone = ip.clone();
         let filepath_clone = filepath.clone();
         let db_clone = client_state.database().clone();
         let db_id_clone = client_state.database_id();
-
+        let remote_address = target_node.inner().private_address();
         let h = std::thread::spawn(move || {
             let mut node_talk_client = NodeTalkClient::default();
-            let remote_address = format!("{}:{}", String::from_utf8_lossy(&ip_clone), port);
             tracing::info!(
-                "Connecting to remote {} for sending slot {} content",
-                &remote_address,
-                slot_number
+                "Starting to move slot {} to its new home @{}",
+                slot_number,
+                &remote_address
             );
             if let Err(e) = node_talk_client.connect_with_timeout(&remote_address) {
                 send_result_clone.set_error_message(format!(
-                    "ERR failed to connect to remote: {}. {}",
+                    "ERR failed to connect to target node @{}. {}",
                     remote_address, e
                 ));
                 event_clone.set();
                 return;
             }
 
-            tracing::info!("Successfully connected to remote {}", remote_address);
+            tracing::info!("Successfully connected to target node @{}", remote_address);
 
             if let Err(e) = node_talk_client.send_slot_file(slot_number, &filepath_clone) {
                 tracing::error!(
@@ -457,7 +472,7 @@ impl ServerCommands {
                 }
             }
 
-            // And finally, purge the slot from the database
+            // Purge the slot from the database
             if let Err(e) = db_clone.delete_slot(db_id_clone, &Slot::with_slot(slot_number)) {
                 tracing::error!(
                     "Failed to delete slot '{}' from the database. {}",
@@ -465,6 +480,7 @@ impl ServerCommands {
                     e
                 );
             }
+
             event_clone.set();
             send_result_clone.set_success(true);
         });
@@ -485,6 +501,12 @@ impl ServerCommands {
                 .server_inner_state()
                 .slots()
                 .set(slot_number, false)?;
+
+            // Update the new owner for this slot
+            client_state
+                .server_inner_state()
+                .persistent_state()
+                .set_slot_owner(&target_node_id, slot_number)?;
 
             // Persist the change
             client_state.server_inner_state().persistent_state().save();

@@ -52,6 +52,7 @@ impl ClusterCommands {
 
         match sub_command.as_str() {
             "NODES" => Self::cluster_nodes(client_state, command, response_buffer).await,
+            "MYID" => Self::cluster_myid(client_state, command, response_buffer).await,
             _ => {
                 let builder = RespBuilderV2::default();
                 builder_return_syntax_error!(builder, response_buffer);
@@ -91,6 +92,19 @@ impl ClusterCommands {
         for line in output {
             builder.add_bulk_string(response_buffer, line.as_bytes());
         }
+        Ok(())
+    }
+
+    /// The CLUSTER MYID command returns the unique, auto-generated identifier that is associated with the connected
+    /// cluster node.
+    async fn cluster_myid(
+        client_state: Rc<ClientState>,
+        _command: Rc<ValkeyCommand>,
+        response_buffer: &mut BytesMut,
+    ) -> Result<(), SableError> {
+        let builder = RespBuilderV2::default();
+        let myid = client_state.server_inner_state().persistent_state().id();
+        builder.add_bulk_string(response_buffer, myid.as_bytes());
         Ok(())
     }
 }

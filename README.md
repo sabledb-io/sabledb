@@ -297,7 +297,9 @@ and visit this page again in couple of days
 | flushall | ✓ | ✓ |   |
 | flushdb | ✓ | ✓ |   |
 | dbsize | ✓ | ✓ | Data is accurate for the last scan performed on the storage |
-| slot <num> count | ✓ | ✓ | Extension command. Count the number of keys belongs to a slot |
+| slot count <SLOT_NUM> | ✓ | ✓ | An extension command. Count the number of keys belongs to a slot <SLOT_NUM>|
+| slot calc <KEY> | ✓ | ✓ | An extension command. Return the slot number for a given <KEY> |
+| slot sendto <NODE_ID> <SLOT_NUM> | ✓ | ✓ | An extension command. Send slot <SLOT_NUM> to node <NODE_ID> |
 
 ### Transaction
 
@@ -318,6 +320,12 @@ and visit this page again in couple of days
 | select | ✓ |✓ |   |
 | ping | ✓ |✓ |   |
 
+### Cluster commands
+
+| Command  | Supported  | Fully supported?  | Comment  |
+|---|---|---|---|
+| cluster nodes | ✓ |✓ |   |
+| cluster myid | ✓ |✓ |   |
 
 ### Locking commands
 
@@ -329,7 +337,7 @@ Note about the locks:
 
 - Locks are non recursive - if a client attempts to lock an already lock that it owns, it will get the `DEADLOCK` error
 - Lock names are using their own namespace. This is means that you can have a string (or any other type) with name "my-lock" and a lock with the same name
-- The LOCK command can be a blocking command if timeout is provided
+- The `LOCK` command can be a blocking command if timeout is provided
 - If a client terminates while holding a lock, the lock is released automatically by `SableDB`
 
 The syntax is:

@@ -30,12 +30,30 @@ macro_rules! ini_read {
 #[derive(Default, Clone)]
 pub struct NodeExt {
     pub inner: Node,
-    pub slots: Option<SlotBitmap>,
+    pub slots_bitmap: Option<SlotBitmap>,
 }
 
 impl NodeExt {
     pub fn inner(&self) -> &Node {
         &self.inner
+    }
+
+    pub fn id(&self) -> &String {
+        self.inner.node_id()
+    }
+
+    pub fn is_slot_set(&self, slot: u16) -> Result<bool, SableError> {
+        let Some(slots) = &self.slots_bitmap else {
+            return Ok(false);
+        };
+        slots.is_set(slot)
+    }
+
+    pub fn set_slot(&self, slot: u16, b: bool) -> Result<(), SableError> {
+        let Some(slots) = &self.slots_bitmap else {
+            return Ok(());
+        };
+        slots.set(slot, b)
     }
 }
 
@@ -51,7 +69,7 @@ impl From<&Node> for NodeExt {
     fn from(n: &Node) -> Self {
         NodeExt {
             inner: n.clone(),
-            slots: SlotBitmap::from_str(n.slots().as_str()).ok(),
+            slots_bitmap: SlotBitmap::from_str(n.slots().as_str()).ok(),
         }
     }
 }
@@ -66,8 +84,7 @@ struct ServerPersistentStateInner {
     config_file: String,
     shard_name: String,
     cluster_name: String,
-    cluster_primary_nodes: Vec<NodeExt>,
-    cluster_all_nodes: Vec<NodeExt>,
+    cluster_nodes: Vec<NodeExt>,
 }
 
 impl ServerPersistentStateInner {
@@ -84,9 +101,8 @@ impl ServerPersistentStateInner {
     /// link-state: The state of the link used for the node-to-node cluster bus. Use this link to communicate with the node. Can be connected or disconnected.
     /// slot: A hash slot number or range. Starting from argument number 9, but there may be up to 16384 entries in total (limit never reached). This is the list of hash slots served by this node. If the entry is just a number, it is parsed as such. If it is a range, it is in the form start-end, and means that the node is responsible for all the hash slots from start to end including the start and end values.
     pub fn cluster_nodes_lines(&self) -> Vec<Vec<(String, String)>> {
-        let mut result =
-            Vec::<Vec<(String, String)>>::with_capacity(self.cluster_primary_nodes.len());
-        for node in &self.cluster_all_nodes {
+        let mut result = Vec::<Vec<(String, String)>>::with_capacity(self.cluster_nodes.len());
+        for node in &self.cluster_nodes {
             let mut node_fields = Vec::<(String, String)>::default();
             node_fields.push(("id".into(), node.inner().node_id().clone()));
 
@@ -173,8 +189,7 @@ impl ServerPersistentState {
                 config_file: String::default(),
                 shard_name: String::default(),
                 cluster_name: String::default(),
-                cluster_primary_nodes: Vec::<NodeExt>::default(),
-                cluster_all_nodes: Vec::<NodeExt>::default(),
+                cluster_nodes: Vec::<NodeExt>::default(),
             })),
             slots,
         }
@@ -333,9 +348,9 @@ impl ServerPersistentState {
     /// Find and return the owner of `slot`
     pub fn node_owner_for_slot(&self, slot: u16) -> Result<Option<(String, u16)>, SableError> {
         let state = self.inner.read().expect(POISONED_MUTEX);
-        for node_info in &state.cluster_primary_nodes {
-            if let Some(slots) = &node_info.slots {
-                if slots.is_set(slot)? {
+        for node_info in &state.cluster_nodes {
+            if let Some(slots) = &node_info.slots_bitmap {
+                if node_info.inner().is_primary() && slots.is_set(slot)? {
                     let Ok(socket) = node_info.inner().public_address().parse::<SocketAddr>()
                     else {
                         return Err(SableError::InvalidArgument("Invalid public address".into()));
@@ -346,6 +361,32 @@ impl ServerPersistentState {
         }
         // Could not find the slot owner
         Ok(None)
+    }
+
+    /// Associate `slot` with `node_id`. This function clear the slot from all the nodes
+    /// and only set it to the node identified by `node_id`.
+    pub fn set_slot_owner(&self, node_id: &String, slot: u16) -> Result<(), SableError> {
+        let state = self.inner.read().expect(POISONED_MUTEX);
+        // Locate the new owner
+        let new_owner = state
+            .cluster_nodes
+            .iter()
+            .find(|node_ext| node_ext.id().eq(node_id))
+            .ok_or(SableError::NotFound)?;
+
+        if new_owner.is_slot_set(slot)? {
+            // nothing to be done
+            return Ok(());
+        }
+
+        // Clear the slot from all the nodes
+        state.cluster_nodes.iter().for_each(|node| {
+            let _ = node.set_slot(slot, false);
+        });
+
+        // and enable it in the
+        new_owner.set_slot(slot, true)?;
+        Ok(())
     }
 
     /// Initialise the node ID by loading or creating it
@@ -460,21 +501,8 @@ impl ServerPersistentState {
 
     /// Update the cluster nodes (this will update both primaries & all nodes)
     pub fn set_cluster_nodes(&self, nodes: Vec<NodeExt>) {
-        let primary_nodes: Vec<NodeExt> = nodes
-            .iter()
-            .filter(|n| n.inner.is_primary())
-            .cloned()
-            .collect();
-
-        tracing::debug!("Cluster primary nodes: {:#?}", primary_nodes);
-
-        self.inner
-            .write()
-            .expect(POISONED_MUTEX)
-            .cluster_primary_nodes = primary_nodes;
-
-        tracing::debug!("All cluster nodes: {:#?}", nodes);
-        self.inner.write().expect(POISONED_MUTEX).cluster_all_nodes = nodes;
+        tracing::debug!("Cluster nodes updated to: {:#?}", nodes);
+        self.inner.write().expect(POISONED_MUTEX).cluster_nodes = nodes;
     }
 
     /// Prepare detailed information about the cluster nodes, suitable for producing output
@@ -484,6 +512,22 @@ impl ServerPersistentState {
             .read()
             .expect(POISONED_MUTEX)
             .cluster_nodes_lines()
+    }
+
+    /// Return the node that matches `node_id`
+    pub fn node_by_id(&self, node_id: &String) -> Option<NodeExt> {
+        self.inner
+            .read()
+            .expect(POISONED_MUTEX)
+            .cluster_nodes
+            .iter()
+            .find_map(|node| {
+                if node.inner().node_id().eq(node_id) {
+                    Some(node.clone())
+                } else {
+                    None
+                }
+            })
     }
 
     fn file_path_from_dir(options: Arc<RwLock<ServerOptions>>) -> PathBuf {

@@ -825,10 +825,7 @@ mod test {
         let res = shard_3_conn.set::<&str, &str, redis::Value>("a", "b");
         assert_eq!(res.unwrap(), redis::Value::Okay);
 
-        let _ = shard_1_conn
-            .send_packed_command("cluster nodes\r\n".as_bytes())
-            .unwrap();
-        let res = shard_1_conn.recv_response().unwrap();
+        let res = execute_command(&mut shard_1_conn, "cluster nodes");
         match res {
             redis::Value::Array(arr) => {
                 assert_eq!(arr.len(), 6);
@@ -847,5 +844,77 @@ mod test {
                 panic!("Expected array of size 9");
             }
         }
+    }
+
+    fn execute_command(connection: &mut redis::Connection, command: &str) -> redis::Value {
+        let mut command = command.to_string();
+        command.push_str("\r\n");
+        let _ = connection.send_packed_command(command.as_bytes()).unwrap();
+        connection.recv_response().unwrap()
+    }
+
+    fn get_node_id(connection: &mut redis::Connection) -> String {
+        let res = execute_command(connection, "cluster myid");
+        let redis::Value::BulkString(node_id) = res else {
+            panic!("Expected for a node-id");
+        };
+        String::from_utf8_lossy(&node_id).to_string()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    #[ntest_timeout::timeout(300_000)] // 5 minutes
+    fn test_slot_migration() {
+        let cluster = match Cluster::new(2, 2, "test_slot_migration") {
+            Ok(cluster) => cluster,
+            Err(e) => {
+                panic!("Could not create cluster. {}", e);
+            }
+        };
+        println!("{:#?}", cluster);
+
+        assert_eq!(cluster.shards.len(), 2);
+        for shard in &cluster.shards {
+            assert!(shard.is_stabilised());
+        }
+
+        let mut shard_1_conn = cluster.connection_to_shard(0).unwrap();
+        let mut shard_2_conn = cluster.connection_to_shard(1).unwrap();
+
+        let target_node_id = get_node_id(&mut shard_1_conn);
+        let source_node_id = get_node_id(&mut shard_2_conn);
+
+        // put "a" (slot: 15495) - this one should succeed
+        let res = shard_2_conn.set::<&str, &str, redis::Value>("a", "b");
+        assert_eq!(res.unwrap(), redis::Value::Okay);
+
+        // this one should fail with a MOVED error
+        let res = shard_1_conn.set::<&str, &str, redis::Value>("a", "b");
+        assert!(res.is_err_and(|e| e.kind() == redis::ErrorKind::Moved));
+
+        println!(
+            "Sending slot 15495 from: {} -> {}",
+            source_node_id, target_node_id
+        );
+
+        let res = execute_command(
+            &mut shard_2_conn,
+            format!("slot sendto {} 15495", target_node_id).as_str(),
+        );
+        assert_eq!(res, redis::Value::Okay);
+
+        // We now expect "MOVED" with the address of the "shard1" primary address
+        let res = shard_2_conn.set::<&str, &str, redis::Value>("a", "b");
+        println!("set response: {:?}", res);
+        let shard_1_primary_node_address = cluster.shard_primary(0).unwrap().borrow().address();
+        assert!(res.is_err_and(|e| e.kind() == redis::ErrorKind::Moved
+            && e.detail().unwrap().contains(&shard_1_primary_node_address)));
+
+        // This time, it should succeed
+        let res = shard_1_conn.set::<&str, &str, redis::Value>("a", "c");
+        assert_eq!(res.unwrap(), redis::Value::Okay);
+
+        let res = shard_1_conn.get::<&str, redis::Value>("a");
+        assert_eq!(res.unwrap(), redis::Value::BulkString([b'c'].to_vec()));
     }
 }
