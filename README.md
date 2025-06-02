@@ -15,9 +15,24 @@ any Valkey client, up to 64K databases support, asynchronous replication using t
 
 `SableDB` is supported on all major OS: `Linux`, `macOS` and `Windows`
 
-### Linux /macOS
+### macOS
+
+Make sure you have `clang` installed and then:
 
 ```bash
+git clone https://github.com/sabledb-io/sabledb.git
+cd sabledb
+git submodule update --init
+cargo build --release
+cargo test --release
+```
+
+### Linux (Ubuntu)
+
+```bash
+# RocksDB requires clang
+sudo apt install -y clang
+
 git clone https://github.com/sabledb-io/sabledb.git
 cd sabledb
 git submodule update --init
