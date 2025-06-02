@@ -179,6 +179,8 @@ pub enum ValkeyCommandName {
     // Lock commands
     Lock,
     Unlock,
+    // Cluster commands
+    Cluster,
     NotSupported(String),
 }
 
@@ -1401,6 +1403,12 @@ impl Default for CommandsManager {
             (
                 "slot",
                 CommandMetadata::new(ValkeyCommandName::Slot)
+                    .read_only()
+                    .no_transaction(),
+            ),
+            (
+                "cluster",
+                CommandMetadata::new(ValkeyCommandName::Cluster)
                     .read_only()
                     .no_transaction(),
             ),

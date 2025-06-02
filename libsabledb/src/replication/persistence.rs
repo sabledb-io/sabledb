@@ -689,6 +689,30 @@ impl Persistence {
         Ok(result)
     }
 
+    /// Retrieve all the nodes for the current cluster from the database
+    pub fn cluster_nodes(&self, cluster_name: &String) -> Result<Vec<Node>, SableError> {
+        let mut cg = ConnectionGuard::default();
+        let shards = self.cluster_shards(cluster_name)?;
+
+        // Load the nodes
+        let mut all_keys = Vec::<String>::default();
+        for shard in &shards {
+            let mut node_keys: Vec<String> = shard
+                .nodes
+                .iter()
+                .map(|node_id| Self::node_key(&shard.name, node_id))
+                .collect();
+            all_keys.append(&mut node_keys);
+        }
+
+        let result = DB_CONN
+            .with_borrow_mut(|db_client| self.load_nodes_multi(db_client, &all_keys))
+            .inspect(|_| {
+                cg.mark_success();
+            })?;
+        Ok(result)
+    }
+
     /// Find the primary node of a shard
     pub fn shard_primary(&self, shard: &Shard) -> Result<ShardPrimaryResult, SableError> {
         let mut cg = ConnectionGuard::default();

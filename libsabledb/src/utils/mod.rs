@@ -669,6 +669,14 @@ pub fn choose_multiple_values(
     Ok(chosen)
 }
 
+/// Generate a 40 chars UUID
+pub fn create_uuid() -> String {
+    let a = uuid::Uuid::new_v4().simple().to_string();
+    let mut b = uuid::Uuid::new_v4().simple().to_string();
+    let _ = b.split_off(8);
+    format!("{}{}", a, b)
+}
+
 #[derive(Debug)]
 pub struct IpPort {
     pub ip: String,

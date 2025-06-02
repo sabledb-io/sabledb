@@ -2,7 +2,7 @@ use crate::{
     metadata::{Bookkeeping, KeyPrefix, KeyType, ValueType},
     replication::{ClusterManager, NodeBuilder},
     server::telemetry::Telemetry,
-    server::NodeInfo,
+    server::NodeExt,
     storage::{DbWriteCache, GenericDb, StorageMetadata},
     utils::ticker::{TickInterval, Ticker},
     utils::StopWatch,
@@ -449,8 +449,8 @@ impl Cron {
             return Ok(());
         }
 
-        let cluster_primaries = match cm.get_cluster_primaries() {
-            Ok(Some(cluster_primaries)) => cluster_primaries,
+        let cluster_nodes = match cm.get_cluster_nodes() {
+            Ok(Some(cluster_nodes)) => cluster_nodes,
             Ok(None) => {
                 tracing::info!("Could not locate primaries for cluster");
                 return Ok(());
@@ -460,10 +460,17 @@ impl Cron {
                 return Ok(());
             }
         };
+
         // Update the node's persistent state with the slots read from the database
-        // we need to construct NodeInfo from the primaries and update the state
-        let nodes: Vec<NodeInfo> = cluster_primaries.iter().map(NodeInfo::from).collect();
-        Server::state().persistent_state().set_cluster_nodes(&nodes);
+        // we need to construct NodeExt from the primaries and update the state
+        let cluster_nodes: Vec<NodeExt> = cluster_nodes
+            .iter()
+            .map(NodeExt::from)
+            .collect();
+
+        Server::state()
+            .persistent_state()
+            .set_cluster_nodes(cluster_nodes);
         Ok(())
     }
 

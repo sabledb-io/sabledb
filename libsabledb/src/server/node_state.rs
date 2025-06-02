@@ -1,6 +1,8 @@
 use crate::{
-    file_utils, replication::ServerRole, server::SlotBitmap, CommandLineArgs, SableError,
-    ServerOptions,
+    file_utils,
+    replication::{Node, ServerRole},
+    server::SlotBitmap,
+    utils, CommandLineArgs, SableError, ServerOptions,
 };
 use ini::Ini;
 use std::net::SocketAddr;
@@ -25,48 +27,35 @@ macro_rules! ini_read {
     }};
 }
 
-#[allow(dead_code)]
 #[derive(Default, Clone)]
-pub struct NodeInfo {
-    node_id: String,
-    /// The node's private address
-    private_address: String,
-    /// The node's public address (this is the address on which clients are connected to)
-    public_address: String,
-    /// The slots owned by this node
-    slots: Option<SlotBitmap>,
+pub struct NodeExt {
+    pub inner: Node,
+    pub slots: Option<SlotBitmap>,
 }
 
-impl std::fmt::Display for NodeInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let slots_str = if let Some(slots) = &self.slots {
-            slots.to_string()
-        } else {
-            "".to_string()
-        };
-        write!(
-            f,
-            "{}, {}, {}, {}",
-            self.node_id, self.public_address, self.private_address, slots_str
-        )
+impl NodeExt {
+    pub fn inner(&self) -> &Node {
+        &self.inner
     }
 }
 
-fn node_info_vec_to_string(nodes: &[NodeInfo]) -> String {
-    let v: Vec<String> = nodes.iter().map(|n| format!("{{ {} }}", n)).collect();
-    v.join(",")
+impl std::fmt::Debug for NodeExt {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("NodeExt")
+            .field("node", &self.inner)
+            .finish()
+    }
 }
 
-impl From<&crate::replication::Node> for NodeInfo {
-    fn from(n: &crate::replication::Node) -> Self {
-        NodeInfo {
-            node_id: n.node_id().clone(),
-            private_address: n.private_address().clone(),
-            public_address: n.public_address().clone(),
+impl From<&Node> for NodeExt {
+    fn from(n: &Node) -> Self {
+        NodeExt {
+            inner: n.clone(),
             slots: SlotBitmap::from_str(n.slots().as_str()).ok(),
         }
     }
 }
+
 /// This struct represents the content of the `NODE` configuration file
 #[derive(Default)]
 struct ServerPersistentStateInner {
@@ -77,7 +66,88 @@ struct ServerPersistentStateInner {
     config_file: String,
     shard_name: String,
     cluster_name: String,
-    cluster_nodes: Vec<NodeInfo>,
+    cluster_primary_nodes: Vec<NodeExt>,
+    cluster_all_nodes: Vec<NodeExt>,
+}
+
+impl ServerPersistentStateInner {
+    /// Prepare detailed information about the cluster nodes, suitable for producing output
+    /// for the "CLUSTER NODES" command
+    /// id: The node ID, a 40-character globally unique string generated when a node is created and never changed again (unless CLUSTER RESET HARD is used).
+    /// ip:port@cport: The node address that clients should contact to run queries, along with the used cluster bus port. :0@0 can be expected when the address is no longer known for this node ID, hence flagged with noaddr.
+    /// hostname: A human readable string that can be configured via the cluster-annouce-hostname setting. The max length of the string is 256 characters, excluding the null terminator. The name can contain ASCII alphanumeric characters, '-', and '.' only.
+    /// flags: A list of comma separated flags: myself, master, slave, fail?, fail, handshake, noaddr, nofailover, noflags. Flags are explained below.
+    /// master: If the node is a replica, and the primary is known, the primary node ID, otherwise the "-" character.
+    /// ping-sent: Unix time at which the currently active ping was sent, or zero if there are no pending pings, in milliseconds.
+    /// pong-recv: Unix time the last pong was received, in milliseconds.
+    /// config-epoch: The configuration epoch (or version) of the current node (or of the current primary if the node is a replica). Each time there is a failover, a new, unique, monotonically increasing configuration epoch is created. If multiple nodes claim to serve the same hash slots, the one with the higher configuration epoch wins.
+    /// link-state: The state of the link used for the node-to-node cluster bus. Use this link to communicate with the node. Can be connected or disconnected.
+    /// slot: A hash slot number or range. Starting from argument number 9, but there may be up to 16384 entries in total (limit never reached). This is the list of hash slots served by this node. If the entry is just a number, it is parsed as such. If it is a range, it is in the form start-end, and means that the node is responsible for all the hash slots from start to end including the start and end values.
+    pub fn cluster_nodes_lines(&self) -> Vec<Vec<(String, String)>> {
+        let mut result =
+            Vec::<Vec<(String, String)>>::with_capacity(self.cluster_primary_nodes.len());
+        for node in &self.cluster_all_nodes {
+            let mut node_fields = Vec::<(String, String)>::default();
+            node_fields.push(("id".into(), node.inner().node_id().clone()));
+
+            let private_port = node
+                .inner()
+                .private_address()
+                .split(':')
+                .map(|s| s.into())
+                .collect::<Vec<String>>()
+                .get(1)
+                .unwrap_or(&String::default())
+                .parse::<u16>()
+                .unwrap_or(0);
+
+            let ip_port_cport = format!("{}@{}", &node.inner().public_address(), private_port);
+            node_fields.push(("ip:port@cport,hostname".into(), ip_port_cport));
+
+            let master = if node.inner().is_replica() {
+                node.inner().primary_node_id().clone()
+            } else {
+                "-".into()
+            };
+
+            node_fields.push(("flags".into(), self.node_flags(node)));
+            node_fields.push(("master".into(), master));
+            node_fields.push(("ping-sent".into(), "0".into()));
+            node_fields.push(("pong-recv".into(), "0".into()));
+            node_fields.push((
+                "config-epoch".into(),
+                node.inner().last_txn_id().to_string(),
+            ));
+            node_fields.push(("link-state".into(), "connected".into()));
+
+            let slots = node
+                .inner()
+                .slots()
+                .replace(",", " ")
+                .trim_end()
+                .to_string();
+            node_fields.push(("slots".into(), slots));
+            result.push(node_fields);
+        }
+        result
+    }
+
+    /// A list of comma separated flags: myself, master, slave, fail?, fail, handshake, noaddr, nofailover, noflags.
+    fn node_flags(&self, node: &NodeExt) -> String {
+        let current_node_id = &self.node_id;
+        let mut flags: String = if current_node_id.eq(node.inner().node_id()) {
+            "myself,".into()
+        } else {
+            "".into()
+        };
+
+        if node.inner().is_replica() {
+            flags.push_str("slave");
+        } else {
+            flags.push_str("master");
+        }
+        flags
+    }
 }
 
 #[derive(Clone, Default)]
@@ -96,14 +166,15 @@ impl ServerPersistentState {
         slots.set_all(); // by default, this node owns all the slots
         ServerPersistentState {
             inner: Arc::new(RwLock::new(ServerPersistentStateInner {
-                node_id: uuid::Uuid::new_v4().to_string(),
+                node_id: utils::create_uuid(),
                 primary_node_id: String::default(),
                 role: ROLE_PRIMARY,
                 private_primary_address: String::default(),
                 config_file: String::default(),
                 shard_name: String::default(),
                 cluster_name: String::default(),
-                cluster_nodes: Vec::<NodeInfo>::default(),
+                cluster_primary_nodes: Vec::<NodeExt>::default(),
+                cluster_all_nodes: Vec::<NodeExt>::default(),
             })),
             slots,
         }
@@ -262,10 +333,11 @@ impl ServerPersistentState {
     /// Find and return the owner of `slot`
     pub fn node_owner_for_slot(&self, slot: u16) -> Result<Option<(String, u16)>, SableError> {
         let state = self.inner.read().expect(POISONED_MUTEX);
-        for node_info in &state.cluster_nodes {
+        for node_info in &state.cluster_primary_nodes {
             if let Some(slots) = &node_info.slots {
                 if slots.is_set(slot)? {
-                    let Ok(socket) = node_info.public_address.parse::<SocketAddr>() else {
+                    let Ok(socket) = node_info.inner().public_address().parse::<SocketAddr>()
+                    else {
                         return Err(SableError::InvalidArgument("Invalid public address".into()));
                     };
                     return Ok(Some((socket.ip().to_string(), socket.port())));
@@ -297,12 +369,7 @@ impl ServerPersistentState {
         // read the values from the config file
         {
             // replace defaults with values from the disk
-            let node_id = ini_read!(
-                ini_file,
-                "general",
-                "node_id",
-                uuid::Uuid::new_v4().to_string()
-            );
+            let node_id = ini_read!(ini_file, "general", "node_id", utils::create_uuid());
             self.set_id(node_id);
 
             // slots ownership
@@ -367,7 +434,7 @@ impl ServerPersistentState {
     pub fn save(&self) {
         if self.id().is_empty() {
             // create new node ID if needed
-            self.set_id(uuid::Uuid::new_v4().to_string());
+            self.set_id(utils::create_uuid());
         }
 
         let filepath = self.inner.read().expect(POISONED_MUTEX).config_file.clone();
@@ -391,11 +458,32 @@ impl ServerPersistentState {
         tracing::info!("Successfully updated file: {}", filepath);
     }
 
-    /// Update the cluster nodes
-    pub fn set_cluster_nodes(&self, nodes: &[NodeInfo]) {
-        let nodes: Vec<NodeInfo> = nodes.to_vec();
-        tracing::debug!("Cluster nodes: [{}]", node_info_vec_to_string(&nodes));
-        self.inner.write().expect(POISONED_MUTEX).cluster_nodes = nodes;
+    /// Update the cluster nodes (this will update both primaries & all nodes)
+    pub fn set_cluster_nodes(&self, nodes: Vec<NodeExt>) {
+        let primary_nodes: Vec<NodeExt> = nodes
+            .iter()
+            .filter(|n| n.inner.is_primary())
+            .cloned()
+            .collect();
+
+        tracing::debug!("Cluster primary nodes: {:#?}", primary_nodes);
+
+        self.inner
+            .write()
+            .expect(POISONED_MUTEX)
+            .cluster_primary_nodes = primary_nodes;
+
+        tracing::debug!("All cluster nodes: {:#?}", nodes);
+        self.inner.write().expect(POISONED_MUTEX).cluster_all_nodes = nodes;
+    }
+
+    /// Prepare detailed information about the cluster nodes, suitable for producing output
+    /// for the "CLUSTER NODES" command
+    pub fn cluster_nodes_lines(&self) -> Vec<Vec<(String, String)>> {
+        self.inner
+            .read()
+            .expect(POISONED_MUTEX)
+            .cluster_nodes_lines()
     }
 
     fn file_path_from_dir(options: Arc<RwLock<ServerOptions>>) -> PathBuf {

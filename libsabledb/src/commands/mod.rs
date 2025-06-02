@@ -613,6 +613,7 @@ pub enum ClientNextAction {
 
 mod base_commands;
 mod client_commands;
+mod cluster_commands;
 mod command;
 mod commander;
 mod generic_commands;
@@ -629,6 +630,7 @@ mod zset_commands;
 pub use crate::commands::strings::Strings;
 pub use base_commands::BaseCommands;
 pub use client_commands::ClientCommands;
+pub use cluster_commands::ClusterCommands;
 pub use command::commands_manager;
 pub use command::ValkeyCommand;
 pub use commander::{CommandMetadata, CommandsManager, ValkeyCommandName};

@@ -4,9 +4,9 @@ use crate::{
     server::{ClientState, Telemetry},
     utils::RequestParser,
     utils::RespBuilderV2,
-    ClientCommands, GenericCommands, HashCommands, ListCommands, LockCommands, ParserError,
-    SableError, ServerCommands, ServerState, SetCommands, StorageAdapter, StringCommands,
-    TransactionCommands, ValkeyCommand, ValkeyCommandName, ZSetCommands,
+    ClientCommands, ClusterCommands, GenericCommands, HashCommands, ListCommands, LockCommands,
+    ParserError, SableError, ServerCommands, ServerState, SetCommands, StorageAdapter,
+    StringCommands, TransactionCommands, ValkeyCommand, ValkeyCommandName, ZSetCommands,
 };
 
 use bytes::BytesMut;
@@ -829,6 +829,23 @@ impl Client {
             | ValkeyCommandName::Zscore
             | ValkeyCommandName::Zscan => {
                 match ZSetCommands::handle_command(client_state.clone(), command, tx).await? {
+                    HandleCommandResult::Blocked((
+                        rx,
+                        duration,
+                        timeout_response,
+                        try_again_response,
+                    )) => {
+                        ClientNextAction::Wait((rx, duration, timeout_response, try_again_response))
+                    }
+                    HandleCommandResult::ResponseSent => ClientNextAction::NoAction,
+                    HandleCommandResult::ResponseBufferUpdated(buffer) => {
+                        Self::send_response(tx, &buffer, client_state.id()).await?;
+                        ClientNextAction::NoAction
+                    }
+                }
+            }
+            ValkeyCommandName::Cluster => {
+                match ClusterCommands::handle_command(client_state.clone(), command, tx).await? {
                     HandleCommandResult::Blocked((
                         rx,
                         duration,

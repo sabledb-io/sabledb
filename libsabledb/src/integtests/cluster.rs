@@ -407,24 +407,24 @@ impl std::fmt::Debug for Cluster {
 }
 
 impl Cluster {
-    /// Create and start a new cluster with `shard_count` shards, each shard with `replicas_count` replicas.
-    /// The slots are split between the shards evenly
+    /// Create and start a new cluster with `num_of_shards` shards, each shard with `shard_size` instances
+    /// (`shard_size - 1` replicas). The slots are split between the shards evenly
     pub fn new(
-        shard_count: usize,
-        replicas_count: usize,
+        num_of_shards: usize,
+        shard_size: usize,
         cluster_name: &str,
     ) -> Result<Self, SableError> {
         let cluster_db_instance = create_db_instance(cluster_name, SlotBitmap::new_all_set())?;
-        let mut shards = Vec::<Shard>::with_capacity(shard_count);
+        let mut shards = Vec::<Shard>::with_capacity(num_of_shards);
 
         let range: Range<u16> = 0..16384; // 0-16384 (excluding)
-        let it = range.divide_evenly_into(shard_count);
+        let it = range.divide_evenly_into(num_of_shards);
         let mut shard_counter = 0usize;
         for slot_range in it {
             let shard_slots = SlotBitmap::try_from(&slot_range)?;
             let shard = start_shard(
                 cluster_db_instance.clone(),
-                replicas_count,
+                shard_size,
                 cluster_name,
                 format!("{}.shard-{}", cluster_name, shard_counter).as_str(),
                 shard_slots,
@@ -824,5 +824,28 @@ mod test {
         // We expect "OK"
         let res = shard_3_conn.set::<&str, &str, redis::Value>("a", "b");
         assert_eq!(res.unwrap(), redis::Value::Okay);
+
+        let _ = shard_1_conn
+            .send_packed_command("cluster nodes\r\n".as_bytes())
+            .unwrap();
+        let res = shard_1_conn.recv_response().unwrap();
+        match res {
+            redis::Value::Array(arr) => {
+                assert_eq!(arr.len(), 6);
+                for line in arr {
+                    match line {
+                        redis::Value::BulkString(line) => {
+                            println!("{}", String::from_utf8_lossy(&line));
+                        }
+                        _ => {
+                            panic!("Expected string");
+                        }
+                    }
+                }
+            }
+            _ => {
+                panic!("Expected array of size 9");
+            }
+        }
     }
 }
