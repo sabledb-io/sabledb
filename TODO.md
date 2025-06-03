@@ -2,6 +2,7 @@
 
 ## General (ordered by priority)
 
+- JoinShard: when joining a shard, make sure that the node joins the cluster as well
 - Write a complete example no how to setup a cluster using `SableDB`
 - Support multiple concurrent slot migration: "SLOT SENDTO <NODE_ID> [SLOT1, SLOT2...]"
 - Add more "cluster" commands that make sense
