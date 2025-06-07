@@ -142,6 +142,9 @@ pub trait StorageTrait {
         limits: Rc<GetChangesLimits>,
     ) -> Result<StorageUpdates, SableError>;
 
+    /// Apply storage updates into this database
+    fn apply_storage_updates(&self, storage_updates: &StorageUpdates) -> Result<(), SableError>;
+
     /// The sequence number of the most recent transaction.
     fn latest_sequence_number(&self) -> Result<u64, SableError>;
 

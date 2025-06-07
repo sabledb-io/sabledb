@@ -91,6 +91,8 @@ pub enum KeyType {
     Metadata = 7,
     /// Lock data type
     Lock = 8,
+    /// Custom delete_range marker
+    DeleteRange = 9,
 }
 
 impl Default for KeyType {
@@ -125,6 +127,7 @@ impl FromRaw for KeyType {
             6 => Some(Self::SetItem),
             7 => Some(Self::Metadata),
             8 => Some(Self::Lock),
+            9 => Some(Self::DeleteRange),
             _ => None,
         }
     }

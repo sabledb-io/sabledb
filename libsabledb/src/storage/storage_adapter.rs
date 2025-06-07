@@ -1,5 +1,6 @@
 use crate::{
     replication::StorageUpdates,
+    storage::StorageUpdatesRecord,
     storage::{storage_trait::IteratorAdapter, GetChangesLimits, StorageTrait},
     utils, StorageRocksDb,
 };
@@ -173,75 +174,53 @@ impl StorageOpenParams {
 #[derive(Debug, Default, Clone)]
 pub struct BatchUpdate {
     /// List of keys to delete
-    delete_keys: Option<Vec<BytesMut>>,
-    /// List of keys to put
-    put_keys: Option<Vec<(BytesMut, BytesMut)>>,
+    items: Vec<StorageUpdatesRecord>,
 }
 
 impl BatchUpdate {
     pub fn with_capacity(count: usize) -> Self {
-        let delete_keys = Some(Vec::<BytesMut>::with_capacity(count));
-        let put_keys = Some(Vec::<(BytesMut, BytesMut)>::with_capacity(count));
-        BatchUpdate {
-            delete_keys,
-            put_keys,
-        }
+        let items = Vec::<StorageUpdatesRecord>::with_capacity(count.saturating_mul(2));
+        BatchUpdate { items }
+    }
+
+    pub fn items(&self) -> &Vec<StorageUpdatesRecord> {
+        &self.items
+    }
+
+    pub fn push(&mut self, item: StorageUpdatesRecord) {
+        self.items.push(item);
     }
 
     pub fn put(&mut self, key: BytesMut, value: BytesMut) {
-        if self.put_keys.is_none() {
-            self.put_keys = Some(Vec::<(BytesMut, BytesMut)>::new());
-        }
-        let Some(put_key) = &mut self.put_keys else {
-            unreachable!();
-        };
-        put_key.push((key, value));
+        self.items.push(StorageUpdatesRecord::Put { key, value });
     }
 
     pub fn put_tuple(&mut self, key_value: (BytesMut, BytesMut)) {
-        if self.put_keys.is_none() {
-            self.put_keys = Some(Vec::<(BytesMut, BytesMut)>::new());
-        }
-        let Some(put_key) = &mut self.put_keys else {
-            unreachable!();
-        };
-        put_key.push(key_value);
+        self.items.push(StorageUpdatesRecord::Put {
+            key: key_value.0,
+            value: key_value.1,
+        });
     }
 
     pub fn delete(&mut self, key: BytesMut) {
-        if self.delete_keys.is_none() {
-            self.delete_keys = Some(Vec::<BytesMut>::new());
-        }
-        let Some(delete_keys) = &mut self.delete_keys else {
-            unreachable!();
-        };
-        delete_keys.push(key);
-    }
-
-    pub fn items_to_put(&self) -> Option<&Vec<(BytesMut, BytesMut)>> {
-        self.put_keys.as_ref()
-    }
-
-    pub fn keys_to_delete(&self) -> Option<&Vec<BytesMut>> {
-        self.delete_keys.as_ref()
+        self.items.push(StorageUpdatesRecord::Del { key });
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.items.is_empty()
     }
 
     /// Return a list of keys to be modified by this batch
     pub fn modified_keys(&self) -> Vec<&BytesMut> {
         let mut keys = Vec::<&BytesMut>::with_capacity(self.len());
-        if let Some(put_keys) = &self.put_keys {
-            for (k, _) in put_keys {
-                keys.push(k);
-            }
-        }
-
-        if let Some(delete_keys) = &self.delete_keys {
-            for k in delete_keys {
-                keys.push(k);
+        for item in &self.items {
+            match item {
+                StorageUpdatesRecord::Put { key, value: _ } => {
+                    keys.push(key);
+                }
+                StorageUpdatesRecord::Del { key } => {
+                    keys.push(key);
+                }
             }
         }
 
@@ -251,23 +230,11 @@ impl BatchUpdate {
     }
 
     pub fn len(&self) -> usize {
-        let mut total_items = if let Some(delete_keys) = &self.delete_keys {
-            delete_keys.len()
-        } else {
-            0
-        };
-
-        total_items = total_items.saturating_add(if let Some(put_keys) = &self.put_keys {
-            put_keys.len()
-        } else {
-            0
-        });
-        total_items
+        self.items.len()
     }
 
     pub fn clear(&mut self) {
-        self.put_keys = None;
-        self.delete_keys = None;
+        self.items.clear();
     }
 }
 
@@ -353,15 +320,14 @@ impl TxnWriteCache {
 
     /// Apply `batch` into this txn
     pub fn apply_batch(&self, batch: &BatchUpdate) -> Result<(), SableError> {
-        if let Some(delete_keys) = batch.keys_to_delete() {
-            for key in delete_keys {
-                self.delete(key)?;
-            }
-        }
-
-        if let Some(put_items) = batch.items_to_put() {
-            for (key, val) in put_items {
-                self.put(key, val.clone())?;
+        for item in batch.items() {
+            match item {
+                StorageUpdatesRecord::Put { key, value } => {
+                    self.put(key, value.clone())?;
+                }
+                StorageUpdatesRecord::Del { key } => {
+                    self.delete(key)?;
+                }
             }
         }
         Ok(())
@@ -589,6 +555,16 @@ impl StorageAdapter {
             return Err(SableError::OtherError("Database is not opened".to_string()));
         };
         db.storage_updates_since(sequence_number, limits)
+    }
+
+    pub fn apply_storage_updates(
+        &self,
+        storage_updates: &StorageUpdates,
+    ) -> Result<(), SableError> {
+        let Some(db) = &self.store else {
+            return Err(SableError::OtherError("Database is not opened".to_string()));
+        };
+        db.apply_storage_updates(storage_updates)
     }
 
     /// The sequence number of the most recent transaction.

@@ -151,10 +151,12 @@ impl<'a> DbWriteCache<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{storage::PutFlags, StorageOpenParams};
+    use crate::{
+        storage::{PutFlags, StorageUpdatesRecord},
+        StorageOpenParams,
+    };
     use std::fs;
     use std::path::PathBuf;
-
     fn open_store(name: &str) -> Result<StorageAdapter, SableError> {
         let _ = std::fs::create_dir_all("tests");
         let db_path = PathBuf::from(format!("tests/{}.db", name));
@@ -221,8 +223,14 @@ mod tests {
         let updates = db_cache.to_write_batch();
         assert_eq!(updates.len(), 10);
 
-        assert_eq!(updates.items_to_put().unwrap().len(), 10);
-        assert!(updates.keys_to_delete().is_none());
+        for item in updates.items() {
+            match item {
+                StorageUpdatesRecord::Put { key: _, value: _ } => {}
+                other => {
+                    assert!(false, "Expected item of type Put. Got {:?}", other);
+                }
+            }
+        }
     }
 
     #[test]
@@ -265,14 +273,14 @@ mod tests {
         let updates = db_cache.to_write_batch();
         assert_eq!(updates.len(), 50);
 
-        assert!(updates.items_to_put().is_none());
-
-        let keys = updates.keys_to_delete().unwrap();
-        assert_eq!(keys.len(), 50);
-
         // Make sure that all the keys that should be deleted are included in the batch update
-        for key in keys {
-            assert!(expected_keys.remove(key));
+        for item in updates.items() {
+            match item {
+                StorageUpdatesRecord::Put { key: _, value: _ } => {}
+                StorageUpdatesRecord::Del { key } => {
+                    expected_keys.remove(key);
+                }
+            }
         }
         assert!(expected_keys.is_empty());
     }

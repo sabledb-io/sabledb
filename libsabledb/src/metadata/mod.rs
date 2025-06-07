@@ -1,4 +1,5 @@
 mod bookkeeping;
+mod delete_range;
 mod encoding;
 mod expiration;
 mod hash_metadata;
@@ -20,6 +21,7 @@ pub use hash_metadata::{HashFieldKey, HashValueMetadata};
 pub use set_metadata::*;
 pub use zset_metadata::*;
 
+pub use delete_range::*;
 pub use keyprefix::*;
 #[allow(unused_imports)]
 pub use list_metadata::ListValueMetadata;

@@ -299,7 +299,7 @@ mod tests {
         fn drop(&mut self) {
             if let Ok(md) = std::fs::metadata(self.dirpath.clone()) {
                 if md.is_dir() {
-                    std::fs::remove_dir_all(self.dirpath.clone()).unwrap();
+                    let _ = std::fs::remove_dir_all(self.dirpath.clone());
                 }
             }
         }

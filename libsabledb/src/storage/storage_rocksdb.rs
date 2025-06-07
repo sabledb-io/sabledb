@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use crate::{
-    metadata::KeyType,
+    metadata::{DeleteRange, KeyType},
     replication::{StorageUpdates, StorageUpdatesRecord},
     storage::{
         storage_trait::{IteratorAdapter, StorageIterator, StorageMetadata},
@@ -183,6 +183,44 @@ impl StorageRocksDb {
         std::fs::write(sequence_file, content)?;
         Ok(())
     }
+
+    fn create_delete_range_keys(
+        &self,
+        start: Option<&BytesMut>,
+        end: Option<&BytesMut>,
+    ) -> Option<(BytesMut, BytesMut)> {
+        let snapshot = self.store.snapshot();
+
+        // Determine the start key
+        let start = if let Some(start) = start {
+            start.clone()
+        } else {
+            let mut iter = snapshot.raw_iterator();
+            iter.seek_to_first();
+            if !iter.valid() {
+                return None;
+            }
+            let start = iter.key()?;
+            BytesMut::from(start)
+        };
+
+        let end = if let Some(end) = end {
+            end.clone()
+        } else {
+            let mut iter = snapshot.raw_iterator();
+            iter.seek_to_last();
+            if !iter.valid() {
+                return None;
+            }
+            let end = iter.key()?;
+            let mut end = BytesMut::from(end);
+            // add random trailing character to be last key (this way we ensure that
+            // the last key is included in the deleted range)
+            end.extend_from_slice(b"1");
+            end
+        };
+        Some((start, end))
+    }
 }
 
 impl StorageTrait for StorageRocksDb {
@@ -194,15 +232,20 @@ impl StorageTrait for StorageRocksDb {
 
     fn apply_batch(&self, update: &BatchUpdate) -> Result<(), SableError> {
         let mut updates = rocksdb::WriteBatch::default();
-        if let Some(keys) = update.keys_to_delete() {
-            for k in keys.iter() {
-                updates.delete(k);
-            }
-        }
-
-        if let Some(put_keys) = update.items_to_put() {
-            for (k, v) in put_keys.iter() {
-                updates.put(k, v);
+        for item in update.items() {
+            match item {
+                StorageUpdatesRecord::Put { key, value } => {
+                    updates.put(key, value.clone());
+                    if DeleteRange::is_delete_range(key) {
+                        if let Ok(del_range) = DeleteRange::from_bytes(key) {
+                            updates
+                                .delete_range(del_range.get_start_key(), del_range.get_end_key());
+                        }
+                    }
+                }
+                StorageUpdatesRecord::Del { key } => {
+                    updates.delete(key);
+                }
             }
         }
 
@@ -349,6 +392,26 @@ impl StorageTrait for StorageRocksDb {
         Ok(myiter.storage_updates)
     }
 
+    fn apply_storage_updates(&self, storage_updates: &StorageUpdates) -> Result<(), SableError> {
+        const MAX_BATCH_SIZE: usize = 10_000;
+        let mut batch_update = BatchUpdate::with_capacity(MAX_BATCH_SIZE);
+        let mut reader = crate::U8ArrayReader::with_buffer(&storage_updates.serialised_data);
+        while let Some(change) = StorageUpdates::next(&mut reader) {
+            batch_update.push(change);
+            if batch_update.len() % MAX_BATCH_SIZE == 0 {
+                self.apply_batch(&batch_update)?;
+                batch_update.clear();
+            }
+        }
+
+        // make sure all items are applied
+        if !batch_update.is_empty() {
+            self.apply_batch(&batch_update)?;
+            batch_update.clear();
+        }
+        Ok(())
+    }
+
     /// Create an forward iterator
     fn create_iterator<'a>(&self, prefix: &BytesMut) -> Result<IteratorAdapter, SableError> {
         let mut read_options = rocksdb::ReadOptions::default();
@@ -393,43 +456,21 @@ impl StorageTrait for StorageRocksDb {
         start: Option<&BytesMut>,
         end: Option<&BytesMut>,
     ) -> Result<(), SableError> {
-        let snapshot = self.store.snapshot();
-
-        // Determine the start key
-        let start = if let Some(start) = start {
-            start.clone()
-        } else {
-            let mut iter = snapshot.raw_iterator();
-            iter.seek_to_first();
-            if !iter.valid() {
-                return Ok(());
-            }
-            let Some(start) = iter.key() else {
-                return Ok(());
-            };
-            BytesMut::from(start)
-        };
-
-        let end = if let Some(end) = end {
-            end.clone()
-        } else {
-            let mut iter = snapshot.raw_iterator();
-            iter.seek_to_last();
-            if !iter.valid() {
-                return Ok(());
-            }
-            let Some(end) = iter.key() else {
-                return Ok(());
-            };
-            let mut end = BytesMut::from(end);
-            // add random trailing character to be last key (this way we ensure that
-            // the last key is included in the deleted range)
-            end.extend_from_slice(b"1");
-            end
+        let Some((start, end)) = self.create_delete_range_keys(start, end) else {
+            return Ok(());
         };
 
         let mut updates = rocksdb::WriteBatch::default();
         updates.delete_range(&start, &end);
+        self.store.write_opt(updates, &self.write_opts)?;
+
+        // Place a "delete-range" marker
+        let delete_range_entry = DeleteRange::new(start, end);
+        // Put & Delete the "DeleteRange" record. This will ensure that we will have a WAL
+        // entry but not in the database
+        let mut updates = rocksdb::WriteBatch::default();
+        updates.put(delete_range_entry.to_bytes(), b"");
+        updates.delete(delete_range_entry.to_bytes());
         self.store.write_opt(updates, &self.write_opts)?;
         Ok(())
     }
@@ -474,7 +515,6 @@ impl StorageTrait for StorageRocksDb {
                 }
                 iterator.next();
             };
-
             self.delete_range(Some(&start_key), end_key.as_ref())?;
         }
         Ok(())
@@ -501,10 +541,25 @@ unsafe impl Send for StorageRocksDb {}
 #[cfg(feature = "rocks_db")]
 mod tests {
     use super::*;
+    use crate::tests::DirDeleter;
 
     const KEY_EXISTED_BEFORE_TXN: &str = "key_exists";
     const KEY_DOES_NOT_EXIST: &str = "no_such_key";
     const DB_PATH: &str = "rocks_db_test.db";
+
+    fn create_database(name: &str) -> (StorageRocksDb, DirDeleter) {
+        let _ = std::fs::create_dir_all("tests");
+        let db_path = PathBuf::from(format!("tests/{}.db", name));
+        let _ = std::fs::remove_dir_all(db_path.clone());
+        let open_params = StorageOpenParams::default()
+            .set_compression(true)
+            .set_cache_size(64)
+            .set_path(&db_path);
+        (
+            crate::StorageRocksDb::open(open_params.clone()).expect("rockdb open"),
+            DirDeleter::with_path(db_path.to_string_lossy().to_string()),
+        )
+    }
 
     /// Generate a fixed length key
     fn generate_key(counter: &mut usize) -> BytesMut {
@@ -565,6 +620,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_get_updates_since() -> Result<(), SableError> {
         let _ = std::fs::create_dir_all("tests");
         let db_path = PathBuf::from("tests/test_get_updates_since.db");
@@ -629,6 +685,100 @@ mod tests {
 
         // verify that all keys have been visited and removed
         assert!(all_keys.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_updates_since_with_delete_range() -> Result<(), SableError> {
+        let (rocks1, _rocks1_path) = create_database("test_get_updates_since_with_delete_range_1");
+        // put some items
+        println!("Populating db...");
+        let mut all_keys = std::collections::HashSet::<String>::new();
+        for i in 0..20 {
+            let mut batch = BatchUpdate::default();
+            let key = format!("key_{}", i);
+            let value = format!("value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            all_keys.insert(key);
+
+            let key = format!("2nd_key_{}", i);
+            let value = format!("2nd_value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            all_keys.insert(key);
+            rocks1.apply_batch(&batch)?;
+        }
+
+        rocks1.delete_range(None, None).unwrap();
+        let limits = Rc::new(GetChangesLimits::builder().build());
+
+        let changes = rocks1.storage_updates_since(0, limits.clone())?;
+        assert_eq!(changes.changes_count, 22); // 20 put + delete_range which puts 2 items: Put + Del
+
+        rocks1.apply_storage_updates(&changes).unwrap();
+
+        // Confirm that non of the keys exist in the database
+        for key in &all_keys {
+            assert!(rocks1
+                .get(&BytesMut::from(key.as_bytes()))
+                .unwrap()
+                .is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_updates_since_with_delete_range_2() -> Result<(), SableError> {
+        let (rocks1, _rocks1_path) = create_database("test_get_updates_since_with_delete_range_2");
+        // put some items
+        println!("Populating db...");
+        let mut not_exist_keys = std::collections::HashSet::<String>::new();
+        let mut exist_keys = std::collections::HashSet::<String>::new();
+
+        // Add 20 items
+        for i in 0..20 {
+            let mut batch = BatchUpdate::default();
+            let key = format!("key_{}", i);
+            let value = format!("value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            not_exist_keys.insert(key);
+            rocks1.apply_batch(&batch)?;
+        }
+
+        // Delete all of them...
+        rocks1.delete_range(None, None).unwrap();
+
+        // Add 20 more items
+        for i in 20..40 {
+            let mut batch = BatchUpdate::default();
+            let key = format!("key_{}", i);
+            let value = format!("value_string_{}", i);
+            batch.put(BytesMut::from(&key[..]), BytesMut::from(&value[..]));
+            exist_keys.insert(key);
+            rocks1.apply_batch(&batch)?;
+        }
+
+        let limits = Rc::new(GetChangesLimits::builder().build());
+
+        let changes = rocks1.storage_updates_since(0, limits.clone())?;
+        assert_eq!(changes.changes_count, 42); // 40 put + delete_range which puts 2 items: Put + Del
+
+        rocks1.apply_storage_updates(&changes).unwrap();
+
+        // Confirm that only keys 20-40 exist in the database
+        for key in &exist_keys {
+            assert!(rocks1
+                .get(&BytesMut::from(key.as_bytes()))
+                .unwrap()
+                .is_some());
+        }
+        for key in &not_exist_keys {
+            assert!(rocks1
+                .get(&BytesMut::from(key.as_bytes()))
+                .unwrap()
+                .is_none());
+        }
         Ok(())
     }
 

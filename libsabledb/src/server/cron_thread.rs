@@ -463,10 +463,7 @@ impl Cron {
 
         // Update the node's persistent state with the slots read from the database
         // we need to construct NodeExt from the primaries and update the state
-        let cluster_nodes: Vec<NodeExt> = cluster_nodes
-            .iter()
-            .map(NodeExt::from)
-            .collect();
+        let cluster_nodes: Vec<NodeExt> = cluster_nodes.iter().map(NodeExt::from).collect();
 
         Server::state()
             .persistent_state()
