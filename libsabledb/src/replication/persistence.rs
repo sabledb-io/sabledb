@@ -723,6 +723,26 @@ impl Persistence {
         })
     }
 
+    /// Remove the shard entry from the database
+    pub fn delete_shard(&self, shard: &Shard) -> Result<(), SableError> {
+        let mut cg = ConnectionGuard::default();
+        let result = DB_CONN
+            .with_borrow_mut(|db_client| {
+                // the nodes are kept in the form of "<shard>.<node-id>"
+                let shard_key = Self::shard_key(&shard.name);
+                let Some(conn) = db_client.connection() else {
+                    return Err(SableError::ConnectionNotOpened);
+                };
+
+                let _: redis::Value = conn.del(&shard_key)?;
+                Ok::<(), SableError>(())
+            })
+            .inspect(|_| {
+                cg.mark_success();
+            })?;
+        Ok(result)
+    }
+
     /// Given a list of nodes, check to see if they form a shard. In case of true, return the
     /// primary node
     pub fn is_shard_stable(&self, nodes: &[&Node]) -> Result<ShardIsStableResult, SableError> {
@@ -899,6 +919,10 @@ impl Persistence {
         let Some(conn) = db_client.connection() else {
             return Err(SableError::ConnectionNotOpened);
         };
+
+        if node_keys.is_empty() {
+            return Ok(Vec::default());
+        }
 
         let res = redis::cmd("MGET").arg(node_keys).query(conn)?;
         match res {

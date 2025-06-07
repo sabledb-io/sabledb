@@ -324,6 +324,8 @@ impl ClusterManager {
         // Lock the shard
         let mut lk = BlockingLock::with_db(&db, node.shard_name().to_string());
         lk.lock()?;
+
+        let iam_primary = node.is_primary();
         // Make sure that this node appears in the Shard information
         let (mut shard, primary_node) = if let Some(mut shard) = db.get_shard(node.shard_name())? {
             shard.add_node(&node);
@@ -333,6 +335,26 @@ impl ClusterManager {
                         "Could not locate primary node for shard '{}'. Multiple primaries found",
                         node.shard_name()
                     );
+
+                    if iam_primary {
+                        // Remove the shard entry from the database
+                        db.delete_shard(&shard)?;
+                        tracing::info!(
+                            "Successfully removed shard: {} from the database",
+                            node.shard_name()
+                        );
+
+                        shard = ShardBuilder::default()
+                            .with_name(shard.name().to_string())
+                            .with_slots(node.slots().to_string())
+                            .with_cluster_name(Server::state().persistent_state().cluster_name())
+                            .build();
+                        db.put_shard(&shard)?;
+                        tracing::info!(
+                            "Successfully updated shard: {} in the database",
+                            node.shard_name()
+                        );
+                    }
                     None
                 }
                 ShardPrimaryResult::NoPrimary => {
