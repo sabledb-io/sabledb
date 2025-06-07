@@ -299,6 +299,7 @@ impl Cron {
         tracing::info!("Eviction of unreachable records started...");
         let sw = StopWatch::default();
 
+        let mut items_scanned = 0usize;
         for (primary_type, sub_items) in &prefix_arr {
             let prefix = Bookkeeping::prefix(primary_type);
             let mut db_iter = store.create_iterator(&prefix)?;
@@ -307,6 +308,7 @@ impl Cron {
                     break;
                 };
 
+                items_scanned = items_scanned.saturating_add(1);
                 if !key.starts_with(&prefix) {
                     break;
                 }
@@ -362,20 +364,21 @@ impl Cron {
             write_cache.flush()?;
         }
 
-        if compaction_after_eviction {
-            tracing::info!("Running compaction...");
-            store.vacuum()?;
-            tracing::info!("Success");
-        }
-
         tracing::info!(
-            "Eviction completed in {} milliseconds. Total items deleted: {}",
+            "Eviction completed in {} milliseconds. Total items deleted: {}. Items scanned: {}",
             sw.elapsed_micros()
                 .unwrap_or_default()
                 .saturating_div(1000)
                 .to_formatted_string(&Locale::en),
             items_evicted.to_formatted_string(&Locale::en),
+            items_scanned.to_formatted_string(&Locale::en),
         );
+
+        if compaction_after_eviction {
+            tracing::info!("Running compaction...");
+            store.vacuum()?;
+            tracing::info!("Success");
+        }
         Ok(items_evicted)
     }
 
