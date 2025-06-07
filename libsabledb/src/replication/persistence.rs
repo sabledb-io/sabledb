@@ -726,7 +726,7 @@ impl Persistence {
     /// Remove the shard entry from the database
     pub fn delete_shard(&self, shard: &Shard) -> Result<(), SableError> {
         let mut cg = ConnectionGuard::default();
-        let result = DB_CONN
+        DB_CONN
             .with_borrow_mut(|db_client| {
                 // the nodes are kept in the form of "<shard>.<node-id>"
                 let shard_key = Self::shard_key(&shard.name);
@@ -739,8 +739,7 @@ impl Persistence {
             })
             .inspect(|_| {
                 cg.mark_success();
-            })?;
-        Ok(result)
+            })
     }
 
     /// Given a list of nodes, check to see if they form a shard. In case of true, return the
