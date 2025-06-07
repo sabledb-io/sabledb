@@ -117,14 +117,18 @@ impl ClientReplicationLoop {
                     // request to the primary. On success, the primary assigns this replica with
                     // a node-id (a unique number to the shard!)
                     match client.join_shard() {
-                        Ok(JoinShardResult::Ok{ shard_name, node_id }) => {
+                        Ok(JoinShardResult::Ok{ cluster_name, shard_name, node_id }) => {
                             // Store the primary's node ID (this also changes the role to ServerRole::Replica)
-                            Server::state()
-                                .persistent_state()
-                                .set_primary_node_id(Some(node_id));
-                            Server::state()
-                                .persistent_state()
-                                .set_shard_name(shard_name);
+                            info!(
+                                "Successfully joined cluster: '{}', shard: '{}'",
+                                cluster_name, shard_name
+                            );
+                            let pstate = Server::state();
+                            let pstate = pstate.persistent_state();
+                            pstate.set_primary_node_id(Some(node_id));
+                            pstate.set_shard_name(shard_name);
+                            pstate.set_cluster_name(cluster_name);
+                            pstate.save();
                         },
                         Ok(JoinShardResult::Err) => {
                             break 'client_loop;
@@ -382,6 +386,13 @@ impl ClientReplicationLoop {
                         // do a full sync
                         info!("Failed to get changes. Requesting fullsync. {}", common);
                         return RequestChangesResult::FullSync;
+                    }
+                    e => {
+                        info!(
+                            "Received an unexpected response to GetUpdatesSince command. {:?}",
+                            e
+                        );
+                        return RequestChangesResult::ExitThread;
                     }
                 }
             }

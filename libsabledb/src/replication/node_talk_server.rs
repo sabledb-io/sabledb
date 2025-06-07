@@ -279,16 +279,21 @@ impl NodeTalkServer {
             NodeTalkRequest::JoinShard(common) => {
                 info!("Received request: JoinShard({})", common);
                 let shard_name = Server::state().persistent_state().shard_name();
-                let response_ok =
-                    NodeResponse::Ok(ResponseCommon::new(&common).with_context(shard_name.clone()));
+                let cluster_name = Server::state().persistent_state().cluster_name();
+                let response_ok = NodeResponse::JoinShardOk {
+                    common: ResponseCommon::new(&common),
+                    cluster_name: cluster_name.clone(),
+                    shard_name: shard_name.clone(),
+                };
                 let mut writer = TcpStreamBytesWriter::new(stream);
                 if !Self::write_response(&mut writer, &response_ok) {
                     return HandleRequestResult::NetError("Failed to write response".into());
                 }
                 info!(
-                    "Replica: {} joined the shard: '{}'",
+                    "Replica: {} joined the cluster: {}. shard: '{}'",
                     common.node_id(),
-                    shard_name
+                    &cluster_name,
+                    &shard_name,
                 );
                 return HandleRequestResult::NodeJoined(common.node_id().to_string());
             }

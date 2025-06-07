@@ -17,7 +17,11 @@ use std::{println as info, println as error};
 #[derive(Debug, PartialEq)]
 pub enum JoinShardResult {
     /// Successfully joined the shard, returns the node-id
-    Ok { shard_name: String, node_id: String },
+    Ok {
+        cluster_name: String,
+        shard_name: String,
+        node_id: String,
+    },
     /// Failed to join the shard
     Err,
 }
@@ -100,6 +104,10 @@ impl NodeTalkClient {
                 "Remote {} did not acknowledged slot content acceptance. {resp}",
                 self.remote_addr
             ))),
+            e => Err(SableError::InternalError(format!(
+                "Received an unexpected response. {:?}",
+                e
+            ))),
         }
     }
 
@@ -131,23 +139,26 @@ impl NodeTalkClient {
             }
             Ok(msg) => {
                 match msg {
-                    NodeResponse::Ok(common) => {
-                        // fall through
-                        let shard_name = common.context();
-                        info!(
-                            "Successfully joined shard: {}. Primary Node ID: {}",
-                            shard_name,
-                            common.node_id()
-                        );
-                        JoinShardResult::Ok {
-                            shard_name: shard_name.clone(),
-                            node_id: common.node_id().to_string(),
-                        }
-                    }
                     NodeResponse::NotOk(common) => {
                         // the requested sequence was is not acceptable by the server
                         // do a full sync
                         info!("Failed to join the shard! {}", common);
+                        JoinShardResult::Err
+                    }
+                    NodeResponse::JoinShardOk {
+                        common,
+                        shard_name,
+                        cluster_name,
+                    } => JoinShardResult::Ok {
+                        cluster_name,
+                        shard_name,
+                        node_id: common.node_id().to_string(),
+                    },
+                    e => {
+                        error!(
+                            "Received an unexpected response to JoinsShard request. {:?}",
+                            e
+                        );
                         JoinShardResult::Err
                     }
                 }

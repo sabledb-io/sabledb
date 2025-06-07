@@ -128,6 +128,12 @@ pub enum NodeResponse {
     Ok(ResponseCommon),
     /// A general "Not OK" response from the node server
     NotOk(ResponseCommon),
+    /// An OK response to "JoinCluster" request
+    JoinShardOk {
+        common: ResponseCommon,
+        shard_name: String,
+        cluster_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +178,15 @@ impl std::fmt::Display for NodeResponse {
         match self {
             Self::Ok(common) => write!(f, "Ok({})", common),
             Self::NotOk(common) => write!(f, "NotOk({})", common),
+            Self::JoinShardOk {
+                common: _,
+                shard_name,
+                cluster_name,
+            } => write!(
+                f,
+                "JoinShardOk(shard_nane: {}, cluster_name: {})",
+                shard_name, cluster_name
+            ),
         }
     }
 }
