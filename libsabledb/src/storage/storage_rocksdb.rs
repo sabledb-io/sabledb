@@ -324,7 +324,7 @@ impl StorageTrait for StorageRocksDb {
         );
 
         if delete_all_before_store {
-            // TODO: delete all entries from the database
+            self.delete_range(None, None)?;
         }
 
         let mut options = rocksdb::Options::default();

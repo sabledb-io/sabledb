@@ -2,7 +2,6 @@
 
 ## General (ordered by priority)
 
-- Check that empty database ("checkpoint") is replicated properly
 - Write a complete example no how to setup a cluster using `SableDB`
 - Support multiple concurrent slot migration: "SLOT SENDTO <NODE_ID> [SLOT1, SLOT2...]"
 - Add more "cluster" commands that make sense
