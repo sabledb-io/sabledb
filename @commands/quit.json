@@ -1,0 +1,24 @@
+{
+    "QUIT": {
+        "summary": "Closes the connection.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "1.0.0",
+        "arity": -1,
+        "function": "quitCommand",
+        "command_flags": [
+            "ALLOW_BUSY",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "FAST",
+            "NO_AUTH"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}
