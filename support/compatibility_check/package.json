@@ -1,0 +1,19 @@
+{
+  "name": "sabledb-compatibility-check",
+  "version": "1.0.0",
+  "description": "Redis compatibility checker for SableDB",
+  "type": "module",
+  "scripts": {
+    "check": "bun run index.ts",
+    "dev": "bun run --watch index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "module": "index.ts",
+  "private": true,
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

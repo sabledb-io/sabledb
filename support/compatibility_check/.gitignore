@@ -1,0 +1,9 @@
+# Generated files
+COMPATIBILITY.md
+commands-data.json
+
+# Node modules (if any)
+node_modules/
+
+# Bun lockfile
+bun.lockb
