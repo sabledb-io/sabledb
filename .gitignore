@@ -5,3 +5,4 @@ rocksdb.db/
 target/
 tests/
 sabledb.db/
+mise.toml
