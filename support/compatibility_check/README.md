@@ -58,16 +58,17 @@ bun run check
 
 The tool generates two files:
 
-1. **COMPATIBILITY.md**: A markdown report containing:
-   - Total command count
-   - Commands grouped by category with statistics
-   - Detailed tables for each group showing command name, summary, version, and complexity
+1. **docs/COMPATIBILITY.md**: A markdown report written to the docs folder containing:
+   - Overall compatibility statistics
+   - Commands grouped by category with support percentages
+   - Detailed tables for each group showing support status and notes
 
-2. **commands-data.json**: A JSON file containing the complete data structure for programmatic access
+2. **commands-data.json**: A JSON file (in this directory) containing the complete data structure for programmatic access
 
 ### Tracked Files
 
 - **sabledb-support.jsonl**: Checked into git - tracks which commands are supported
+- **docs/COMPATIBILITY.md**: Generated report checked into git
 
 ## Project Structure
 
@@ -79,8 +80,10 @@ support/compatibility_check/
 ├── tsconfig.json             # TypeScript configuration
 ├── README.md                 # This file
 ├── sabledb-support.jsonl     # SableDB support status (checked in)
-├── COMPATIBILITY.md          # Generated markdown report (not checked in)
 └── commands-data.json        # Generated JSON data (not checked in)
+
+docs/
+└── COMPATIBILITY.md          # Generated markdown report (checked in)
 ```
 
 ## Command Metadata Structure

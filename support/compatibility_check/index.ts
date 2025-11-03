@@ -19,9 +19,21 @@ interface CommandMetadata {
     type: string;
     optional?: boolean;
   }>;
-  // SableDB specific metadata (to be added later)
-  sabledb_implemented?: boolean;
-  sabledb_notes?: string;
+}
+
+// SableDB support information
+interface SupportInfo {
+  name: string;
+  supported: boolean;
+  notes: string;
+}
+
+// Combined command with support data
+interface CommandWithSupport {
+  name: string;
+  metadata: CommandMetadata;
+  supported: boolean;
+  supportNotes: string;
 }
 
 interface CommandFile {
@@ -30,22 +42,51 @@ interface CommandFile {
 
 interface GroupedCommands {
   [group: string]: {
-    commands: Array<{
-      name: string;
-      metadata: CommandMetadata;
-    }>;
+    commands: Array<CommandWithSupport>;
     count: number;
+    supportedCount: number;
   };
 }
 
 interface CommandStats {
   totalCommands: number;
+  supportedCommands: number;
+  unsupportedCommands: number;
+  supportPercentage: number;
   groups: GroupedCommands;
   groupStats: Array<{
     group: string;
     count: number;
+    supportedCount: number;
     percentage: number;
+    supportPercentage: number;
   }>;
+}
+
+/**
+ * Reads the SableDB support file (JSONL format)
+ */
+function readSupportFile(supportFilePath: string): Map<string, SupportInfo> {
+  const supportMap = new Map<string, SupportInfo>();
+
+  try {
+    const content = readFileSync(supportFilePath, 'utf-8');
+    const lines = content.trim().split('\n');
+
+    for (const line of lines) {
+      if (line.trim()) {
+        const support: SupportInfo = JSON.parse(line);
+        supportMap.set(support.name, support);
+      }
+    }
+
+    console.log(`Loaded ${supportMap.size} support entries from ${supportFilePath}`);
+  } catch (error) {
+    console.warn(`Warning: Could not read support file ${supportFilePath}:`, error);
+    console.warn('Continuing without support data...');
+  }
+
+  return supportMap;
 }
 
 /**
@@ -77,26 +118,50 @@ function readCommandFiles(commandsDir: string): Map<string, CommandMetadata> {
 }
 
 /**
- * Groups commands by their group/category
+ * Merges command metadata with support information
  */
-function groupCommandsByType(commands: Map<string, CommandMetadata>): GroupedCommands {
-  const grouped: GroupedCommands = {};
+function mergeCommandsWithSupport(
+  commands: Map<string, CommandMetadata>,
+  supportMap: Map<string, SupportInfo>
+): Map<string, CommandWithSupport> {
+  const merged = new Map<string, CommandWithSupport>();
 
   for (const [commandName, metadata] of commands.entries()) {
-    const group = metadata.group || 'unknown';
+    const support = supportMap.get(commandName);
+
+    merged.set(commandName, {
+      name: commandName,
+      metadata,
+      supported: support?.supported ?? false,
+      supportNotes: support?.notes ?? ''
+    });
+  }
+
+  return merged;
+}
+
+/**
+ * Groups commands by their group/category
+ */
+function groupCommandsByType(commands: Map<string, CommandWithSupport>): GroupedCommands {
+  const grouped: GroupedCommands = {};
+
+  for (const [commandName, command] of commands.entries()) {
+    const group = command.metadata.group || 'unknown';
 
     if (!grouped[group]) {
       grouped[group] = {
         commands: [],
-        count: 0
+        count: 0,
+        supportedCount: 0
       };
     }
 
-    grouped[group].commands.push({
-      name: commandName,
-      metadata
-    });
+    grouped[group].commands.push(command);
     grouped[group].count++;
+    if (command.supported) {
+      grouped[group].supportedCount++;
+    }
   }
 
   // Sort commands within each group alphabetically
@@ -112,17 +177,24 @@ function groupCommandsByType(commands: Map<string, CommandMetadata>): GroupedCom
  */
 function generateStats(grouped: GroupedCommands): CommandStats {
   const totalCommands = Object.values(grouped).reduce((sum, g) => sum + g.count, 0);
+  const supportedCommands = Object.values(grouped).reduce((sum, g) => sum + g.supportedCount, 0);
+  const unsupportedCommands = totalCommands - supportedCommands;
 
   const groupStats = Object.entries(grouped)
     .map(([group, data]) => ({
       group,
       count: data.count,
-      percentage: (data.count / totalCommands) * 100
+      supportedCount: data.supportedCount,
+      percentage: (data.count / totalCommands) * 100,
+      supportPercentage: data.count > 0 ? (data.supportedCount / data.count) * 100 : 0
     }))
     .sort((a, b) => b.count - a.count);
 
   return {
     totalCommands,
+    supportedCommands,
+    unsupportedCommands,
+    supportPercentage: totalCommands > 0 ? (supportedCommands / totalCommands) * 100 : 0,
     groups: grouped,
     groupStats
   };
@@ -132,17 +204,22 @@ function generateStats(grouped: GroupedCommands): CommandStats {
  * Renders the data as a markdown table
  */
 function renderMarkdown(stats: CommandStats): string {
-  let markdown = '# Redis Command Compatibility Overview\n\n';
+  let markdown = '# SableDB Redis Compatibility Report\n\n';
 
-  markdown += `**Total Commands:** ${stats.totalCommands}\n\n`;
+  // Overall statistics
+  markdown += '## Overall Compatibility\n\n';
+  markdown += `- **Total Commands:** ${stats.totalCommands}\n`;
+  markdown += `- **Supported:** ${stats.supportedCommands} (${stats.supportPercentage.toFixed(2)}%)\n`;
+  markdown += `- **Not Supported:** ${stats.unsupportedCommands} (${(100 - stats.supportPercentage).toFixed(2)}%)\n\n`;
 
   // Group statistics table
   markdown += '## Commands by Group\n\n';
-  markdown += '| Group | Count | Percentage |\n';
-  markdown += '|-------|-------|------------|\n';
+  markdown += '| Group | Total | Supported | Support % |\n';
+  markdown += '|-------|-------|-----------|----------|\n';
 
-  for (const { group, count, percentage } of stats.groupStats) {
-    markdown += `| ${group} | ${count} | ${percentage.toFixed(2)}% |\n`;
+  for (const { group, count, supportedCount, supportPercentage } of stats.groupStats) {
+    const supportIcon = supportPercentage === 100 ? '✅' : supportPercentage === 0 ? '❌' : '🟡';
+    markdown += `| ${group} | ${count} | ${supportedCount} | ${supportPercentage.toFixed(1)}% ${supportIcon} |\n`;
   }
 
   markdown += '\n';
@@ -155,15 +232,15 @@ function renderMarkdown(stats: CommandStats): string {
   for (const group of sortedGroups) {
     const groupData = stats.groups[group];
 
-    markdown += `### ${group.toUpperCase()} (${groupData.count} commands)\n\n`;
-    markdown += '| Command | Summary | Since | Complexity |\n';
-    markdown += '|---------|---------|-------|------------|\n';
+    markdown += `### ${group.toUpperCase()} (${groupData.supportedCount}/${groupData.count} supported)\n\n`;
+    markdown += '| Command | Supported | Summary | Notes |\n';
+    markdown += '|---------|-----------|---------|-------|\n';
 
-    for (const { name, metadata } of groupData.commands) {
-      const summary = (metadata.summary || '').replace(/\|/g, '\\|').substring(0, 80);
-      const complexity = (metadata.complexity || 'N/A').replace(/\|/g, '\\|').substring(0, 40);
-      const since = metadata.since || 'N/A';
-      markdown += `| ${name} | ${summary} | ${since} | ${complexity} |\n`;
+    for (const command of groupData.commands) {
+      const status = command.supported ? '✅' : '❌';
+      const summary = (command.metadata.summary || '').replace(/\|/g, '\\|').substring(0, 60);
+      const notes = command.supportNotes.replace(/\|/g, '\\|').substring(0, 50);
+      markdown += `| ${command.name} | ${status} | ${summary} | ${notes} |\n`;
     }
 
     markdown += '\n';
@@ -176,18 +253,30 @@ function renderMarkdown(stats: CommandStats): string {
  * Renders a summary as plain text
  */
 function renderSummary(stats: CommandStats): void {
-  console.log('\n=== Redis Command Compatibility Overview ===\n');
-  console.log(`Total Commands: ${stats.totalCommands}\n`);
+  console.log('\n=== SableDB Redis Compatibility Report ===\n');
+
+  console.log('Overall Compatibility:');
+  console.log(`  Total Commands:     ${stats.totalCommands}`);
+  console.log(`  ✅ Supported:       ${stats.supportedCommands} (${stats.supportPercentage.toFixed(1)}%)`);
+  console.log(`  ❌ Not Supported:   ${stats.unsupportedCommands} (${(100 - stats.supportPercentage).toFixed(1)}%)`);
+  console.log('');
 
   console.log('Commands by Group:');
-  console.log('─'.repeat(60));
+  console.log('─'.repeat(70));
+  console.log(`${'Group'.padEnd(20)} ${'Total'.padStart(5)} ${'Supp.'.padStart(5)} ${'%'.padStart(6)} Progress`);
+  console.log('─'.repeat(70));
 
-  for (const { group, count, percentage } of stats.groupStats) {
-    const bar = '█'.repeat(Math.floor(percentage / 2));
-    console.log(`${group.padEnd(20)} ${count.toString().padStart(4)} (${percentage.toFixed(1)}%) ${bar}`);
+  for (const { group, count, supportedCount, supportPercentage } of stats.groupStats) {
+    const bar = '█'.repeat(Math.floor(supportPercentage / 5));
+    const emptyBar = '░'.repeat(20 - Math.floor(supportPercentage / 5));
+    const icon = supportPercentage === 100 ? '✅' : supportPercentage === 0 ? '❌' : '🟡';
+    console.log(
+      `${group.padEnd(20)} ${count.toString().padStart(5)} ${supportedCount.toString().padStart(5)} ` +
+      `${supportPercentage.toFixed(1).padStart(5)}% ${icon} ${bar}${emptyBar}`
+    );
   }
 
-  console.log('─'.repeat(60));
+  console.log('─'.repeat(70));
 }
 
 /**
@@ -196,15 +285,24 @@ function renderSummary(stats: CommandStats): void {
 async function main() {
   const projectRoot = join(import.meta.dir, '..', '..');
   const commandsDir = join(projectRoot, '@commands');
+  const supportFilePath = join(import.meta.dir, 'sabledb-support.jsonl');
 
-  console.log(`Reading commands from: ${commandsDir}\n`);
+  console.log(`Reading commands from: ${commandsDir}`);
+  console.log(`Reading support data from: ${supportFilePath}\n`);
 
   // Read all command files
   const commands = readCommandFiles(commandsDir);
-  console.log(`Loaded ${commands.size} commands\n`);
+  console.log(`Loaded ${commands.size} commands`);
+
+  // Read support file
+  const supportMap = readSupportFile(supportFilePath);
+  console.log('');
+
+  // Merge commands with support data
+  const commandsWithSupport = mergeCommandsWithSupport(commands, supportMap);
 
   // Group commands
-  const grouped = groupCommandsByType(commands);
+  const grouped = groupCommandsByType(commandsWithSupport);
 
   // Generate statistics
   const stats = generateStats(grouped);
@@ -215,11 +313,11 @@ async function main() {
   // Generate markdown
   const markdown = renderMarkdown(stats);
 
-  // Write markdown to file
-  const outputPath = join(import.meta.dir, 'COMPATIBILITY.md');
-  await Bun.write(outputPath, markdown);
+  // Write markdown to file in docs folder
+  const docsPath = join(projectRoot, 'docs', 'COMPATIBILITY.md');
+  await Bun.write(docsPath, markdown);
 
-  console.log(`\n✓ Markdown report written to: ${outputPath}`);
+  console.log(`\n✓ Markdown report written to: ${docsPath}`);
 
   // Also write JSON data for programmatic access
   const jsonOutputPath = join(import.meta.dir, 'commands-data.json');
