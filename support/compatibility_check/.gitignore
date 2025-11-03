@@ -1,9 +1,13 @@
-# Generated files
+# Generated files (reports)
 COMPATIBILITY.md
 commands-data.json
+
+# Support file is checked in, not ignored
+# sabledb-support.jsonl
 
 # Node modules (if any)
 node_modules/
 
-# Bun lockfile
+# Bun files
 bun.lockb
+bun.lock

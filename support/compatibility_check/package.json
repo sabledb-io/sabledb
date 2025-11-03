@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "check": "bun run index.ts",
-    "dev": "bun run --watch index.ts"
+    "dev": "bun run --watch index.ts",
+    "generate-support": "bun run generate-support-file.ts"
   },
   "dependencies": {},
   "devDependencies": {

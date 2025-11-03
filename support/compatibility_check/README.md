@@ -24,6 +24,26 @@ This tool reads all Redis command metadata from the `@commands` folder and gener
 
 Make sure you have [Bun](https://bun.sh) installed.
 
+### Initial Setup
+
+First, generate the support file (only needed once or when new commands are added):
+
+```bash
+bun run generate-support
+```
+
+This creates `sabledb-support.jsonl` with all commands marked as `supported: false`.
+
+### Marking Commands as Supported
+
+Edit `sabledb-support.jsonl` to update the support status for each command:
+
+```jsonl
+{"name":"APPEND","supported":true,"notes":""}
+{"name":"BGREWRITEAOF","supported":false,"notes":"AOF not implemented yet"}
+{"name":"GET","supported":true,"notes":""}
+```
+
 ### Running the Tool
 
 ```bash
@@ -45,15 +65,22 @@ The tool generates two files:
 
 2. **commands-data.json**: A JSON file containing the complete data structure for programmatic access
 
+### Tracked Files
+
+- **sabledb-support.jsonl**: Checked into git - tracks which commands are supported
+
 ## Project Structure
 
 ```
 support/compatibility_check/
-├── index.ts              # Main script
-├── package.json          # Project configuration
-├── README.md             # This file
-├── COMPATIBILITY.md      # Generated markdown report
-└── commands-data.json    # Generated JSON data
+├── generate-support-file.ts  # Script to generate initial support file
+├── index.ts                  # Main analysis script
+├── package.json              # Project configuration
+├── tsconfig.json             # TypeScript configuration
+├── README.md                 # This file
+├── sabledb-support.jsonl     # SableDB support status (checked in)
+├── COMPATIBILITY.md          # Generated markdown report (not checked in)
+└── commands-data.json        # Generated JSON data (not checked in)
 ```
 
 ## Command Metadata Structure
@@ -76,27 +103,29 @@ Each command JSON file in `@commands` contains:
 }
 ```
 
-## Future Enhancements
+## SableDB Support File Format
 
-### SableDB Implementation Status
+The `sabledb-support.jsonl` file tracks implementation status separately from the Redis command metadata:
 
-The next step is to add SableDB-specific metadata to track which commands are implemented:
-
-```json
-{
-  "COMMAND_NAME": {
-    // ... existing Redis metadata ...
-    "sabledb_implemented": true,
-    "sabledb_notes": "Optional implementation notes"
-  }
-}
+```jsonl
+{"name":"APPEND","supported":true,"notes":""}
+{"name":"BGREWRITEAOF","supported":false,"notes":"AOF not implemented yet"}
+{"name":"GET","supported":true,"notes":"Fully supported"}
 ```
 
-This will enable compatibility tracking and generate reports showing:
-- Percentage of implemented commands
-- Implementation status by group
-- List of missing commands
-- Implementation roadmap
+### Schema
+
+Each line is a JSON object with:
+- `name` (string): Command name in uppercase
+- `supported` (boolean): Whether the command is implemented in SableDB
+- `notes` (string): Optional notes about the implementation or why it's not supported
+
+### Workflow
+
+1. Generate initial file: `bun run generate-support`
+2. Manually edit the file to mark supported commands
+3. Commit the file to git
+4. The main script will merge this data with Redis metadata for reports
 
 ## Development
 
