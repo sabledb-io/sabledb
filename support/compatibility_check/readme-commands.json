@@ -1,0 +1,712 @@
+{
+  "APPEND": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "DECR": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "DECRBY": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "GET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "GETDEL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "GETEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "GETRANGE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "GETSET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "INCR": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "INCRBY": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "INCRBYFLOAT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LCS": {
+    "supported": true,
+    "fully_supported": false,
+    "notes": "Does not support: `IDX`, `MINMATCHLEN` and `WITHMATCHLEN`"
+  },
+  "MGET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "MSET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "MSETNX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "PSETEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SETEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SETNX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SETRANGE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "STRLEN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SUBSTR": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BLMOVE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BLMPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BLPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BRPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BRPOPLPUSH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LINDEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LINSERT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LLEN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LMOVE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LMPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LPOS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LPUSH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LPUSHX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LRANGE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LREM": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LSET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LTRIM": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "RPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "RPOPLPUSH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "RPUSH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "RPUSHX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HSET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HGET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HMGET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HMSET": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HGETALL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HDEL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HLEN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HEXISTS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HINCRBY": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HINCRBYFLOAT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HKEYS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HVALS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HRANDFIELD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HSCAN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HSETNX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "HSTRLEN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BZMPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BZPOPMAX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "BZPOPMIN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZADD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZCARD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZINCRBY": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZCOUNT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZDIFF": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZDIFFSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZINTER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZINTERCARD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZINTERSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZLEXCOUNT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZMPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZMSCORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZPOPMAX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZPOPMIN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANDMEMBER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANGEBYSCORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREVRANGEBYSCORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANGEBYLEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREVRANGEBYLEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANGE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANGESTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZRANK": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREM": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREMRANGEBYLEX": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREMRANGEBYRANK": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREMRANGEBYSCORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREVRANGE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZREVRANK": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZUNION": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZUNIONSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZSCORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "ZSCAN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SADD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SCARD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SDIFF": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SDIFFSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SINTER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SINTERCARD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SINTERSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SISMEMBER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SMISMEMBER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SMEMBERS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SMOVE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SPOP": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SRANDMEMBER": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SREM": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SSCAN": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SUNION": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SUNIONSTORE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "DEL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "TTL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "EXISTS": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "EXPIRE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "KEYS": {
+    "supported": true,
+    "fully_supported": false,
+    "notes": "Pattern uses wildcard match ( `?` and `*` )"
+  },
+  "SCAN": {
+    "supported": true,
+    "fully_supported": false,
+    "notes": "Pattern uses wildcard match ( `?` and `*` )"
+  },
+  "INFO": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "`SableDB` has its own INFO output format"
+  },
+  "PING": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "REPLICAOF": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "SLAVEOF": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "COMMAND": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "COMMAND DOCS": {
+    "supported": true,
+    "fully_supported": false,
+    "notes": ""
+  },
+  "FLUSHALL": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "FLUSHDB": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "DBSIZE": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "Data is accurate for the last scan performed on the storage"
+  },
+  "SLOT COUNT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "An extension command. Count how many keys map to `SLOT_NUM`"
+  },
+  "SLOT CALC": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "An extension command. Return the slot number for a given `KEY`"
+  },
+  "SLOT SENDTO": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "An extension command. Send slot `SLOT_NUM` to node `NODE_ID`"
+  },
+  "MULTI": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "EXEC": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "DISCARD": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "WATCH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "UNWATCH": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "CLIENT ID": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "CLIENT KILL": {
+    "supported": true,
+    "fully_supported": false,
+    "notes": "supports: `client kill ID <client-id>`"
+  },
+  "SELECT": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "CLUSTER NODES": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "CLUSTER MYID": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  },
+  "LOCK": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": "If timeout is provided, this is a blocking command"
+  },
+  "UNLOCK": {
+    "supported": true,
+    "fully_supported": true,
+    "notes": ""
+  }
+}
