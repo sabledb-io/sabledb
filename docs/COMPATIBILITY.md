@@ -3,8 +3,8 @@
 ## Overall Compatibility
 
 - **Total Commands:** 367
-- **Supported:** 132 (35.97%)
-- **Not Supported:** 235 (64.03%)
+- **Supported:** 135 (36.78%)
+- **Not Supported:** 232 (63.22%)
 
 ## Commands by Group
 
@@ -12,14 +12,14 @@
 |-------|-------|-----------|----------|
 | server | 56 | 9 | 16.1% 🟡 |
 | sorted_set | 35 | 35 | 100.0% ✅ |
-| cluster | 33 | 0 | 0.0% ❌ |
+| cluster | 33 | 1 | 3.0% 🟡 |
 | generic | 31 | 6 | 19.4% 🟡 |
 | hash | 27 | 16 | 59.3% 🟡 |
-| connection | 24 | 2 | 8.3% 🟡 |
+| connection | 24 | 3 | 12.5% 🟡 |
 | stream | 23 | 0 | 0.0% ❌ |
 | list | 22 | 22 | 100.0% ✅ |
 | string | 21 | 20 | 95.2% 🟡 |
-| sentinel | 21 | 0 | 0.0% ❌ |
+| sentinel | 21 | 1 | 4.8% 🟡 |
 | set | 17 | 17 | 100.0% ✅ |
 | scripting | 16 | 0 | 0.0% ❌ |
 | pubsub | 14 | 0 | 0.0% ❌ |
@@ -131,7 +131,7 @@
 | ZUNION | ✅ | Returns the union of multiple sorted sets. |  |
 | ZUNIONSTORE | ✅ | Stores the union of multiple sorted sets in a key. |  |
 
-### CLUSTER (0/33 supported)
+### CLUSTER (1/33 supported)
 
 | Command | Supported | Summary | Notes |
 |---------|-----------|---------|-------|
@@ -140,7 +140,7 @@
 | ASKING | ❌ | Signals that a cluster client is following an -ASK redirect. |  |
 | BUMPEPOCH | ❌ | Advances the cluster config epoch. |  |
 | CANCELSLOTMIGRATIONS | ❌ | Cancel all current ongoing slot migration operations. |  |
-| CLUSTER | ❌ | A container for Cluster commands. |  |
+| CLUSTER | ✅ | A container for Cluster commands. |  |
 | COUNT-FAILURE-REPORTS | ❌ | Returns the number of active failure reports for a node. No  |  |
 | COUNTKEYSINSLOT | ❌ | Returns the number of keys in a hash slot. |  |
 | DELSLOTS | ❌ | Sets hash slots as unbound for a node. |  |
@@ -237,14 +237,14 @@
 | HTTL | ❌ | Returns the remaining time to live (in seconds) of a hash ke |  |
 | HVALS | ✅ | Returns all values in a hash. |  |
 
-### CONNECTION (2/24 supported)
+### CONNECTION (3/24 supported)
 
 | Command | Supported | Summary | Notes |
 |---------|-----------|---------|-------|
 | AUTH | ❌ | Authenticates the connection. |  |
 | CACHING | ❌ | Instructs the server whether to track the keys in the next r |  |
 | CAPA | ❌ | A client claims its capability. |  |
-| CLIENT | ❌ | A container for client connection commands. |  |
+| CLIENT | ✅ | A container for client connection commands. |  |
 | ECHO | ❌ | Returns the given string. |  |
 | GETNAME | ❌ | Returns the name of the connection. |  |
 | GETREDIR | ❌ | Returns the client ID to which the connection's tracking not |  |
@@ -347,12 +347,12 @@
 | STRLEN | ✅ | Returns the length of a string value. |  |
 | SUBSTR | ✅ | Returns a substring from a string value. |  |
 
-### SENTINEL (0/21 supported)
+### SENTINEL (1/21 supported)
 
 | Command | Supported | Summary | Notes |
 |---------|-----------|---------|-------|
 | CKQUORUM | ❌ | Checks for a Sentinel quorum. |  |
-| CONFIG | ❌ | Configures Sentinel. |  |
+| CONFIG | ✅ | Configures Sentinel. |  |
 | FLUSHCONFIG | ❌ | Rewrites the Sentinel configuration file. |  |
 | GET-MASTER-ADDR-BY-NAME | ❌ | Returns the port and address of a primary instance. |  |
 | GET-PRIMARY-ADDR-BY-NAME | ❌ | Returns the port and address of a primary instance. |  |

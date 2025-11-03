@@ -6,7 +6,9 @@
   "scripts": {
     "check": "bun run index.ts",
     "dev": "bun run --watch index.ts",
-    "generate-support": "bun run generate-support-file.ts"
+    "generate-support": "bun run generate-support-file.ts",
+    "update-from-readme": "bun run update-support-from-readme.ts",
+    "extract-from-code": "bun run extract-from-commander.ts"
   },
   "dependencies": {},
   "devDependencies": {

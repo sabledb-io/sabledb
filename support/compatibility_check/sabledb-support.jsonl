@@ -26,16 +26,16 @@
 {"name":"CAT","supported":false,"notes":""}
 {"name":"CHANNELS","supported":false,"notes":""}
 {"name":"CKQUORUM","supported":false,"notes":""}
-{"name":"CLIENT","supported":false,"notes":""}
+{"name":"CLIENT","supported":true,"notes":""}
 {"name":"CLIENT ID","supported":true,"notes":""}
 {"name":"CLIENT KILL","supported":true,"notes":"supports: `client kill ID <client-id>`"}
-{"name":"CLUSTER","supported":false,"notes":""}
+{"name":"CLUSTER","supported":true,"notes":""}
 {"name":"CLUSTER MYID","supported":true,"notes":""}
 {"name":"CLUSTER NODES","supported":true,"notes":""}
 {"name":"COMMAND","supported":true,"notes":""}
 {"name":"COMMAND DOCS","supported":true,"notes":"Partially supported"}
 {"name":"COMMANDLOG","supported":false,"notes":""}
-{"name":"CONFIG","supported":false,"notes":""}
+{"name":"CONFIG","supported":true,"notes":""}
 {"name":"CONSUMERS","supported":false,"notes":""}
 {"name":"COPY","supported":false,"notes":""}
 {"name":"COUNT","supported":false,"notes":""}
@@ -281,6 +281,7 @@
 {"name":"SISMEMBER","supported":true,"notes":""}
 {"name":"SLAVEOF","supported":true,"notes":""}
 {"name":"SLAVES","supported":false,"notes":""}
+{"name":"SLOT","supported":true,"notes":""}
 {"name":"SLOT CALC","supported":true,"notes":"An extension command. Return the slot number for a given `KEY`"}
 {"name":"SLOT COUNT","supported":true,"notes":"An extension command. Count how many keys map to `SLOT_NUM`"}
 {"name":"SLOT SENDTO","supported":true,"notes":"An extension command. Send slot `SLOT_NUM` to node `NODE_ID`"}
