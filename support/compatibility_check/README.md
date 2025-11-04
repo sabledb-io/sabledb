@@ -48,10 +48,10 @@ Edit `sabledb-support.jsonl` to update the support status for each command:
 
 ```bash
 # From the support/compatibility_check directory
-bun run index.ts
+bun run generate-compatibility-file.ts
 
 # Or using the npm script
-bun run check
+bun run generate-compatibility
 ```
 
 ### Output Files
@@ -130,12 +130,6 @@ Each line is a JSON object with:
 3. Commit the file to git
 4. The main script will merge this data with Redis metadata for reports
 
-## Development
-
-```bash
-# Watch mode for development
-bun run dev
-```
 
 ## License
 

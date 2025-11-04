@@ -4,8 +4,7 @@
   "description": "Redis compatibility checker for SableDB",
   "type": "module",
   "scripts": {
-    "check": "bun run index.ts",
-    "dev": "bun run --watch index.ts",
+    "generate-compatibility": "bun run generate-compatibility-file.ts",
     "generate-support": "bun run generate-support-file.ts",
     "update-from-readme": "bun run update-support-from-readme.ts",
     "extract-from-code": "bun run extract-from-commander.ts"
