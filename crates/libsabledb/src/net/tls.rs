@@ -38,13 +38,13 @@ mod tests {
     use std::path::PathBuf;
     #[test]
     fn test_loading_cert() {
-        let cert = PathBuf::from("../infra/ssl/sabledb.crt");
+        let cert = PathBuf::from("../../infra/ssl/sabledb.crt");
         assert!(load_certs(&cert).is_ok());
     }
 
     #[test]
     fn test_loading_key() {
-        let key = PathBuf::from("../infra/ssl/sabledb.key");
+        let key = PathBuf::from("../../infra/ssl/sabledb.key");
         assert!(load_keys(&key).is_ok());
     }
 }
