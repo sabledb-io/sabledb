@@ -15,9 +15,15 @@ jobs:
     runs-on: macos-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: 'true'
+    - uses: Swatinem/rust-cache@v2
+      with:
+        # Cache is shared across all jobs in the workflow
+        shared-key: "macos-latest"
+        # Save cache even if the build fails
+        save-if: true
     - name: Build
       run: cargo build
     - name: Clippy
